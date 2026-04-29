@@ -118,9 +118,8 @@ function TreeNodeView({
   return (
     <div>
       <div
-        className={`flex items-center gap-1.5 py-1.5 pr-2 cursor-pointer font-medium transition-colors border-l-2 whitespace-nowrap group ${
-          isRoomSelected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-transparent hover:bg-gray-100 text-gray-700'
-        }`}
+        className={`flex items-center gap-1.5 py-1.5 pr-2 cursor-pointer font-medium transition-colors border-l-2 whitespace-nowrap group ${isRoomSelected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-transparent hover:bg-gray-100 text-gray-700'
+          }`}
         style={{ paddingLeft: pl }}
         onClick={() => { if (isRoom) onSelectClass(node.classItem!); }}
       >
@@ -185,10 +184,10 @@ export default function RecordsPage() {
 
   const [students, setStudents] = useState<Student[]>([]);
   const [evalItems, setEvalItems] = useState<EvalItem[]>([]);
-  
+
   const [contents, setContents] = useState<Record<string, any>>({});
   const [evalItemsMap, setEvalItemsMap] = useState<Record<string, EvalItem[]>>({});
-  
+
   const [saving, setSaving] = useState(false);
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number; message: string } | null>(null);
@@ -447,20 +446,20 @@ export default function RecordsPage() {
       const targetDomain = explicitDomain || selectedDomain;
       const key = `${studentId}_${type}_${targetDomain}`;
       const obj = prev[key] || {};
-      
+
       const newObj = { ...obj, [field]: value };
-      
+
       // Auto-calc total if evaluating scoring
       if (type === 'scoring' && explicitDomain && evalItemsMap[explicitDomain]) {
         let total = 0;
         let base = 0;
         evalItemsMap[explicitDomain].forEach(item => {
-           if (item.item_type === 'formula') base = Number(item.excel_col) || 0;
-           else if (item.item_type === 'llm') total += (Number(newObj[item.name]) || 0);
+          if (item.item_type === 'formula') base = Number(item.excel_col) || 0;
+          else if (item.item_type === 'llm') total += (Number(newObj[item.name]) || 0);
         });
         newObj['total'] = total + base;
       }
-      
+
       return { ...prev, [key]: newObj };
     });
   };
@@ -568,7 +567,7 @@ export default function RecordsPage() {
     try {
       const promises = [];
       const types = ['scoring', 'setech'];
-      
+
       for (const s of students) {
         // Save comprehensive setech
         const compKey = `${s.id}_setech___SUBJECT_COMPREHENSIVE__`;
@@ -581,10 +580,10 @@ export default function RecordsPage() {
             })
           );
         }
-        
+
         // Save other domains
         const subj = subjects.find(sub => sub.year === selectedClass.year && sub.subject === selectedClass.subject);
-        const allDomains = [...(subj?.fixedDomains||[]), ...(subj?.customDomains||[])];
+        const allDomains = [...(subj?.fixedDomains || []), ...(subj?.customDomains || [])];
         for (const d of allDomains) {
           for (const type of types) {
             const key = `${s.id}_${type}_${d.name}`;
@@ -712,7 +711,7 @@ export default function RecordsPage() {
   const handleBulkZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedClass || domainFilter === 'all' || !e.target.files?.length) return;
     const file = e.target.files[0];
-    
+
     setUploadingZip(true);
     const formData = new FormData();
     formData.append('file', file);
@@ -725,7 +724,7 @@ export default function RecordsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '업로드 실패');
-      
+
       alert(data.message);
       await loadDomainData(selectedClass);
       setArtifactRefreshKey(k => k + 1);
@@ -801,18 +800,18 @@ export default function RecordsPage() {
 
   // ── Frozen column widths & sticky left offsets ─────────────────────────────
   const cw = {
-    chk:  colWidths['_chk']  ?? 40,
-    cls:  colWidths['_cls']  ?? 48,
-    num:  colWidths['_num']  ?? 48,
+    chk: colWidths['_chk'] ?? 40,
+    cls: colWidths['_cls'] ?? 48,
+    num: colWidths['_num'] ?? 48,
     name: colWidths['_name'] ?? 80,
   };
   const compWidth = colWidths['_comp'] ?? 320;
   const compCountWidth = colWidths['_comp_count'] ?? 74;
   const compSpellWidth = colWidths['_comp_spell'] ?? 320;
   const sl = {
-    chk:  0,
-    cls:  cw.chk,
-    num:  cw.chk + cw.cls,
+    chk: 0,
+    cls: cw.chk,
+    num: cw.chk + cw.cls,
     name: cw.chk + cw.cls + cw.num,
   };
   const separatorShadow = '2px 0 5px rgba(0,0,0,0.08)';
@@ -849,11 +848,10 @@ export default function RecordsPage() {
             </div>
           )}
           {uploadMsg && (
-            <div className={`flex items-start gap-1.5 text-xs rounded p-2 border ${
-              uploadMsg.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' :
-              uploadMsg.type === 'warn'  ? 'bg-yellow-50 border-yellow-200 text-yellow-800' :
-                                           'bg-green-50 border-green-200 text-green-700'
-            }`}>
+            <div className={`flex items-start gap-1.5 text-xs rounded p-2 border ${uploadMsg.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' :
+              uploadMsg.type === 'warn' ? 'bg-yellow-50 border-yellow-200 text-yellow-800' :
+                'bg-green-50 border-green-200 text-green-700'
+              }`}>
               {uploadMsg.type === 'error' ? <AlertCircle size={12} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={12} className="mt-0.5 shrink-0" />}
               <p className="whitespace-pre-wrap leading-snug">{uploadMsg.text}</p>
             </div>
@@ -892,10 +890,9 @@ export default function RecordsPage() {
             <div className="flex items-center gap-3">
               <div className="flex bg-gray-100 p-1 rounded gap-1 border border-gray-200">
                 <button
-                  className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${
-                    !selectedClass?.scoring_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
+                  className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass?.scoring_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
                     showScoring ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
-                  }`}
+                    }`}
                   disabled={!selectedClass?.scoring_filename}
                   onClick={() => {
                     if (showScoring && !showSetech) { setShowScoring(false); setShowSetech(true); }
@@ -905,10 +902,9 @@ export default function RecordsPage() {
                   채점
                 </button>
                 <button
-                  className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${
-                    !selectedClass?.setech_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
+                  className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass?.setech_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
                     showSetech ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
-                  }`}
+                    }`}
                   disabled={!selectedClass?.setech_filename}
                   onClick={() => {
                     if (showSetech && !showScoring) { setShowSetech(false); setShowScoring(true); }
@@ -969,7 +965,7 @@ export default function RecordsPage() {
                   title={selectedStudentIds.size > 0 ? '선택한 행 맞춤법 검사' : '전체 행 맞춤법 검사'}
                 >
                   {spellcheckProgress ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                  맞춤법
+                  교정
                 </button>
               )}
 
@@ -1044,34 +1040,34 @@ export default function RecordsPage() {
                   <tr>
                     {/* Frozen: checkbox */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center select-none"
-                        style={{ left: sl.chk, width: cw.chk, minWidth: cw.chk }}>
+                      style={{ left: sl.chk, width: cw.chk, minWidth: cw.chk }}>
                       <div className="flex justify-center items-center py-3">
                         <input type="checkbox" className="h-4 w-4 rounded border-gray-300"
                           checked={allStudentsSelected} onChange={toggleAllStudents} title="전체 선택/해제" />
                       </div>
                       <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                           onMouseDown={e => handleResizeStart(e, '_chk', 40)} />
+                        onMouseDown={e => handleResizeStart(e, '_chk', 40)} />
                     </th>
                     {/* Frozen: 반 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
-                        style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
+                      style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
                       반
                       <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                           onMouseDown={e => handleResizeStart(e, '_cls', 48)} />
+                        onMouseDown={e => handleResizeStart(e, '_cls', 48)} />
                     </th>
                     {/* Frozen: 번호 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
-                        style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
+                      style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
                       번호
                       <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                           onMouseDown={e => handleResizeStart(e, '_num', 48)} />
+                        onMouseDown={e => handleResizeStart(e, '_num', 48)} />
                     </th>
                     {/* Frozen: 이름 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
-                        style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
+                      style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
                       이름
                       <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                           onMouseDown={e => handleResizeStart(e, '_name', 80)} />
+                        onMouseDown={e => handleResizeStart(e, '_name', 80)} />
                     </th>
 
                     {/* Domain group headers */}
@@ -1080,7 +1076,7 @@ export default function RecordsPage() {
                       if (!cols.length) return null;
                       return (
                         <th key={d.name} colSpan={cols.length}
-                            className="px-2 py-1.5 font-semibold text-gray-700 text-center border-b border-r bg-gray-100/50 select-none">
+                          className="px-2 py-1.5 font-semibold text-gray-700 text-center border-b border-r bg-gray-100/50 select-none">
                           {d.name}
                         </th>
                       );
@@ -1090,22 +1086,22 @@ export default function RecordsPage() {
                     {showSetech && (
                       <>
                         <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 select-none"
-                            style={{ width: compWidth, minWidth: compWidth }}>
+                          style={{ width: compWidth, minWidth: compWidth }}>
                           종합 세특 (과목 공통)
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                               onMouseDown={e => handleResizeStart(e, '_comp', 320)} />
+                            onMouseDown={e => handleResizeStart(e, '_comp', 320)} />
                         </th>
                         <th rowSpan={2} className="relative px-2 py-3 font-semibold text-gray-700 border-b border-r bg-blue-50/50 select-none"
-                            style={{ width: compCountWidth, minWidth: compCountWidth }}>
+                          style={{ width: compCountWidth, minWidth: compCountWidth }}>
                           글자수
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                               onMouseDown={e => handleResizeStart(e, '_comp_count', 74)} />
+                            onMouseDown={e => handleResizeStart(e, '_comp_count', 74)} />
                         </th>
                         <th rowSpan={2} className="relative px-3 py-3 font-semibold text-gray-700 border-b bg-blue-50/50 select-none"
-                            style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
+                          style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
                           맞춤법 검사 결과
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                               onMouseDown={e => handleResizeStart(e, '_comp_spell', 320)} />
+                            onMouseDown={e => handleResizeStart(e, '_comp_spell', 320)} />
                         </th>
                       </>
                     )}
@@ -1119,11 +1115,11 @@ export default function RecordsPage() {
                         const w = colWidths[wk] ?? defW;
                         return (
                           <th key={`${d.name}_${c.id}`}
-                              className="relative px-2 py-1.5 font-medium text-gray-600 border-b border-r text-center select-none"
-                              style={{ width: w, minWidth: w }}>
+                            className="relative px-2 py-1.5 font-medium text-gray-600 border-b border-r text-center select-none"
+                            style={{ width: w, minWidth: w }}>
                             {c.label}
                             <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                                 onMouseDown={e => handleResizeStart(e, wk, defW)} />
+                              onMouseDown={e => handleResizeStart(e, wk, defW)} />
                           </th>
                         );
                       });
@@ -1147,7 +1143,7 @@ export default function RecordsPage() {
                       <tr key={s.id} className="hover:bg-blue-50/10 transition-colors">
                         {/* Frozen: checkbox */}
                         <td className="sticky z-10 bg-white border-r text-center"
-                            style={{ left: sl.chk, width: cw.chk, minWidth: cw.chk }}>
+                          style={{ left: sl.chk, width: cw.chk, minWidth: cw.chk }}>
                           <div className="flex justify-center py-2">
                             <input type="checkbox" className="h-4 w-4 rounded border-gray-300"
                               checked={selectedStudentIds.has(s.id)} onChange={() => toggleStudentSelection(s.id)} />
@@ -1155,17 +1151,17 @@ export default function RecordsPage() {
                         </td>
                         {/* Frozen: 반 */}
                         <td className="sticky z-10 bg-white border-r text-center text-gray-500 font-mono px-1 py-2"
-                            style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
+                          style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
                           {classNum}
                         </td>
                         {/* Frozen: 번호 */}
                         <td className="sticky z-10 bg-white border-r text-center text-gray-500 font-mono px-1 py-2"
-                            style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
+                          style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
                           {stuNum}
                         </td>
                         {/* Frozen: 이름 */}
                         <td className="sticky z-10 bg-white border-r font-medium text-gray-800 text-center px-1 py-2"
-                            style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
+                          style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
                           {s.name}
                         </td>
 
@@ -1183,7 +1179,7 @@ export default function RecordsPage() {
                             if (c.type === 'artifact') {
                               return (
                                 <td key={`${d.name}_artifact`} className="border-r align-middle text-center p-1"
-                                    style={{ width: w, minWidth: w }}>
+                                  style={{ width: w, minWidth: w }}>
                                   <ArtifactViewer key={`${s.id}_${d.name}_${artifactRefreshKey}`} studentId={s.id} domain={d.name} />
                                 </td>
                               );
@@ -1191,7 +1187,7 @@ export default function RecordsPage() {
                             if (c.type === 'llm') {
                               return (
                                 <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
-                                    style={{ width: w, minWidth: w }}>
+                                  style={{ width: w, minWidth: w }}>
                                   <input type="text" className="input w-full text-sm text-center"
                                     value={scoreData[c.id] || ''}
                                     onChange={ev => updateContent(s.id, 'scoring', c.id, ev.target.value, d.name)}
@@ -1204,7 +1200,7 @@ export default function RecordsPage() {
                             if (c.type === 'total') {
                               return (
                                 <td key={`${d.name}_total`} className="border-r text-center font-bold text-blue-600 bg-blue-50/30 align-middle p-2"
-                                    style={{ width: w, minWidth: w }}>
+                                  style={{ width: w, minWidth: w }}>
                                   {scoreData.total || 0}
                                 </td>
                               );
@@ -1212,7 +1208,7 @@ export default function RecordsPage() {
                             if (c.type === 'setech') {
                               return (
                                 <td key={`${d.name}_setech`} className="border-r align-top p-1"
-                                    style={{ width: w, minWidth: w }}>
+                                  style={{ width: w, minWidth: w }}>
                                   <textarea className="textarea w-full text-sm resize-y" style={{ minHeight: 80 }}
                                     value={setechData.text || ''}
                                     onChange={ev => updateContent(s.id, 'setech', 'text', ev.target.value, d.name)}
@@ -1230,7 +1226,7 @@ export default function RecordsPage() {
                         {showSetech && (
                           <>
                             <td className="align-top p-1 border-r"
-                                style={{ width: compWidth, minWidth: compWidth }}>
+                              style={{ width: compWidth, minWidth: compWidth }}>
                               <textarea className="textarea w-full text-sm resize-y bg-blue-50/20 border-blue-100" style={{ minHeight: 80 }}
                                 value={compSetechText}
                                 onChange={ev => updateContent(s.id, 'setech', 'text', ev.target.value, '__SUBJECT_COMPREHENSIVE__')}
@@ -1239,7 +1235,7 @@ export default function RecordsPage() {
                               />
                             </td>
                             <td className="align-top p-1 border-r text-center"
-                                style={{ width: compCountWidth, minWidth: compCountWidth }}>
+                              style={{ width: compCountWidth, minWidth: compCountWidth }}>
                               <div className={`whitespace-pre-line text-xs font-semibold ${isCompSetechOver ? 'text-red-600' : 'text-gray-600'}`}>
                                 {isCompSetechOver ? '초과' : '적정'}
                                 {'\n'}({compSetechBytes} byte)
@@ -1255,7 +1251,7 @@ export default function RecordsPage() {
                               </button>
                             </td>
                             <td className="align-top p-2"
-                                style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
+                              style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
                               {isSpellchecking ? (
                                 <div className="flex items-center gap-1.5 text-xs text-green-700">
                                   <Loader2 size={12} className="animate-spin" />
