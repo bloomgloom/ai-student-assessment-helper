@@ -14,15 +14,17 @@ router.get('/', async (_req: Request, res: Response) => {
 });
 
 router.put('/', async (req: Request, res: Response) => {
-  const { provider, apiKey, model, baseUrl, maxConcurrency, sequentialMode } =
+  const { provider, apiKey, model, baseUrl, maxConcurrency, loggingEnabled } =
     req.body as Record<string, string>;
+  const concurrency = maxConcurrency != null ? Math.max(1, parseInt(String(maxConcurrency), 10) || 1) : undefined;
   const pairs = [
     ['llm_provider', provider],
     ['llm_api_key', apiKey],
     ['llm_model', model],
     ['llm_base_url', baseUrl],
-    ['llm_max_concurrency', maxConcurrency != null ? String(maxConcurrency) : undefined],
-    ['llm_sequential_mode', sequentialMode != null ? String(sequentialMode) : undefined],
+    ['llm_max_concurrency', concurrency != null ? String(concurrency) : undefined],
+    ['llm_sequential_mode', concurrency != null ? String(concurrency <= 1) : undefined],
+    ['llm_logging_enabled', loggingEnabled != null ? String(loggingEnabled) : undefined],
   ].filter((p): p is [string, string] => p[1] !== undefined);
 
   for (const [key, value] of pairs) {

@@ -8,7 +8,7 @@ interface Settings {
   model: string;
   baseUrl: string;
   maxConcurrency: number;
-  sequentialMode: boolean;
+  loggingEnabled: boolean;
 }
 
 const PROVIDERS = [
@@ -42,7 +42,7 @@ export default function SettingsPage() {
     model: '',
     baseUrl: '',
     maxConcurrency: 5,
-    sequentialMode: false,
+    loggingEnabled: true,
   });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -66,8 +66,6 @@ export default function SettingsPage() {
       provider,
       model: DEFAULT_MODELS[provider] ?? '',
       baseUrl: DEFAULT_URLS[provider] ?? '',
-      // omlx는 기본적으로 순차 처리 권장
-      sequentialMode: provider === 'omlx',
       // omlx는 로컬 자원 보호를 위해 동시 요청 1개 기본값
       maxConcurrency: provider === 'omlx' ? 1 : 5,
     }));
@@ -293,31 +291,6 @@ export default function SettingsPage() {
           )}
         </div>
 
-        {/* omlx 전용: 순차 처리 모드 */}
-        {isOmlx && (
-          <div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                className="w-4 h-4 rounded"
-                checked={settings.sequentialMode}
-                onChange={(e) => {
-                  const seq = e.target.checked;
-                  setSettings((s) => ({
-                    ...s,
-                    sequentialMode: seq,
-                    maxConcurrency: seq ? 1 : 3,
-                  }));
-                }}
-              />
-              <span className="text-sm font-medium text-gray-700">순차 처리 모드</span>
-            </label>
-            <p className="text-xs text-gray-400 mt-1 ml-6">
-              로컬 자원 보호를 위해 요청을 한 번에 하나씩 처리합니다. Apple Silicon 권장.
-            </p>
-          </div>
-        )}
-
         {/* 최대 동시 요청 수 */}
         <div>
           <label className="label">최대 동시 요청 수</label>
@@ -330,12 +303,25 @@ export default function SettingsPage() {
             onChange={(e) =>
               setSettings((s) => ({ ...s, maxConcurrency: parseInt(e.target.value, 10) || 1 }))
             }
-            disabled={isOmlx && settings.sequentialMode}
           />
           <p className="text-xs text-gray-400 mt-1">
-            {isOmlx && settings.sequentialMode
-              ? '순차 처리 모드에서는 동시 요청 수가 1로 고정됩니다.'
-              : '일괄 생성 시 병렬 처리 수 (로컬 LLM은 1~3 권장)'}
+            1이면 순차 처리, 2 이상이면 병렬 처리합니다. 로컬 LLM은 1~3 권장.
+          </p>
+        </div>
+
+        {/* LLM 요청/응답 로그 */}
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded"
+              checked={settings.loggingEnabled}
+              onChange={(e) => setSettings((s) => ({ ...s, loggingEnabled: e.target.checked }))}
+            />
+            <span className="text-sm font-medium text-gray-700">LLM 요청/응답 로그 저장</span>
+          </label>
+          <p className="text-xs text-gray-400 mt-1 ml-6">
+            켜면 실행 단위별 입력과 출력을 <code>.log</code> 폴더에 저장합니다. 학생 산출물 내용이 포함될 수 있습니다.
           </p>
         </div>
 
@@ -388,7 +374,7 @@ export default function SettingsPage() {
           <li>
             <span className="font-medium">oMLX:</span> Apple Silicon 맥에서 로컬 LLM 실행.{' '}
             <code className="bg-gray-100 px-1 rounded">brew tap jundot/omlx && brew install omlx</code>
-            으로 설치 후 모델 로드. 순차 처리 모드 권장.
+            으로 설치 후 모델 로드. 최대 동시 요청 수 1~3 권장.
           </li>
           <li><span className="font-medium">Ollama:</span> 로컬 Ollama 서버 실행 후 사용</li>
           <li><span className="font-medium">OpenAI 호환:</span> LM Studio, vLLM 등 OpenAI 호환 API</li>

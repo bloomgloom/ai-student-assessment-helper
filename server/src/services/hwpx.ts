@@ -11,7 +11,7 @@ function normalizeText(text: string): string {
 
 function paragraphText($: cheerio.Root, paragraph: any): string {
   const parts: string[] = [];
-  $(paragraph).find('hp\\:t').each((_: number, textNode: any) => {
+  $(paragraph).children('hp\\:run').children('hp\\:t').each((_: number, textNode: any) => {
     const text = $(textNode).text();
     if (text) parts.push(text);
   });
@@ -42,6 +42,7 @@ export async function extractHwpxText(buffer: Buffer, options: { skipFirstTableR
 
     $('hp\\:p').each((_: number, paragraph: any) => {
       if (skipParagraphs.has(paragraph)) return;
+      if ($(paragraph).find('hp\\:tbl').length) return;
 
       const line = paragraphText($, paragraph);
       if (line) chunks.push(line);

@@ -3,6 +3,7 @@ dist/
 server/data/
 server/uploads/
 template/
+.log/
 *.env
 .env.local
 .DS_Store

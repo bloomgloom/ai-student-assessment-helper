@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import { queryAll, queryOne, execute } from '../services/db';
-import { callLLM, getLLMSettings } from '../services/llm';
+import { callLLM, createLLMLogSession, getLLMSettings, type LLMLogSession } from '../services/llm';
 import { extractHwpxText } from '../services/hwpx';
 
 const router = Router();
@@ -154,6 +154,11 @@ function buildStoredContent(contentType: 'scoring' | 'setech', result: string, c
   return JSON.stringify({ text: result });
 }
 
+function buildArtifactPromptLabel(index: number, ext: string): string {
+  const normalizedExt = ext ? `.${ext}` : '';
+  return `산출물 ${index + 1}${normalizedExt}`;
+}
+
 async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[]): Promise<boolean> {
   let hasContent = false;
   const codeExts: Record<string, string> = {
@@ -161,20 +166,21 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
     c: 'c', cpp: 'cpp', h: 'c', java: 'java', html: 'html', css: 'css', sql: 'sql', json: 'json',
   };
 
-  for (const artifact of artifacts) {
+  for (const [index, artifact] of artifacts.entries()) {
     const ext = artifact.filename.split('.').pop()?.toLowerCase() || '';
+    const promptLabel = buildArtifactPromptLabel(index, ext);
     if (ext === 'hwpx') {
       try {
         const text = await extractHwpxText(fs.readFileSync(artifact.filepath), { skipFirstTableRow: true });
         if (text) {
-          parts.push(`[${artifact.filename}]\n[HWPX XML 텍스트 추출: 개인정보 표 첫 행 제외]\n${text}\n---`);
+          parts.push(`[${promptLabel}]\n[HWPX XML 텍스트 추출: 개인정보 표 첫 행 제외]\n${text}\n---`);
           hasContent = true;
         }
       } catch { /* skip */ }
     } else if (codeExts[ext]) {
       try {
         const code = fs.readFileSync(artifact.filepath, 'utf-8');
-        parts.push(`[${artifact.filename}]\n\`\`\`${codeExts[ext]}\n${code}\n\`\`\`\n---`);
+        parts.push(`[${promptLabel}]\n\`\`\`${codeExts[ext]}\n${code}\n\`\`\`\n---`);
         hasContent = true;
       } catch { /* skip */ }
     } else if (artifact.mime_type === 'text/plain' || ext === 'txt') {
@@ -185,11 +191,11 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
         } catch {
           text = fs.readFileSync(artifact.filepath, 'utf16le');
         }
-        parts.push(`[${artifact.filename}]\n${text}\n---`);
+        parts.push(`[${promptLabel}]\n${text}\n---`);
         hasContent = true;
       } catch { /* skip */ }
     } else if (artifact.mime_type === 'application/pdf') {
-      parts.push(`[${artifact.filename}] (PDF 파일 첨부 - 텍스트 파일로 변환 후 업로드 권장)\n---`);
+      parts.push(`[${promptLabel}] (PDF 파일 첨부 - 텍스트 파일로 변환 후 업로드 권장)\n---`);
     }
   }
 
@@ -317,14 +323,17 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
   let students: { id: number; name: string }[] = [];
   let completed = 0;
   let settings: Awaited<ReturnType<typeof getLLMSettings>> | null = null;
+  let logSession: LLMLogSession | null = null;
   let classContext: ClassContext | null = null;
   let cancelled = false;
+  const abortController = new AbortController();
 
   res.on('close', () => {
     cancelled = true;
+    abortController.abort();
   });
 
-  const processStudent = async (student: { id: number; name: string }) => {
+  const processStudent = async (student: { id: number; name: string }, index: number) => {
     if (cancelled) return;
 
     try {
@@ -460,7 +469,10 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
           try {
             if (!settings) throw new Error('LLM 설정이 로드되지 않았습니다.');
             if (cancelled) return;
-            result = await callLLM(parts.join('\n\n'), settings);
+            result = await callLLM(parts.join('\n\n'), settings, abortController.signal, {
+              session: logSession || undefined,
+              label: `학생 ${index + 1}/${students.length}`,
+            });
             if (cancelled) return;
             storedContent = buildStoredContent(contentType, result, evalCriteria);
             await execute(`
@@ -526,11 +538,20 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
     sendEvent({ type: 'start', total: students.length });
 
     settings = await getLLMSettings();
+    if (settings.loggingEnabled) {
+      logSession = await createLLMLogSession('batch-generate', {
+        content_type: contentType,
+        domain,
+        target_count: students.length,
+        provider: settings.provider,
+        model: settings.model || '(default)',
+      });
+    }
     const MAX_CONCURRENCY = Math.max(1, settings.maxConcurrency || 1);
 
     for (let i = 0; i < students.length; i += MAX_CONCURRENCY) {
       if (cancelled) break;
-      await Promise.all(students.slice(i, i + MAX_CONCURRENCY).map(processStudent));
+      await Promise.all(students.slice(i, i + MAX_CONCURRENCY).map((student, offset) => processStudent(student, i + offset)));
     }
 
     if (!cancelled) sendEvent({ type: 'done', completed });
