@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { recordsApi, criteriaApi, classesApi, aiApi } from '../lib/api';
 import ArtifactViewer from '../components/ArtifactViewer';
+import { useAiBatchStore } from '../stores/aiBatchStore';
 import {
   Download, Loader2, Users, ChevronRight, ChevronDown, Folder,
-  FileSpreadsheet, Bot, Save, Upload, Square, AlertCircle, CheckCircle2, Trash2, X
+  FileSpreadsheet, Bot, Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 
 interface ClassItem {
@@ -93,6 +94,10 @@ function buildTree(classes: ClassItem[], subjects: any[]): TreeNode[] {
     }
   }
   return result;
+}
+
+function formatClassLabel(c: ClassItem) {
+  return `${c.year}학년도 ${c.semester}학기 ${c.grade}학년 ${c.subject} ${c.room}`;
 }
 
 function TreeNodeView({
@@ -189,8 +194,6 @@ export default function RecordsPage() {
   const [evalItemsMap, setEvalItemsMap] = useState<Record<string, EvalItem[]>>({});
 
   const [saving, setSaving] = useState(false);
-  const [batchGenerating, setBatchGenerating] = useState(false);
-  const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number; message: string } | null>(null);
   const [uploadingZip, setUploadingZip] = useState(false);
   const [artifactRefreshKey, setArtifactRefreshKey] = useState(0);
   const [spellcheckingIds, setSpellcheckingIds] = useState<Set<number>>(new Set());
@@ -205,12 +208,19 @@ export default function RecordsPage() {
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<{ type: 'success' | 'warn' | 'error'; text: string } | null>(null);
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem('hideRecordsGuide') !== '1');
+  const [treeCollapsed, setTreeCollapsed] = useState(() => localStorage.getItem('recordsTreeCollapsed') === '1');
   const classFilesRef = useRef<HTMLInputElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const batchAbortRef = useRef<AbortController | null>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
+  const aiBatchJob = useAiBatchStore(state => state.currentJob);
+  const aiBatchUpdates = useAiBatchStore(state => state.updates);
+  const startAiBatch = useAiBatchStore(state => state.startBatch);
+  const stopAiBatch = useAiBatchStore(state => state.stopBatch);
+  const isAiCellLocked = useAiBatchStore(state => state.isCellLocked);
+  const appliedUpdateCountRef = useRef(0);
+  const batchGenerating = aiBatchJob?.status === 'running' || aiBatchJob?.status === 'stopping';
 
   // ── Column resize ──────────────────────────────────────────────────────────
   const handleResizeStart = (e: React.MouseEvent, key: string, defW: number) => {
@@ -389,6 +399,12 @@ export default function RecordsPage() {
     setShowGuide(false);
   };
 
+  const toggleTreeCollapsed = () => {
+    const next = !treeCollapsed;
+    setTreeCollapsed(next);
+    localStorage.setItem('recordsTreeCollapsed', next ? '1' : '0');
+  };
+
   const handleDeleteClass = useCallback(async (c: ClassItem) => {
     const label = `${c.year}학년도 ${c.semester}학기 ${c.grade}학년 ${c.subject} ${c.room}`;
     if (!confirm(`"${label}" 강의실을 삭제하시겠습니까?\n채점 파일과 세특 파일도 함께 삭제됩니다.`)) return;
@@ -493,6 +509,28 @@ export default function RecordsPage() {
     }));
   };
 
+  useEffect(() => {
+    if (aiBatchUpdates.length < appliedUpdateCountRef.current) {
+      appliedUpdateCountRef.current = 0;
+    }
+    if (!selectedClass) return;
+    const pendingUpdates = aiBatchUpdates.slice(appliedUpdateCountRef.current);
+    if (!pendingUpdates.length) return;
+
+    setContents(prev => {
+      let next = prev;
+      for (const update of pendingUpdates) {
+        if (!students.some(student => student.id === update.studentId)) continue;
+        next = {
+          ...next,
+          [`${update.studentId}_${update.contentType}_${update.domain}`]: parseContent(update.content),
+        };
+      }
+      return next;
+    });
+    appliedUpdateCountRef.current = aiBatchUpdates.length;
+  }, [aiBatchUpdates, selectedClass, students]);
+
   const runSpellcheckComprehensive = async (studentId: number, text: string) => {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -554,11 +592,6 @@ export default function RecordsPage() {
       domain: '__SUBJECT_COMPREHENSIVE__',
       content: JSON.stringify(nextContent),
     });
-  };
-
-  const handleStopBatch = () => {
-    batchAbortRef.current?.abort();
-    setBatchProgress(prev => prev ? { ...prev, message: '중단 중...' } : prev);
   };
 
   const handleSaveAll = async () => {
@@ -637,75 +670,13 @@ export default function RecordsPage() {
     const targetLabel = selectedStudents.length > 0 ? `선택한 ${targetStudents.length}명` : `${targetStudents.length}명 전체`;
     if (!confirm(`${targetLabel} "${domainLabel}" ${typeLabel} 일괄 생성하시겠습니까?`)) return;
 
-    setBatchGenerating(true);
-    const controller = new AbortController();
-    batchAbortRef.current = controller;
-
-    try {
-      for (const targetDomain of domainsToProcess) {
-        if (controller.signal.aborted) break;
-        setBatchProgress({ completed: 0, total: targetStudents.length, message: `[${targetDomain}] 준비 중...` });
-        try {
-          const response = await fetch('/api/ai/generate-batch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body: JSON.stringify({
-              classId: selectedClass.id,
-              domain: targetDomain,
-              contentType: type,
-              studentIds: targetStudents.map(student => student.id),
-            }),
-          });
-          const reader = response.body?.getReader();
-          if (!reader) continue;
-          const decoder = new TextDecoder();
-          let buffer = '';
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-            for (const line of lines) {
-              if (!line.startsWith('data: ')) continue;
-              try {
-                const event = JSON.parse(line.slice(6));
-                if (event.type === 'progress' || event.type === 'error') {
-                  applyGeneratedContent(event.studentId, event.contentType || type, event.domain || targetDomain, event.content || null);
-                  setBatchProgress({
-                    completed: event.completed, total: event.total,
-                    message: event.type === 'error' ? `오류: ${event.name}` : `[${targetDomain}] ${event.name} 완료`,
-                  });
-                } else if (event.type === 'done') {
-                  setBatchProgress({ completed: event.completed, total: event.completed, message: `[${targetDomain}] 완료!` });
-                } else if (event.type === 'fatal') {
-                  setBatchProgress({
-                    completed: event.completed || 0,
-                    total: event.total || targetStudents.length,
-                    message: `오류: ${event.error || '일괄 생성 실패'}`,
-                  });
-                }
-              } catch { /* ignore */ }
-            }
-          }
-        } catch (e: any) {
-          if (e?.name === 'AbortError') {
-            setBatchProgress(prev => prev ? { ...prev, message: '중단되었습니다.' } : prev);
-            break;
-          }
-          console.error(`Batch generate error for ${targetDomain}:`, e);
-        }
-      }
-
-      if (!controller.signal.aborted) {
-        await loadDomainData(selectedClass);
-        setTimeout(() => setBatchProgress(null), 3000);
-      }
-    } finally {
-      batchAbortRef.current = null;
-      setBatchGenerating(false);
-    }
+    void startAiBatch({
+      classId: selectedClass.id,
+      classLabel: `${selectedClass.year}학년도 ${selectedClass.semester}학기 ${selectedClass.grade}학년 ${selectedClass.subject} ${selectedClass.room}`,
+      domains: domainsToProcess,
+      contentType: type,
+      studentIds: targetStudents.map(student => student.id),
+    });
   };
 
   const handleBulkZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -818,12 +789,22 @@ export default function RecordsPage() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
-      <div className="w-72 border-r border-gray-200 bg-white flex flex-col shrink-0">
-        <div className="p-3 border-b border-gray-200 shrink-0 space-y-2">
-          <h2 className="text-sm font-semibold text-gray-700">기록 관리</h2>
+      <div className={`${treeCollapsed ? 'w-14' : 'w-72'} border-r border-gray-200 bg-white flex flex-col shrink-0 transition-[width] duration-200`}>
+        <div className={`${treeCollapsed ? 'p-2' : 'p-3'} border-b border-gray-200 shrink-0 space-y-2`}>
+          <div className={`flex items-center ${treeCollapsed ? 'justify-center' : 'justify-between gap-2'}`}>
+            {!treeCollapsed && <h2 className="text-sm font-semibold text-gray-700">기록 관리</h2>}
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+              onClick={toggleTreeCollapsed}
+              title={treeCollapsed ? '트리 펼치기' : '트리 접기'}
+            >
+              {treeCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+            </button>
+          </div>
           <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploadingFiles ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
             {uploadingFiles ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-            {uploadingFiles ? '처리 중...' : '파일 업로드'}
+            {!treeCollapsed && (uploadingFiles ? '처리 중...' : '파일 업로드')}
             <input
               ref={classFilesRef}
               type="file"
@@ -834,7 +815,7 @@ export default function RecordsPage() {
               disabled={uploadingFiles}
             />
           </label>
-          {showGuide && (
+          {showGuide && !treeCollapsed && (
             <div className="relative rounded border border-blue-200 bg-blue-50 p-2 pr-7 text-xs leading-relaxed text-blue-900">
               <button className="absolute right-1.5 top-1.5 text-blue-500 hover:text-blue-700" onClick={hideGuide} title="다시 보지 않기">
                 <X size={12} />
@@ -847,7 +828,7 @@ export default function RecordsPage() {
               <p>조회 후 엑셀내려받기를 선택하세요.</p>
             </div>
           )}
-          {uploadMsg && (
+          {uploadMsg && !treeCollapsed && (
             <div className={`flex items-start gap-1.5 text-xs rounded p-2 border ${uploadMsg.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' :
               uploadMsg.type === 'warn' ? 'bg-yellow-50 border-yellow-200 text-yellow-800' :
                 'bg-green-50 border-green-200 text-green-700'
@@ -857,21 +838,46 @@ export default function RecordsPage() {
             </div>
           )}
         </div>
-        <div className="flex-1 overflow-auto py-2">
-          {tree.map((node, idx) => (
-            <TreeNodeView
-              key={idx} node={node} depth={0}
-              selectedClassId={selectedClass?.id || null}
-              selectedDomain={selectedDomain}
-              onSelectDomain={handleSelectDomain}
-              onSelectClass={handleSelectClass}
-              onDeleteClass={handleDeleteClass}
-              onDeleteScoring={handleDeleteScoring}
-              onDeleteSetech={handleDeleteSetech}
-            />
-          ))}
-          {tree.length === 0 && (
-            <p className="text-xs text-gray-400 text-center py-8">수업이 없습니다</p>
+        <div className={`flex-1 overflow-auto ${treeCollapsed ? 'py-2 px-2' : 'py-2'}`}>
+          {treeCollapsed ? (
+            <div className="space-y-1">
+              {classes.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`flex h-9 w-9 items-center justify-center rounded border transition-colors ${
+                    selectedClass?.id === c.id
+                      ? 'border-blue-300 bg-blue-50 text-blue-700'
+                      : 'border-transparent text-gray-500 hover:border-gray-200 hover:bg-gray-50 hover:text-gray-700'
+                  }`}
+                  onClick={() => handleSelectClass(c)}
+                  title={formatClassLabel(c)}
+                >
+                  <FileSpreadsheet size={16} />
+                </button>
+              ))}
+              {classes.length === 0 && (
+                <div className="py-6 text-center text-xs text-gray-400" title="수업이 없습니다">없음</div>
+              )}
+            </div>
+          ) : (
+            <>
+              {tree.map((node, idx) => (
+                <TreeNodeView
+                  key={idx} node={node} depth={0}
+                  selectedClassId={selectedClass?.id || null}
+                  selectedDomain={selectedDomain}
+                  onSelectDomain={handleSelectDomain}
+                  onSelectClass={handleSelectClass}
+                  onDeleteClass={handleDeleteClass}
+                  onDeleteScoring={handleDeleteScoring}
+                  onDeleteSetech={handleDeleteSetech}
+                />
+              ))}
+              {tree.length === 0 && (
+                <p className="text-xs text-gray-400 text-center py-8">수업이 없습니다</p>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -980,32 +986,6 @@ export default function RecordsPage() {
               )}
             </div>
           </div>
-
-          {batchProgress && (
-            <div className="px-4 py-2 bg-blue-50 border-b border-blue-200 flex items-center gap-3 text-sm shrink-0">
-              <Loader2 size={14} className="animate-spin text-blue-500 shrink-0" />
-              <div className="flex-1">
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-blue-700">{batchProgress.message}</span>
-                  <span className="text-gray-500">{batchProgress.completed}/{batchProgress.total}</span>
-                </div>
-                <div className="h-1.5 bg-blue-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 rounded-full transition-all"
-                    style={{ width: `${(batchProgress.completed / Math.max(batchProgress.total, 1)) * 100}%` }}
-                  />
-                </div>
-              </div>
-              <button
-                className="btn-secondary text-xs py-1.5 shrink-0"
-                onClick={handleStopBatch}
-                disabled={!batchGenerating}
-                title="중단"
-              >
-                <Square size={12} /> 중단
-              </button>
-            </div>
-          )}
 
           {spellcheckProgress && (
             <div className="px-4 py-2 bg-green-50 border-b border-green-200 flex items-center gap-3 text-sm shrink-0">
@@ -1185,14 +1165,19 @@ export default function RecordsPage() {
                               );
                             }
                             if (c.type === 'llm') {
+                              const locked = selectedClass
+                                ? isAiCellLocked(selectedClass.id, s.id, 'scoring', d.name)
+                                : false;
                               return (
                                 <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <input type="text" className="input w-full text-sm text-center"
+                                  <input type="text" className="input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed"
                                     value={scoreData[c.id] || ''}
                                     onChange={ev => updateContent(s.id, 'scoring', c.id, ev.target.value, d.name)}
+                                    disabled={locked}
                                     data-row={rowIdx} data-col={c.fi}
                                     onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
+                                    title={locked ? 'AI 채점 진행 중이라 수정할 수 없습니다.' : undefined}
                                   />
                                 </td>
                               );
@@ -1206,14 +1191,19 @@ export default function RecordsPage() {
                               );
                             }
                             if (c.type === 'setech') {
+                              const locked = selectedClass
+                                ? isAiCellLocked(selectedClass.id, s.id, 'setech', d.name)
+                                : false;
                               return (
                                 <td key={`${d.name}_setech`} className="border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <textarea className="textarea w-full text-sm resize-y" style={{ minHeight: 80 }}
+                                  <textarea className="textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed" style={{ minHeight: 80 }}
                                     value={setechData.text || ''}
                                     onChange={ev => updateContent(s.id, 'setech', 'text', ev.target.value, d.name)}
+                                    disabled={locked}
                                     data-row={rowIdx} data-col={c.fi}
                                     onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
+                                    title={locked ? 'AI 활동 생성 진행 중이라 수정할 수 없습니다.' : undefined}
                                   />
                                 </td>
                               );
@@ -1227,11 +1217,13 @@ export default function RecordsPage() {
                           <>
                             <td className="align-top p-1 border-r"
                               style={{ width: compWidth, minWidth: compWidth }}>
-                              <textarea className="textarea w-full text-sm resize-y bg-blue-50/20 border-blue-100" style={{ minHeight: 80 }}
+                              <textarea className="textarea w-full text-sm resize-y bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed" style={{ minHeight: 80 }}
                                 value={compSetechText}
                                 onChange={ev => updateContent(s.id, 'setech', 'text', ev.target.value, '__SUBJECT_COMPREHENSIVE__')}
+                                disabled={selectedClass ? isAiCellLocked(selectedClass.id, s.id, 'setech', '__SUBJECT_COMPREHENSIVE__') : false}
                                 data-row={rowIdx} data-col={tableLayout.compSetechColIdx}
                                 onKeyDown={e => handleKeyNav(e, rowIdx, tableLayout.compSetechColIdx)}
+                                title={selectedClass && isAiCellLocked(selectedClass.id, s.id, 'setech', '__SUBJECT_COMPREHENSIVE__') ? 'AI 세특 생성 진행 중이라 수정할 수 없습니다.' : undefined}
                               />
                             </td>
                             <td className="align-top p-1 border-r text-center"
