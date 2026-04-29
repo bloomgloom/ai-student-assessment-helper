@@ -90,7 +90,8 @@ function buildTree(classes: ClassItem[], subjects: any[]): TreeNode[] {
 }
 
 function TreeNodeView({
-  node, depth, selectedClassId, selectedDomain, onSelectDomain, onSelectClass, onDeleteClass
+  node, depth, selectedClassId, selectedDomain, onSelectDomain, onSelectClass,
+  onDeleteClass, onDeleteScoring, onDeleteSetech
 }: {
   node: TreeNode;
   depth: number;
@@ -99,6 +100,8 @@ function TreeNodeView({
   onSelectDomain: (c: ClassItem, d: string) => void;
   onSelectClass: (c: ClassItem) => void;
   onDeleteClass: (c: ClassItem) => void;
+  onDeleteScoring: (c: ClassItem) => void;
+  onDeleteSetech: (c: ClassItem) => void;
 }) {
   const isRoom = !!node.room;
   const [open, setOpen] = useState(true);
@@ -124,13 +127,31 @@ function TreeNodeView({
         {isRoom ? <FileSpreadsheet size={14} className="text-green-500 shrink-0" /> : <Folder size={14} className="text-blue-400 shrink-0" />}
         <span className="text-sm whitespace-nowrap flex-1">{node.label}</span>
         {isRoom && (
-          <button
-            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400 hover:text-red-600 transition-all shrink-0"
-            onClick={(e) => { e.stopPropagation(); onDeleteClass(node.classItem!); }}
-            title="강의실 삭제"
-          >
-            <Trash2 size={13} />
-          </button>
+          <>
+            <button
+              style={{ visibility: node.classItem!.scoring_filename ? 'visible' : 'hidden' }}
+              className="w-7 h-5 inline-flex items-center justify-center rounded border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors shrink-0"
+              onClick={(e) => { e.stopPropagation(); onDeleteScoring(node.classItem!); }}
+              title="채점 파일 삭제"
+            >
+              <Trash2 size={12} />
+            </button>
+            <button
+              style={{ visibility: node.classItem!.setech_filename ? 'visible' : 'hidden' }}
+              className="w-7 h-5 inline-flex items-center justify-center rounded border border-violet-200 bg-violet-50 text-violet-600 hover:bg-violet-100 transition-colors shrink-0"
+              onClick={(e) => { e.stopPropagation(); onDeleteSetech(node.classItem!); }}
+              title="세특 파일 삭제"
+            >
+              <Trash2 size={12} />
+            </button>
+            <button
+              className="p-0.5 hover:bg-red-100 rounded text-red-400 hover:text-red-600 transition-all shrink-0"
+              onClick={(e) => { e.stopPropagation(); onDeleteClass(node.classItem!); }}
+              title="전체 삭제"
+            >
+              <Trash2 size={13} />
+            </button>
+          </>
         )}
       </div>
       {open && node.children?.map((child, idx) => (
@@ -141,6 +162,8 @@ function TreeNodeView({
           onSelectDomain={onSelectDomain}
           onSelectClass={onSelectClass}
           onDeleteClass={onDeleteClass}
+          onDeleteScoring={onDeleteScoring}
+          onDeleteSetech={onDeleteSetech}
         />
       ))}
     </div>
@@ -171,11 +194,9 @@ export default function RecordsPage() {
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
 
   // 파일 업로드 상태
-  const [uploadingScoring, setUploadingScoring] = useState(false);
-  const [uploadingSetech, setUploadingSetech] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<{ type: 'success' | 'warn' | 'error'; text: string } | null>(null);
-  const scoringFileRef = useRef<HTMLInputElement>(null);
-  const setechFileRef = useRef<HTMLInputElement>(null);
+  const classFilesRef = useRef<HTMLInputElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const batchAbortRef = useRef<AbortController | null>(null);
@@ -274,62 +295,59 @@ export default function RecordsPage() {
     await loadDomainData(c);
   }, [loadDomainData]);
 
-  const handleScoringUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadingScoring(true);
-    setUploadMsg(null);
-    try {
-      const res = await classesApi.uploadScoring(file);
-      const d = res.data;
-      const warnings: string[] = [];
-      if (d.domainMismatch) warnings.push(`영역 불일치:\n${d.domainMismatch}`);
-      if (d.studentMismatch?.length) warnings.push(`학생 명단 불일치:\n${d.studentMismatch.join('\n')}`);
-      const baseMsg = `채점 파일 업로드 완료 — ${d.subject} ${d.room}, 영역 ${d.domainsCount}개, 학생 ${d.studentsCount}명`;
-      setUploadMsg(warnings.length
-        ? { type: 'warn', text: `${baseMsg}\n\n⚠ ${warnings.join('\n')}` }
-        : { type: 'success', text: baseMsg });
-      const refreshed = (await classesApi.getAll()).data as ClassItem[];
-      setClasses(refreshed);
-      const found = refreshed.find(c =>
-        c.year === d.year && c.semester === d.semester &&
-        c.grade === d.grade && c.subject === d.subject && c.room === d.room
-      );
-      if (found) await handleSelectClass(found);
-    } catch (err: any) {
-      setUploadMsg({ type: 'error', text: err?.response?.data?.error || String(err) });
-    } finally {
-      setUploadingScoring(false);
-      if (scoringFileRef.current) scoringFileRef.current.value = '';
-    }
-  };
+  const handleClassFilesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
 
-  const handleSetechUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadingSetech(true);
-    setUploadMsg(null);
+    setUploadingFiles(true);
+    setUploadMsg({ type: 'success', text: `파일 ${files.length}개 업로드 중...` });
+
+    const messages: string[] = [];
+    let hasError = false;
+    let hasWarn = false;
+
     try {
-      const res = await classesApi.uploadSetech(file);
-      const d = res.data;
-      const warnings: string[] = [];
-      if (d.studentMismatch?.length) warnings.push(`학생 명단 불일치:\n${d.studentMismatch.join('\n')}`);
-      const baseMsg = `세특 파일 업로드 완료 — ${d.subject} ${d.room}, 학생 ${d.studentsCount}명`;
-      setUploadMsg(warnings.length
-        ? { type: 'warn', text: `${baseMsg}\n\n⚠ ${warnings.join('\n')}` }
-        : { type: 'success', text: baseMsg });
+      for (const file of files) {
+        const normalizedName = file.name.normalize('NFC');
+        const isSetech = normalizedName.includes('과목세특');
+        try {
+          const res = isSetech
+            ? await classesApi.uploadSetech(file)
+            : await classesApi.uploadScoring(file);
+          const d = res.data;
+          const warnings: string[] = [];
+          if (d.domainMismatch) warnings.push(`영역 불일치: ${d.domainMismatch}`);
+          if (d.studentMismatch?.length) warnings.push(`학생 명단 불일치: ${d.studentMismatch.join(', ')}`);
+          if (warnings.length) hasWarn = true;
+          messages.push(
+            `[완료] ${isSetech ? '세특' : '채점'} - ${normalizedName}` +
+            (warnings.length ? `\n  ${warnings.join('\n  ')}` : '')
+          );
+        } catch (err: any) {
+          hasError = true;
+          messages.push(`[실패] ${normalizedName}\n  ${err?.response?.data?.error || String(err)}`);
+        }
+      }
+
       const refreshed = (await classesApi.getAll()).data as ClassItem[];
       setClasses(refreshed);
-      const found = refreshed.find(c =>
-        c.year === d.year && c.semester === d.semester &&
-        c.grade === d.grade && c.subject === d.subject && c.room === d.room
-      );
-      if (found) await handleSelectClass(found);
-    } catch (err: any) {
-      setUploadMsg({ type: 'error', text: err?.response?.data?.error || String(err) });
+      if (selectedClass) {
+        const refreshedSelected = refreshed.find(c => c.id === selectedClass.id);
+        if (refreshedSelected) await handleSelectClass(refreshedSelected);
+        else {
+          setSelectedClass(null);
+          setStudents([]);
+          setContents({});
+        }
+      }
+
+      setUploadMsg({
+        type: hasError ? 'error' : hasWarn ? 'warn' : 'success',
+        text: messages.join('\n'),
+      });
     } finally {
-      setUploadingSetech(false);
-      if (setechFileRef.current) setechFileRef.current.value = '';
+      setUploadingFiles(false);
+      if (classFilesRef.current) classFilesRef.current.value = '';
     }
   };
 
@@ -346,6 +364,38 @@ export default function RecordsPage() {
       await loadData();
     } catch (err: any) {
       alert(err?.response?.data?.error || '삭제 중 오류가 발생했습니다.');
+    }
+  }, [selectedClass, loadData]);
+
+  const handleDeleteScoring = useCallback(async (c: ClassItem) => {
+    const label = `${c.year}학년도 ${c.semester}학기 ${c.grade}학년 ${c.subject} ${c.room}`;
+    if (!confirm(`"${label}" 채점 파일을 삭제하시겠습니까?\n수업 데이터와 세특 파일은 유지됩니다.`)) return;
+    try {
+      await classesApi.deleteScoring(c.id);
+      if (selectedClass?.id === c.id) {
+        setSelectedClass(prev => prev ? { ...prev, scoring_filename: '' } : prev);
+        setShowScoring(false);
+        setShowSetech(!!selectedClass.setech_filename);
+      }
+      await loadData();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || '채점 파일 삭제 중 오류가 발생했습니다.');
+    }
+  }, [selectedClass, loadData]);
+
+  const handleDeleteSetech = useCallback(async (c: ClassItem) => {
+    const label = `${c.year}학년도 ${c.semester}학기 ${c.grade}학년 ${c.subject} ${c.room}`;
+    if (!confirm(`"${label}" 세특 파일을 삭제하시겠습니까?\n학생 개인번호도 초기화됩니다.`)) return;
+    try {
+      await classesApi.deleteSetech(c.id);
+      if (selectedClass?.id === c.id) {
+        setSelectedClass(prev => prev ? { ...prev, setech_filename: '' } : prev);
+        setShowSetech(false);
+        setShowScoring(!!selectedClass.scoring_filename);
+      }
+      await loadData();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || '세특 파일 삭제 중 오류가 발생했습니다.');
     }
   }, [selectedClass, loadData]);
 
@@ -667,15 +717,18 @@ export default function RecordsPage() {
       <div className="w-72 border-r border-gray-200 bg-white flex flex-col shrink-0">
         <div className="p-3 border-b border-gray-200 shrink-0 space-y-2">
           <h2 className="text-sm font-semibold text-gray-700">기록 관리</h2>
-          <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploadingScoring ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
-            {uploadingScoring ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-            {uploadingScoring ? '처리 중...' : '채점 파일 업로드'}
-            <input ref={scoringFileRef} type="file" className="hidden" accept=".xlsx,.xls" onChange={handleScoringUpload} disabled={uploadingScoring} />
-          </label>
-          <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploadingSetech ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}>
-            {uploadingSetech ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-            {uploadingSetech ? '처리 중...' : '세특 파일 업로드'}
-            <input ref={setechFileRef} type="file" className="hidden" accept=".xlsx,.xls" onChange={handleSetechUpload} disabled={uploadingSetech} />
+          <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploadingFiles ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
+            {uploadingFiles ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+            {uploadingFiles ? '처리 중...' : '파일 업로드'}
+            <input
+              ref={classFilesRef}
+              type="file"
+              className="hidden"
+              accept=".xlsx,.xls"
+              multiple
+              onChange={handleClassFilesUpload}
+              disabled={uploadingFiles}
+            />
           </label>
           {uploadMsg && (
             <div className={`flex items-start gap-1.5 text-xs rounded p-2 border ${
@@ -697,6 +750,8 @@ export default function RecordsPage() {
               onSelectDomain={handleSelectDomain}
               onSelectClass={handleSelectClass}
               onDeleteClass={handleDeleteClass}
+              onDeleteScoring={handleDeleteScoring}
+              onDeleteSetech={handleDeleteSetech}
             />
           ))}
           {tree.length === 0 && (

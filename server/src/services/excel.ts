@@ -87,7 +87,7 @@ export function parseSetechFilename(filename: string): SetechFileInfo | null {
     year: parseInt(match[1], 10),
     semester: parseInt(match[2], 10),
     grade: parseInt(match[3], 10),
-    room: match[4].trim(),
+    room: /^\d+$/.test(match[4].trim()) ? `${match[4].trim()}강의실` : match[4].trim(),
     subject: match[5].trim(),
     timestamp: match[6],
   };
@@ -212,7 +212,7 @@ export async function parseScoringExcel(filePath: string): Promise<{
     const numCell = row.getCell(numCol);
     const classCell = row.getCell(classCol);
 
-    const name = String(nameCell.value ?? '').trim();
+    const name = cleanStudentName(String(nameCell.value ?? '').trim());
     if (!name || !isKoreanName(name)) return; // 빈 행 / 비이름 행 스킵
 
     const classNum = parseInt(String(classCell.value ?? '0'), 10) || 0;
@@ -301,7 +301,7 @@ export async function parseAchievementStandardsExcel(filePath: string): Promise<
   for (let r = 1; r <= Math.min(sheet.rowCount, 40); r++) {
     const row = sheet.getRow(r);
     const texts = rowTexts(row);
-    if (!headerRowIdx && texts.some((text) => text.includes('성취기준')) && texts.some((text) => text.includes('성취수준'))) {
+    if (!headerRowIdx && texts.some((text) => text.includes('성취기준')) && texts.some((text) => text.includes('성취수준') || text.includes('평가기준'))) {
       headerRowIdx = r;
     }
   }
@@ -312,7 +312,7 @@ export async function parseAchievementStandardsExcel(filePath: string): Promise<
   const header = sheet.getRow(headerRowIdx);
   const domainCol = findHeaderCol(header, '영역명') || 2;
   const standardCol = findHeaderCol(header, '성취기준') || 3;
-  const levelCol = findHeaderCol(header, '성취수준') || 7;
+  const levelCol = findHeaderCol(header, '성취수준') || findHeaderCol(header, '평가기준') || 7;
   const descCol = Math.max(levelCol + 2, 9);
 
   // Returns true if the raw cell value ends with whitespace (before trim).
@@ -383,6 +383,13 @@ export async function parseAchievementStandardsExcel(filePath: string): Promise<
   }
 
   return { info, rows };
+}
+
+/**
+ * 이름에서 부가 정보 제거: "홍길동 [학교간공동교육과정]", "홍길동(전학)" 등 → "홍길동"
+ */
+export function cleanStudentName(str: string): string {
+  return str.replace(/[\s]*[\[\(][^\]\)]*[\]\)]/g, '').trim();
 }
 
 /** 숫자가 포함되지 않은 한글 문자열이면 이름으로 판단 */
@@ -472,6 +479,7 @@ export async function parseSetechExcel(filePath: string): Promise<SetechStudent[
   if (!sheet) throw new Error('엑셀 파일에 시트가 없습니다.');
 
   let nameCol = 0, classCol = 0, numCol = 0, personalNumCol = 0;
+  let combinedClassNumCol = 0; // "반/번호" 형식 (예: "1/1")
   let headerRow = 0;
 
   for (let r = 1; r <= Math.min(sheet.rowCount, 5); r++) {
@@ -482,20 +490,34 @@ export async function parseSetechExcel(filePath: string): Promise<SetechStudent[
       if (['이름', '성명'].includes(val) && !nameCol) { nameCol = colIdx; foundName = true; }
       if (['반', '학반', '학년반'].includes(val) && !classCol) classCol = colIdx;
       if (['번', '번호', '출석번호'].includes(val) && !numCol) numCol = colIdx;
+      if (val === '반/번호' && !combinedClassNumCol) combinedClassNumCol = colIdx;
       if (['개인번호', '교원개인번호', '학생개인번호'].includes(val) && !personalNumCol) personalNumCol = colIdx;
     });
     if (foundName) { headerRow = r; break; }
   }
 
-  if (!nameCol) { nameCol = 4; numCol = 3; classCol = 2; headerRow = 1; }
+  if (!nameCol) { nameCol = 8; headerRow = 1; }
+  // 개별 반/번호 컬럼이 없고 합산 컬럼도 없으면 기본값
+  if (!classCol && !combinedClassNumCol) classCol = 2;
+  if (!numCol && !combinedClassNumCol) numCol = 3;
 
   const students: SetechStudent[] = [];
   sheet.eachRow((row, rowIdx) => {
     if (rowIdx <= headerRow) return;
-    const name = String(row.getCell(nameCol).value ?? '').trim();
+    const name = cleanStudentName(String(row.getCell(nameCol).value ?? '').trim());
     if (!name || !isKoreanName(name)) return;
-    const classNum = parseInt(String(row.getCell(classCol).value ?? '0'), 10) || 0;
-    const num = parseInt(String(row.getCell(numCol).value ?? '0').replace(/\D/g, ''), 10) || 0;
+
+    let classNum = 0, num = 0;
+    if (combinedClassNumCol) {
+      // "반/번호" 형식: "1/1" → classNum=1, num=1
+      const parts = String(row.getCell(combinedClassNumCol).value ?? '').trim().split('/');
+      classNum = parseInt(parts[0], 10) || 0;
+      num = parseInt(parts[1]?.replace(/\D/g, '') ?? '0', 10) || 0;
+    } else {
+      classNum = parseInt(String(row.getCell(classCol).value ?? '0'), 10) || 0;
+      num = parseInt(String(row.getCell(numCol).value ?? '0').replace(/\D/g, ''), 10) || 0;
+    }
+
     const personalNum = personalNumCol ? String(row.getCell(personalNumCol).value ?? '').trim() : '';
     students.push({ name, classNum, studentNum: classNum * 100 + num, personalNum, excelRow: rowIdx });
   });

@@ -384,8 +384,8 @@ router.post('/upload/setech', upload.single('file'), async (req: Request, res: R
     classId = existingClass.id;
     // 채점 파일이 이미 있으면 학생 명단 일치 여부 확인
     if (existingClass.scoring_filename) {
-      const existingStudents = await queryAll<{ name: string; id: number }>(
-        'SELECT id, name FROM class_students WHERE class_id=? ORDER BY name', [classId]
+      const existingStudents = await queryAll<{ id: number; name: string; student_num: number }>(
+        'SELECT id, name, student_num FROM class_students WHERE class_id=? ORDER BY name', [classId]
       );
       const existingNames = new Set(existingStudents.map(s => s.name));
       const newNames = new Set(parsedStudents.map(s => s.name));
@@ -397,9 +397,11 @@ router.post('/upload/setech', upload.single('file'), async (req: Request, res: R
           ...extra2.map(n => `세특에만 있음: ${n}`),
         ];
       }
-      // 기존 학생에 personal_num 업데이트
+      // 기존 학생에 personal_num 업데이트 (학번 우선, 이름 보조)
       for (const s of parsedStudents) {
-        const existing = existingStudents.find(e => e.name === s.name);
+        const fullNum = grade * 10000 + s.studentNum;
+        const existing = existingStudents.find(e => e.student_num === fullNum)
+                      || existingStudents.find(e => e.name === s.name);
         if (existing && s.personalNum) {
           await execute('UPDATE class_students SET personal_num=? WHERE id=?', [s.personalNum, existing.id]);
         }
@@ -456,6 +458,40 @@ router.post('/upload/setech', upload.single('file'), async (req: Request, res: R
     studentMismatch: studentMismatch || undefined,
     updated: !!existingClass,
   });
+});
+
+// ── 채점 파일만 삭제 ──────────────────────────────────────────────────────
+router.delete('/:id/scoring', async (req: Request, res: Response) => {
+  const cls = await queryOne<{ scoring_filepath: string }>(
+    'SELECT scoring_filepath FROM classes WHERE id=?', [req.params.id]
+  );
+  if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
+  if (cls.scoring_filepath) {
+    try { fs.unlinkSync(cls.scoring_filepath); } catch { /* ignore */ }
+  }
+  await execute(
+    'UPDATE classes SET scoring_filename=?, scoring_filepath=? WHERE id=?',
+    ['', '', req.params.id]
+  );
+  res.json({ ok: true });
+});
+
+// ── 세특 파일만 삭제 ──────────────────────────────────────────────────────
+router.delete('/:id/setech', async (req: Request, res: Response) => {
+  const cls = await queryOne<{ setech_filepath: string }>(
+    'SELECT setech_filepath FROM classes WHERE id=?', [req.params.id]
+  );
+  if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
+  if (cls.setech_filepath) {
+    try { fs.unlinkSync(cls.setech_filepath); } catch { /* ignore */ }
+  }
+  await execute(
+    'UPDATE classes SET setech_filename=?, setech_filepath=? WHERE id=?',
+    ['', '', req.params.id]
+  );
+  // 개인번호도 함께 초기화 (세특에서 가져온 데이터)
+  await execute('UPDATE class_students SET personal_num=? WHERE class_id=?', ['', req.params.id]);
+  res.json({ ok: true });
 });
 
 // ── 수업 삭제 ─────────────────────────────────────────────────────────────

@@ -91,12 +91,16 @@ function TreeNodeView({
   selectedId,
   onSelect,
   onDelete,
+  onDeleteScoring,
+  onDeleteSetech,
 }: {
   node: TreeNode;
   depth: number;
   selectedId: number | null;
   onSelect: (cls: ClassItem) => void;
   onDelete: (id: number) => void;
+  onDeleteScoring: (id: number) => void;
+  onDeleteSetech: (id: number) => void;
 }) {
   const isLeaf = !!node.classItem;
   const [open, setOpen] = useState(true);
@@ -108,7 +112,7 @@ function TreeNodeView({
     const isSelected = selectedId === cls.id;
     return (
       <div
-        className={`group flex items-center gap-1.5 py-1.5 pr-2 cursor-pointer rounded text-sm transition-colors ${
+        className={`group flex items-center gap-1 py-1.5 pr-2 cursor-pointer rounded text-sm transition-colors ${
           isSelected ? 'bg-blue-100 text-blue-700 font-medium' : 'hover:bg-gray-100 text-gray-700'
         }`}
         style={{ paddingLeft: pl }}
@@ -116,9 +120,29 @@ function TreeNodeView({
       >
         <BookOpen size={13} className="shrink-0 text-green-500" />
         <span className="flex-1 truncate">{node.label}</span>
+        {/* 채점 파일 삭제 — 파란색, 왼쪽 고정 위치 */}
         <button
-          className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400"
+          style={{ visibility: cls.scoring_filename ? 'visible' : 'hidden' }}
+          className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] font-semibold hover:bg-blue-100 text-blue-500 border border-transparent hover:border-blue-200 shrink-0"
+          onClick={(e) => { e.stopPropagation(); onDeleteScoring(cls.id); }}
+          title="채점 파일 삭제"
+        >
+          채<Trash2 size={9} />
+        </button>
+        {/* 세특 파일 삭제 — 보라색, 오른쪽 고정 위치 */}
+        <button
+          style={{ visibility: cls.setech_filename ? 'visible' : 'hidden' }}
+          className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] font-semibold hover:bg-violet-100 text-violet-500 border border-transparent hover:border-violet-200 shrink-0"
+          onClick={(e) => { e.stopPropagation(); onDeleteSetech(cls.id); }}
+          title="세특 파일 삭제"
+        >
+          세<Trash2 size={9} />
+        </button>
+        {/* 수업 전체 삭제 */}
+        <button
+          className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400 shrink-0"
           onClick={(e) => { e.stopPropagation(); onDelete(cls.id); }}
+          title="수업 전체 삭제"
         >
           <Trash2 size={12} />
         </button>
@@ -132,7 +156,7 @@ function TreeNodeView({
         className="flex items-center gap-1 py-1 cursor-pointer hover:bg-gray-50 rounded text-sm text-gray-600 font-medium"
         style={{ paddingLeft: pl }}
       >
-        <div 
+        <div
           onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
           className="p-0.5 hover:bg-gray-200 rounded text-gray-500"
         >
@@ -148,6 +172,8 @@ function TreeNodeView({
           selectedId={selectedId}
           onSelect={onSelect}
           onDelete={onDelete}
+          onDeleteScoring={onDeleteScoring}
+          onDeleteSetech={onDeleteSetech}
         />
       ))}
     </div>
@@ -197,6 +223,24 @@ export default function ClassPage() {
     if (!confirm('수업을 삭제하면 관련 데이터가 모두 삭제됩니다. 계속하시겠습니까?')) return;
     await classesApi.delete(id);
     if (selected?.id === id) { setSelected(null); setStudents([]); }
+    await loadClasses();
+  };
+
+  const handleDeleteScoring = async (id: number) => {
+    if (!confirm('채점 파일을 삭제합니다. 수업 데이터(학생, 영역)는 유지됩니다. 계속하시겠습니까?')) return;
+    await classesApi.deleteScoring(id);
+    if (selected?.id === id) {
+      setSelected((prev) => prev ? { ...prev, scoring_filename: '' } : prev);
+    }
+    await loadClasses();
+  };
+
+  const handleDeleteSetech = async (id: number) => {
+    if (!confirm('세특 파일을 삭제합니다. 학생 개인번호도 초기화됩니다. 계속하시겠습니까?')) return;
+    await classesApi.deleteSetech(id);
+    if (selected?.id === id) {
+      setSelected((prev) => prev ? { ...prev, setech_filename: '' } : prev);
+    }
     await loadClasses();
   };
 
@@ -321,6 +365,8 @@ export default function ClassPage() {
                 selectedId={selected?.id ?? null}
                 onSelect={handleSelect}
                 onDelete={handleDelete}
+                onDeleteScoring={handleDeleteScoring}
+                onDeleteSetech={handleDeleteSetech}
               />
             ))
           )}

@@ -114,6 +114,8 @@ export const classesApi = {
     return api.post('/classes/upload/setech', form);
   },
   delete: (id: number) => api.delete(`/classes/${id}`),
+  deleteScoring: (id: number) => api.delete(`/classes/${id}/scoring`),
+  deleteSetech: (id: number) => api.delete(`/classes/${id}/setech`),
   syncSession: (classId: number, sessionId: number) =>
     api.post(`/classes/${classId}/sync-session/${sessionId}`),
 };

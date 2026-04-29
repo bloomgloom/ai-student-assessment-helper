@@ -1,5 +1,5 @@
 {
-  "name": "assessment-web-server",
+  "name": "ai-student-assessment-helper-server",
   "version": "1.0.0",
   "private": true,
   "scripts": {
