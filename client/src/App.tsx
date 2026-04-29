@@ -3,13 +3,16 @@ import {
   Settings, BookOpen, ClipboardList, ListChecks, Loader2, Square,
   AlertCircle, CheckCircle2, Menu
 } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import SettingsPage from './pages/SettingsPage';
 import CriteriaPage from './pages/CriteriaPage';
 import DomainPage from './pages/DomainPage';
 import RecordsPage from './pages/RecordsPage';
-import { ArtifactStandalonePage } from './components/ArtifactViewer';
 import { useAiBatchStore } from './stores/aiBatchStore';
+
+const ArtifactStandalonePage = lazy(() =>
+  import('./components/ArtifactViewer').then((module) => ({ default: module.ArtifactStandalonePage }))
+);
 
 function Sidebar() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebarCollapsed') === '1');
@@ -133,7 +136,11 @@ export default function App() {
     <BrowserRouter>
       <div className="flex min-h-screen">
         <Routes>
-          <Route path="/artifacts/:id/view" element={<ArtifactStandalonePage />} />
+          <Route path="/artifacts/:id/view" element={
+            <Suspense fallback={<div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-gray-400" /></div>}>
+              <ArtifactStandalonePage />
+            </Suspense>
+          } />
           <Route path="*" element={
             <>
               <Sidebar />

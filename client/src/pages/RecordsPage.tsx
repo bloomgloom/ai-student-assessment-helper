@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { recordsApi, criteriaApi, classesApi, aiApi } from '../lib/api';
-import ArtifactViewer from '../components/ArtifactViewer';
 import { useAiBatchStore } from '../stores/aiBatchStore';
 import {
   Download, Loader2, Users, ChevronRight, ChevronDown, Folder,
   FileSpreadsheet, Bot, Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
+
+const ArtifactViewer = lazy(() => import('../components/ArtifactViewer'));
 
 interface ClassItem {
   id: number;
@@ -1160,7 +1161,9 @@ export default function RecordsPage() {
                               return (
                                 <td key={`${d.name}_artifact`} className="border-r align-middle text-center p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <ArtifactViewer key={`${s.id}_${d.name}_${artifactRefreshKey}`} studentId={s.id} domain={d.name} />
+                                  <Suspense fallback={<Loader2 size={12} className="mx-auto animate-spin text-gray-400" />}>
+                                    <ArtifactViewer key={`${s.id}_${d.name}_${artifactRefreshKey}`} studentId={s.id} domain={d.name} />
+                                  </Suspense>
                                 </td>
                               );
                             }

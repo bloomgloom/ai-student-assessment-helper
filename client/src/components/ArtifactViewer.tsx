@@ -1,39 +1,9 @@
-import { useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { artifactsApi } from '../lib/api';
 import { Upload, X, Loader2, Eye, File, Download } from 'lucide-react';
-import CodeMirror from '@uiw/react-codemirror';
-import { oneDark } from '@codemirror/theme-one-dark';
-import { javascript } from '@codemirror/lang-javascript';
-import { python } from '@codemirror/lang-python';
-import { cpp } from '@codemirror/lang-cpp';
-import { java } from '@codemirror/lang-java';
-import { html } from '@codemirror/lang-html';
-import { css } from '@codemirror/lang-css';
-import { sql } from '@codemirror/lang-sql';
-import { json } from '@codemirror/lang-json';
-import { Document, Page, pdfjs } from 'react-pdf';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
-import initWasm, { HwpDocument } from '@rhwp/core';
-import rhwpWasmUrl from '@rhwp/core/rhwp_bg.wasm?url';
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-
-let rhwpMeasureCtx: CanvasRenderingContext2D | null = null;
-let rhwpLastFont = '';
-function ensureRhwpMeasureTextWidth() {
-  if ((globalThis as any).measureTextWidth) return;
-  (globalThis as any).measureTextWidth = (font: string, text: string) => {
-    if (!rhwpMeasureCtx) rhwpMeasureCtx = document.createElement('canvas').getContext('2d');
-    if (!rhwpMeasureCtx) return text.length * 10;
-    if (font !== rhwpLastFont) {
-      rhwpMeasureCtx.font = font;
-      rhwpLastFont = font;
-    }
-    return rhwpMeasureCtx.measureText(text).width;
-  };
-}
+const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
 
 interface Artifact {
   id: number;
@@ -71,70 +41,7 @@ function extBadgeClass(filename: string): string {
   }
 }
 
-function getLanguageExtension(filename: string) {
-  switch (getExt(filename)) {
-    case 'js': case 'jsx': case 'ts': case 'tsx': return javascript({ jsx: true, typescript: true });
-    case 'py':   return python();
-    case 'c': case 'cpp': case 'h': return cpp();
-    case 'java': return java();
-    case 'html': return html();
-    case 'css':  return css();
-    case 'sql':  return sql();
-    case 'json': return json();
-    default: return null;
-  }
-}
-
 function isCodeFile(f: string) { return ['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','md','txt'].includes(getExt(f)); }
-function isHtmlFile(f: string)  { return getExt(f) === 'html'; }
-function isPdfFile(f: string)   { return getExt(f) === 'pdf'; }
-function isHwpxFile(f: string)  { return getExt(f) === 'hwpx'; }
-
-// ── HWPX 렌더러 (rhwp) ────────────────────────────────────────────────────────
-function HwpxRenderer({ fileUrl }: { fileUrl: string }) {
-  const [doc, setDoc] = useState<HwpDocument | null>(null);
-  const [pages, setPages] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    let activeDoc: HwpDocument | null = null;
-    (async () => {
-      try {
-        setError('');
-        ensureRhwpMeasureTextWidth();
-        await initWasm({ module_or_path: rhwpWasmUrl });
-        const res = await fetch(fileUrl);
-        if (!res.ok) throw new Error(`파일 로드 실패 (${res.status})`);
-        const buf = await res.arrayBuffer();
-        if (!active) return;
-        activeDoc = new HwpDocument(new Uint8Array(buf));
-        setDoc(activeDoc);
-        setPages(activeDoc.pageCount());
-      } catch (e) {
-        console.error('HWPX 렌더링 오류:', e);
-        if (active) setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => { active = false; if (activeDoc) activeDoc.free(); };
-  }, [fileUrl]);
-
-  if (loading) return <div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin text-gray-400" /></div>;
-  if (!doc) return <div className="p-4 text-red-500 text-center">HWPX 렌더링 실패{error ? `: ${error}` : ''}</div>;
-  if (pages <= 0) return <div className="p-4 text-red-500 text-center">HWPX 페이지를 찾을 수 없습니다.</div>;
-
-  return (
-    <div className="h-full overflow-auto flex flex-col items-center p-4 bg-gray-100 gap-4">
-      {Array.from({ length: pages }).map((_, i) => (
-        <canvas key={i} className="shadow bg-white"
-          ref={c => { if (c && doc) doc.renderPageToCanvas(i, c, 1.5); }} />
-      ))}
-    </div>
-  );
-}
 
 interface ArtifactViewerProps {
   studentId: number;
@@ -236,72 +143,16 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
               </div>
             </div>
 
-            <ArtifactPreviewContent
-              artifact={viewing}
-              codeContent={codeContent}
-              loadingCode={loadingCode}
-              pdfPages={pdfPages}
-              setPdfPages={setPdfPages}
-            />
+            <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 size={24} className="animate-spin text-gray-400" /></div>}>
+              <ArtifactPreviewContent
+                artifact={viewing}
+                codeContent={codeContent}
+                loadingCode={loadingCode}
+                pdfPages={pdfPages}
+                setPdfPages={setPdfPages}
+              />
+            </Suspense>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ArtifactPreviewContent({
-  artifact,
-  codeContent,
-  loadingCode,
-  pdfPages,
-  setPdfPages,
-}: {
-  artifact: Artifact;
-  codeContent: string;
-  loadingCode: boolean;
-  pdfPages: number;
-  setPdfPages: (n: number) => void;
-}) {
-  return (
-    <div className="flex-1 overflow-hidden" style={{ textAlign: 'left' }}>
-      {isPdfFile(artifact.filename) ? (
-        <div className="h-full overflow-auto flex justify-center p-4 bg-gray-100">
-          <Document file={artifactsApi.fileUrl(artifact.id)} onLoadSuccess={({ numPages }) => setPdfPages(numPages)}>
-            {Array.from({ length: pdfPages }, (_, i) => (
-              <Page key={i} pageNumber={i + 1} className="mb-2 shadow" width={Math.min(window.innerWidth * 0.75, 800)} />
-            ))}
-          </Document>
-        </div>
-      ) : isHwpxFile(artifact.filename) ? (
-        <HwpxRenderer fileUrl={artifactsApi.fileUrl(artifact.id)} />
-      ) : isHtmlFile(artifact.filename) ? (
-        <iframe
-          src={artifactsApi.fileUrl(artifact.id)}
-          className="w-full h-full border-none bg-white"
-          title="HTML Viewer"
-          sandbox="allow-scripts allow-same-origin"
-        />
-      ) : loadingCode ? (
-        <div className="flex items-center justify-center h-full">
-          <Loader2 size={24} className="animate-spin text-gray-400" />
-        </div>
-      ) : isCodeFile(artifact.filename) ? (
-        <div className="h-full overflow-auto" style={{ textAlign: 'left' }}>
-          <CodeMirror
-            value={codeContent}
-            theme={oneDark}
-            extensions={[getLanguageExtension(artifact.filename)].filter(Boolean) as never[]}
-            readOnly
-            style={{ height: '100%', fontSize: 13 }}
-            basicSetup={{ lineNumbers: true, foldGutter: true, tabSize: 4 }}
-          />
-        </div>
-      ) : (
-        <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-500">
-          <File size={48} className="text-gray-300" />
-          <p>이 파일 형식은 뷰어에서 지원하지 않습니다.</p>
-          <a href={artifactsApi.fileUrl(artifact.id)} className="btn-primary" download={artifact.filename}>다운로드</a>
         </div>
       )}
     </div>
@@ -342,13 +193,15 @@ export function ArtifactStandalonePage() {
           <Download size={13} /> 다운로드
         </a>
       </div>
-      <ArtifactPreviewContent
-        artifact={artifact}
-        codeContent={codeContent}
-        loadingCode={loadingCode}
-        pdfPages={pdfPages}
-        setPdfPages={setPdfPages}
-      />
+      <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 size={24} className="animate-spin text-gray-400" /></div>}>
+        <ArtifactPreviewContent
+          artifact={artifact}
+          codeContent={codeContent}
+          loadingCode={loadingCode}
+          pdfPages={pdfPages}
+          setPdfPages={setPdfPages}
+        />
+      </Suspense>
     </div>
   );
 }
