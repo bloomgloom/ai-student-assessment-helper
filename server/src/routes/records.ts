@@ -2,8 +2,9 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
-import { parseStudentExcel, exportToExcel, writeScoringToExcel, writeSetechToExcel } from '../services/excel';
+import { parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeSetechToExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
 const UPLOAD_DIR = path.join(__dirname, '../../uploads');
@@ -16,6 +17,28 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 const router = Router();
+
+function cellText(value: ExcelJS.CellValue): string {
+  if (value == null) return '';
+  if (typeof value === 'object' && 'text' in value) return String(value.text ?? '').trim();
+  return String(value).trim();
+}
+
+function headerMap(row: ExcelJS.Row): Record<string, number> {
+  const map: Record<string, number> = {};
+  row.eachCell((cell, col) => { map[cellText(cell.value)] = col; });
+  return map;
+}
+
+function parseGeneratedContentValue(contentType: string, content: string): Array<{ item: string; value: string }> {
+  try {
+    const parsed = JSON.parse(content || '{}');
+    if (contentType === 'setech') return [{ item: 'text', value: String(parsed.text ?? '') }];
+    return Object.entries(parsed).map(([item, value]) => ({ item, value: String(value ?? '') }));
+  } catch {
+    return [{ item: contentType === 'setech' ? 'text' : 'raw', value: content || '' }];
+  }
+}
 
 router.get('/students/:studentId/content', async (req: Request, res: Response) => {
   const content = await queryAll(
@@ -83,9 +106,14 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
         'SELECT name, excel_col FROM assessment_domains WHERE class_id=? ORDER BY sort_order',
         [classId]
       );
+      const parsedScoring = await parseScoringExcel(cls.scoring_filepath);
+      const scoringRowByStudentNum = new Map(
+        parsedScoring.students.map(student => [cls.grade * 10000 + student.studentNum, student.excelRow])
+      );
 
       const entries: { excelRow: number; excelCol: string; score: number | null }[] = [];
       for (const s of students) {
+        const excelRow = scoringRowByStudentNum.get(s.student_num) ?? s.excel_row;
         for (const d of domains) {
           if (!d.excel_col) continue;
           const row = await queryOne<{ content: string }>(
@@ -99,7 +127,7 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
               score = parsed.total != null ? Number(parsed.total) : null;
             } catch { /* ignore */ }
           }
-          entries.push({ excelRow: s.excel_row, excelCol: d.excel_col, score });
+          entries.push({ excelRow, excelCol: d.excel_col, score });
         }
       }
 
@@ -138,6 +166,121 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
     res.send(buffer);
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+router.get('/export-full/:classId', async (req: Request, res: Response) => {
+  const classId = Number(req.params.classId);
+  const cls = await queryOne<{ year: number; semester: number; grade: number; subject: string; room: string }>(
+    'SELECT year, semester, grade, subject, room FROM classes WHERE id=?',
+    [classId]
+  );
+  if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
+
+  const students = await queryAll<{ id: number; student_num: number; name: string }>(
+    'SELECT id, student_num, name FROM class_students WHERE class_id=? ORDER BY student_num',
+    [classId]
+  );
+  const rows = await queryAll<{ student_id: number; student_num: number; name: string; content_type: string; domain: string; content: string; updated_at: string }>(
+    `SELECT gc.student_id, cs.student_num, cs.name, gc.content_type, gc.domain, gc.content, gc.updated_at
+     FROM generated_content gc
+     JOIN class_students cs ON cs.id = gc.student_id
+     WHERE cs.class_id=?
+     ORDER BY cs.student_num, gc.content_type, gc.domain`,
+    [classId]
+  );
+
+  const wb = new ExcelJS.Workbook();
+  const meta = wb.addWorksheet('기본정보');
+  meta.addRows([
+    ['class_id', classId],
+    ['학년도', cls.year],
+    ['학기', cls.semester],
+    ['학년', cls.grade],
+    ['과목', cls.subject],
+    ['강의실', cls.room],
+  ]);
+
+  const studentsSheet = wb.addWorksheet('학생');
+  studentsSheet.addRow(['student_num', 'name']);
+  students.forEach(student => studentsSheet.addRow([student.student_num, student.name]));
+
+  const contentSheet = wb.addWorksheet('내용');
+  contentSheet.addRow(['student_num', 'name', 'content_type', 'domain', 'item', 'value', 'updated_at']);
+  for (const row of rows) {
+    for (const parsed of parseGeneratedContentValue(row.content_type, row.content)) {
+      contentSheet.addRow([row.student_num, row.name, row.content_type, row.domain, parsed.item, parsed.value, row.updated_at]);
+    }
+  }
+
+  for (const sheet of wb.worksheets) {
+    sheet.getRow(1).font = { bold: true };
+    sheet.columns.forEach(col => {
+      col.width = Math.max(12, Math.min(60, Math.max(...(col.values || []).map(v => String(v || '').length + 4))));
+      col.alignment = { vertical: 'top', wrapText: true };
+    });
+    sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+
+  const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+  const filename = `전체기록_${cls.year}_${cls.semester}_${cls.grade}_${cls.subject}_${cls.room}.xlsx`;
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.send(buffer);
+});
+
+router.post('/import-full/:classId', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
+  const classId = Number(req.params.classId);
+  try {
+    const students = await queryAll<{ id: number; student_num: number }>(
+      'SELECT id, student_num FROM class_students WHERE class_id=?',
+      [classId]
+    );
+    const studentMap = new Map(students.map(student => [String(student.student_num), student.id]));
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(req.file.path);
+    const sheet = wb.getWorksheet('내용');
+    if (!sheet) return res.status(400).json({ error: '"내용" 시트를 찾을 수 없습니다.' });
+    const h = headerMap(sheet.getRow(1));
+    const grouped = new Map<string, { studentId: number; contentType: string; domain: string; items: Record<string, string> }>();
+
+    sheet.eachRow((row, rowNum) => {
+      if (rowNum === 1) return;
+      const studentNum = cellText(row.getCell(h.student_num).value);
+      const studentId = studentMap.get(studentNum);
+      const contentType = cellText(row.getCell(h.content_type).value);
+      const domain = cellText(row.getCell(h.domain).value);
+      const item = cellText(row.getCell(h.item).value);
+      const value = cellText(row.getCell(h.value).value);
+      if (!studentId || !contentType || !domain || !item) return;
+      const key = `${studentId}||${contentType}||${domain}`;
+      const entry = grouped.get(key) || { studentId, contentType, domain, items: {} };
+      entry.items[item] = value;
+      grouped.set(key, entry);
+    });
+
+    let saved = 0;
+    await transaction(async () => {
+      for (const entry of grouped.values()) {
+        const content = entry.contentType === 'setech'
+          ? JSON.stringify({ text: entry.items.text ?? '' })
+          : JSON.stringify(entry.items);
+        await execute(`
+          INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
+          VALUES(?,?,?,?,datetime('now'))
+          ON CONFLICT(student_id, content_type, domain)
+          DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
+        `, [entry.studentId, entry.contentType, entry.domain, content]);
+        saved++;
+      }
+    });
+
+    res.json({ ok: true, saved });
+  } catch (e: unknown) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch { /* ignore */ }
   }
 });
 

@@ -28,6 +28,21 @@ export const criteriaApi = {
     form.append('file', file);
     return api.post('/criteria/domains/upload', form);
   },
+  exportDomainConfig: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
+    api.get('/criteria/domain-config/export', {
+      params: { year, semester, grade, subject, domainName },
+      responseType: 'blob',
+    }),
+  importDomainConfig: (year: number, semester: number, grade: number, subject: string, domainName: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('year', String(year));
+    form.append('semester', String(semester));
+    form.append('grade', String(grade));
+    form.append('subject', subject);
+    form.append('domainName', domainName);
+    return api.post('/criteria/domain-config/upload', form);
+  },
   sourceUrl: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
     `/api/criteria/${kind}/source-file?year=${year}&semester=${semester}&grade=${grade}&subject=${encodeURIComponent(subject)}`,
   deleteSource: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
@@ -78,6 +93,13 @@ export const recordsApi = {
   ) => api.put(`/records/students/${studentId}/content`, data),
   exportExcel: (sessionId: number, type: 'setech' | 'scoring') =>
     api.get(`/records/sessions/${sessionId}/export?type=${type}`, { responseType: 'blob' }),
+  exportFull: (classId: number) =>
+    api.get(`/records/export-full/${classId}`, { responseType: 'blob' }),
+  importFull: (classId: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/records/import-full/${classId}`, form);
+  },
 };
 
 // Artifacts

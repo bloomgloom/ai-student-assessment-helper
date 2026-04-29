@@ -154,6 +154,20 @@ function buildStoredContent(contentType: 'scoring' | 'setech', result: string, c
   return JSON.stringify({ text: result });
 }
 
+function buildDefaultScoringContent(criteria: EvalCriterion[]): string {
+  const content: Record<string, string | number> = {};
+  let base = 0;
+  for (const item of criteria) {
+    if (item.item_type === 'formula') {
+      base += Number(item.excel_col) || 0;
+    } else {
+      content[item.name] = 0;
+    }
+  }
+  content.total = base;
+  return JSON.stringify(content);
+}
+
 function buildArtifactPromptLabel(index: number, ext: string): string {
   const normalizedExt = ext ? `.${ext}` : '';
   return `산출물 ${index + 1}${normalizedExt}`;
@@ -278,9 +292,11 @@ router.post('/generate', async (req: Request, res: Response) => {
   const hasContent = await appendArtifactContents(parts, artifacts);
 
   if (!hasContent && artifacts.length === 0) {
-    return res.status(400).json({
-      error: `${domain} 영역에 업로드된 산출물이 없습니다. 먼저 파일을 업로드해주세요.`,
-    });
+    if (contentType !== 'scoring') {
+      return res.status(400).json({
+        error: `${domain} 영역에 업로드된 산출물이 없습니다. 먼저 파일을 업로드해주세요.`,
+      });
+    }
   }
 
   parts.push(
@@ -291,8 +307,11 @@ router.post('/generate', async (req: Request, res: Response) => {
 
   try {
     const settings = await getLLMSettings();
-    const result = await callLLM(parts.join('\n\n'), settings);
-    const storedContent = buildStoredContent(contentType, result, evalCriteria);
+    const noArtifactScoring = contentType === 'scoring' && !hasContent;
+    const result = noArtifactScoring ? '산출물 없음: 기본점수 적용' : await callLLM(parts.join('\n\n'), settings);
+    const storedContent = noArtifactScoring
+      ? buildDefaultScoringContent(evalCriteria)
+      : buildStoredContent(contentType, result, evalCriteria);
 
     await execute(`
       INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
@@ -484,6 +503,14 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
           } catch (e: unknown) {
             error = e instanceof Error ? e.message : String(e);
           }
+        } else if (contentType === 'scoring') {
+          storedContent = buildDefaultScoringContent(evalCriteria);
+          await execute(`
+            INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
+            VALUES(?,?,?,?,datetime('now'))
+            ON CONFLICT(student_id, content_type, domain)
+            DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
+          `, [student.id, contentType, domain, storedContent]);
         } else {
           error = '산출물 없음';
         }

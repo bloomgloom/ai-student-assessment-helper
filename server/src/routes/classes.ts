@@ -282,8 +282,8 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
     classId = existingClass.id;
     // 세특 파일이 이미 있으면 학생 명단 일치 여부 확인
     if (existingClass.setech_filename) {
-      const existingStudents = await queryAll<{ name: string }>(
-        'SELECT name FROM class_students WHERE class_id=? ORDER BY name', [classId]
+      const existingStudents = await queryAll<{ id: number; name: string; student_num: number }>(
+        'SELECT id, name, student_num FROM class_students WHERE class_id=? ORDER BY name', [classId]
       );
       const existingNames = new Set(existingStudents.map(s => s.name));
       const newNames = new Set(parsedStudents.map(s => s.name));
@@ -294,6 +294,14 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
           ...missing2.map(n => `세특에만 있음: ${n}`),
           ...extra2.map(n => `채점에만 있음: ${n}`),
         ];
+      }
+      for (const s of parsedStudents) {
+        const fullNum = classInfo.grade * 10000 + s.studentNum;
+        const existing = existingStudents.find(e => e.student_num === fullNum)
+                      || existingStudents.find(e => e.name === s.name);
+        if (existing) {
+          await execute('UPDATE class_students SET excel_row=? WHERE id=?', [s.excelRow, existing.id]);
+        }
       }
     }
     await execute(
@@ -313,6 +321,18 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
         const fullNum = classInfo.grade * 10000 + s.studentNum;
         await execute('INSERT INTO class_students(class_id, student_num, name, excel_row, personal_num) VALUES(?,?,?,?,?)',
           [classId, fullNum, s.name, s.excelRow, '']);
+      }
+    } else if (!existingClass.setech_filename) {
+      const existingStudents = await queryAll<{ id: number; name: string; student_num: number }>(
+        'SELECT id, name, student_num FROM class_students WHERE class_id=? ORDER BY name', [classId]
+      );
+      for (const s of parsedStudents) {
+        const fullNum = classInfo.grade * 10000 + s.studentNum;
+        const existing = existingStudents.find(e => e.student_num === fullNum)
+                      || existingStudents.find(e => e.name === s.name);
+        if (existing) {
+          await execute('UPDATE class_students SET excel_row=? WHERE id=?', [s.excelRow, existing.id]);
+        }
       }
     }
   } else {

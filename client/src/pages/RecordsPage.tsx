@@ -101,6 +101,35 @@ function formatClassLabel(c: ClassItem) {
   return `${c.year}학년도 ${c.semester}학기 ${c.grade}학년 ${c.subject} ${c.room}`;
 }
 
+function roomIconLabel(room: string) {
+  const match = room.match(/\d+/);
+  return match ? match[0] : room.slice(0, 1);
+}
+
+function sortClassesForCollapsedTree(items: ClassItem[]) {
+  return [...items].sort((a, b) =>
+    a.grade - b.grade ||
+    roomIconLabel(a.room).localeCompare(roomIconLabel(b.room), 'ko', { numeric: true }) ||
+    a.subject.localeCompare(b.subject, 'ko') ||
+    a.year - b.year ||
+    a.semester - b.semester
+  );
+}
+
+const FROZEN_DEFAULT_WIDTHS = {
+  chk: 32,
+  cls: 32,
+  num: 40,
+  name: 64,
+};
+
+function getDomainColumnDefaultWidth(type: string) {
+  if (type === 'setech') return 200;
+  if (type === 'artifact') return 56;
+  if (type === 'total') return 64;
+  return 80;
+}
+
 function TreeNodeView({
   node, depth, selectedClassId, selectedDomain, onSelectDomain, onSelectClass,
   onDeleteClass, onDeleteScoring, onDeleteSetech
@@ -196,6 +225,7 @@ export default function RecordsPage() {
 
   const [saving, setSaving] = useState(false);
   const [uploadingZip, setUploadingZip] = useState(false);
+  const [uploadingFullRecords, setUploadingFullRecords] = useState(false);
   const [artifactRefreshKey, setArtifactRefreshKey] = useState(0);
   const [spellcheckingIds, setSpellcheckingIds] = useState<Set<number>>(new Set());
   const [spellcheckResults, setSpellcheckResults] = useState<Record<number, SpellcheckResult>>({});
@@ -213,6 +243,7 @@ export default function RecordsPage() {
   const classFilesRef = useRef<HTMLInputElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fullRecordsInputRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
   const aiBatchJob = useAiBatchStore(state => state.currentJob);
@@ -228,8 +259,9 @@ export default function RecordsPage() {
     e.preventDefault();
     const sx = e.clientX;
     const sw = colWidths[key] ?? defW;
+    const minWidth = key.startsWith('_') ? 24 : 30;
     const onMove = (mv: MouseEvent) =>
-      setColWidths(p => ({ ...p, [key]: Math.max(30, sw + mv.clientX - sx) }));
+      setColWidths(p => ({ ...p, [key]: Math.max(minWidth, sw + mv.clientX - sx) }));
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -732,6 +764,50 @@ export default function RecordsPage() {
     } catch { alert('내보내기 실패'); }
   };
 
+  const getDownloadFilename = (disposition: string, fallback: string) => {
+    const utf8Match = disposition.match(/filename\*=UTF-8''(.+)/i);
+    const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+    return utf8Match ? decodeURIComponent(utf8Match[1]) : plainMatch ? plainMatch[1] : fallback;
+  };
+
+  const handleExportFullRecords = async () => {
+    if (!selectedClass) return;
+    try {
+      const r = await recordsApi.exportFull(selectedClass.id);
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = getDownloadFilename(
+        r.headers['content-disposition'] || '',
+        `전체기록_${selectedClass.year}_${selectedClass.subject}_${selectedClass.room}.xlsx`
+      );
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('전체 기록 다운로드 실패');
+    }
+  };
+
+  const handleImportFullRecords = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!selectedClass || !e.target.files?.length) return;
+    const file = e.target.files[0];
+    if (!confirm('업로드한 엑셀 내용으로 현재 강의실의 저장된 AI 채점/활동/세특 내용을 덮어씁니다. 계속하시겠습니까?')) {
+      e.target.value = '';
+      return;
+    }
+    setUploadingFullRecords(true);
+    try {
+      const r = await recordsApi.importFull(selectedClass.id, file);
+      await loadDomainData(selectedClass);
+      alert(`전체 기록 업로드 완료: ${r.data.saved}개 항목 저장`);
+    } catch (err: any) {
+      alert(`전체 기록 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
+    } finally {
+      setUploadingFullRecords(false);
+      if (fullRecordsInputRef.current) fullRecordsInputRef.current.value = '';
+    }
+  };
+
   const isScoringDomain = evalItems.length > 0;
 
   // ── Table column layout ────────────────────────────────────────────────────
@@ -772,14 +848,29 @@ export default function RecordsPage() {
 
   // ── Frozen column widths & sticky left offsets ─────────────────────────────
   const cw = {
-    chk: colWidths['_chk'] ?? 40,
-    cls: colWidths['_cls'] ?? 48,
-    num: colWidths['_num'] ?? 48,
-    name: colWidths['_name'] ?? 80,
+    chk: colWidths['_chk'] ?? FROZEN_DEFAULT_WIDTHS.chk,
+    cls: colWidths['_cls'] ?? FROZEN_DEFAULT_WIDTHS.cls,
+    num: colWidths['_num'] ?? FROZEN_DEFAULT_WIDTHS.num,
+    name: colWidths['_name'] ?? FROZEN_DEFAULT_WIDTHS.name,
   };
   const compWidth = colWidths['_comp'] ?? 320;
   const compCountWidth = colWidths['_comp_count'] ?? 74;
   const compSpellWidth = colWidths['_comp_spell'] ?? 320;
+  const tableColumnWidths = [
+    cw.chk,
+    cw.cls,
+    cw.num,
+    cw.name,
+    ...tableLayout.visibleDomains.flatMap((d: any) => {
+      const cols = tableLayout.domainCols.get(d.name) || [];
+      return cols.map((c: any) => {
+        const wk = `${d.name}||${c.id}`;
+        return colWidths[wk] ?? getDomainColumnDefaultWidth(c.type);
+      });
+    }),
+    ...(showSetech ? [compWidth, compCountWidth, compSpellWidth] : []),
+  ];
+  const tableTotalWidth = tableColumnWidths.reduce((sum, width) => sum + width, 0);
   const sl = {
     chk: 0,
     cls: cw.chk,
@@ -841,21 +932,33 @@ export default function RecordsPage() {
         </div>
         <div className={`flex-1 overflow-auto ${treeCollapsed ? 'py-2 px-2' : 'py-2'}`}>
           {treeCollapsed ? (
-            <div className="space-y-1">
-              {classes.map(c => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`flex h-9 w-9 items-center justify-center rounded border transition-colors ${
-                    selectedClass?.id === c.id
-                      ? 'border-blue-300 bg-blue-50 text-blue-700'
-                      : 'border-transparent text-gray-500 hover:border-gray-200 hover:bg-gray-50 hover:text-gray-700'
-                  }`}
-                  onClick={() => handleSelectClass(c)}
-                  title={formatClassLabel(c)}
-                >
-                  <FileSpreadsheet size={16} />
-                </button>
+            <div className="space-y-2">
+              {[...new Map(sortClassesForCollapsedTree(classes).map(c => [c.grade, classes.filter(item => item.grade === c.grade)]))].map(([grade, gradeClasses]) => (
+                <div key={grade} className="flex flex-col items-center gap-1">
+                  <div
+                    className="flex h-7 w-7 items-center justify-center rounded bg-gray-900 text-xs font-bold text-white shadow-sm"
+                    title={`${grade}학년`}
+                  >
+                    {grade}
+                  </div>
+                  <div className="h-px w-7 bg-gray-200" />
+                  {sortClassesForCollapsedTree(gradeClasses).map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`flex h-8 w-8 items-center justify-center rounded border text-xs font-semibold transition-colors ${
+                        selectedClass?.id === c.id
+                          ? 'border-blue-400 bg-blue-600 text-white shadow-sm'
+                          : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'
+                      }`}
+                      onClick={() => handleSelectClass(c)}
+                      title={formatClassLabel(c)}
+                    >
+                      {roomIconLabel(c.room)}
+                    </button>
+                  ))}
+                  <div className="mt-1 h-px w-7 bg-gray-200" />
+                </div>
               ))}
               {classes.length === 0 && (
                 <div className="py-6 text-center text-xs text-gray-400" title="수업이 없습니다">없음</div>
@@ -976,15 +1079,40 @@ export default function RecordsPage() {
                 </button>
               )}
 
-              <button className="btn-primary text-xs py-1.5 ml-2" onClick={handleSaveAll} disabled={saving}>
-                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 저장
-              </button>
-
               {showScoring !== showSetech && (
                 <button className="btn-success text-xs py-1.5 ml-2" onClick={() => handleExport(showScoring ? 'scoring' : 'setech')}>
                   <Download size={12} /> 다운로드
                 </button>
               )}
+
+              <button className="btn-primary text-xs py-1.5 ml-2" onClick={handleSaveAll} disabled={saving}>
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 저장
+              </button>
+
+              <label
+                className={`btn-secondary p-1.5 ml-2 cursor-pointer ${uploadingFullRecords ? 'opacity-60' : ''}`}
+                title="작업 내용 업로드"
+                aria-label="작업 내용 업로드"
+              >
+                {uploadingFullRecords ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                <input
+                  ref={fullRecordsInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={handleImportFullRecords}
+                  disabled={uploadingFullRecords}
+                />
+              </label>
+
+              <button
+                className="btn-secondary p-1.5"
+                onClick={handleExportFullRecords}
+                title="작업 내용 다운로드"
+                aria-label="작업 내용 다운로드"
+              >
+                <Download size={12} />
+              </button>
             </div>
           </div>
 
@@ -1014,8 +1142,13 @@ export default function RecordsPage() {
               <table
                 ref={tableRef}
                 className="text-sm text-left border-collapse"
-                style={{ tableLayout: 'fixed', width: 'max-content', minWidth: '100%' }}
+                style={{ tableLayout: 'fixed', width: tableTotalWidth, minWidth: tableTotalWidth }}
               >
+                <colgroup>
+                  {tableColumnWidths.map((width, index) => (
+                    <col key={index} style={{ width, minWidth: width }} />
+                  ))}
+                </colgroup>
                 {/* ── HEADER ── */}
                 <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
                   <tr>
@@ -1027,28 +1160,28 @@ export default function RecordsPage() {
                           checked={allStudentsSelected} onChange={toggleAllStudents} title="전체 선택/해제" />
                       </div>
                       <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                        onMouseDown={e => handleResizeStart(e, '_chk', 40)} />
+                        onMouseDown={e => handleResizeStart(e, '_chk', FROZEN_DEFAULT_WIDTHS.chk)} />
                     </th>
                     {/* Frozen: 반 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
                       style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
                       반
                       <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                        onMouseDown={e => handleResizeStart(e, '_cls', 48)} />
+                        onMouseDown={e => handleResizeStart(e, '_cls', FROZEN_DEFAULT_WIDTHS.cls)} />
                     </th>
                     {/* Frozen: 번호 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
                       style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
                       번호
                       <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                        onMouseDown={e => handleResizeStart(e, '_num', 48)} />
+                        onMouseDown={e => handleResizeStart(e, '_num', FROZEN_DEFAULT_WIDTHS.num)} />
                     </th>
                     {/* Frozen: 이름 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
                       style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
                       이름
                       <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                        onMouseDown={e => handleResizeStart(e, '_name', 80)} />
+                        onMouseDown={e => handleResizeStart(e, '_name', FROZEN_DEFAULT_WIDTHS.name)} />
                     </th>
 
                     {/* Domain group headers */}
@@ -1092,7 +1225,7 @@ export default function RecordsPage() {
                       const cols = tableLayout.domainCols.get(d.name) || [];
                       return cols.map((c: any) => {
                         const wk = `${d.name}||${c.id}`;
-                        const defW = c.type === 'setech' ? 200 : c.type === 'artifact' ? 56 : c.type === 'total' ? 64 : 80;
+                        const defW = getDomainColumnDefaultWidth(c.type);
                         const w = colWidths[wk] ?? defW;
                         return (
                           <th key={`${d.name}_${c.id}`}
@@ -1154,7 +1287,7 @@ export default function RecordsPage() {
 
                           return cols.map((c: any) => {
                             const wk = `${d.name}||${c.id}`;
-                            const defW = c.type === 'setech' ? 200 : c.type === 'artifact' ? 56 : c.type === 'total' ? 64 : 80;
+                            const defW = getDomainColumnDefaultWidth(c.type);
                             const w = colWidths[wk] ?? defW;
 
                             if (c.type === 'artifact') {

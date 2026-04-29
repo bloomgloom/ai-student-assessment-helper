@@ -43,6 +43,12 @@ function extBadgeClass(filename: string): string {
 
 function isCodeFile(f: string) { return ['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','md','txt'].includes(getExt(f)); }
 
+function sortArtifacts(a: Artifact, b: Artifact) {
+  const extCompare = getExt(a.filename).localeCompare(getExt(b.filename), 'ko');
+  if (extCompare !== 0) return extCompare;
+  return a.filename.localeCompare(b.filename, 'ko', { numeric: true });
+}
+
 interface ArtifactViewerProps {
   studentId: number;
   domain: string;
@@ -58,7 +64,7 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
 
   const loadArtifacts = async () => {
     const r = await artifactsApi.getByDomain(studentId, domain);
-    setArtifacts(r.data);
+    setArtifacts([...r.data].sort(sortArtifacts));
   };
 
   useEffect(() => { loadArtifacts(); }, [studentId, domain]);

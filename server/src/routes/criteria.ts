@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { decodeUploadFilename } from '../services/filename';
 import { parseAreaManagementExcel, parseAchievementStandardsExcel } from '../services/excel';
@@ -19,6 +20,18 @@ const upload = multer({
 
 function safeDownloadName(name: string): string {
   return encodeURIComponent(name).replace(/['()]/g, escape);
+}
+
+function cellText(value: ExcelJS.CellValue): string {
+  if (value == null) return '';
+  if (typeof value === 'object' && 'text' in value) return String(value.text ?? '').trim();
+  return String(value).trim();
+}
+
+function headerMap(row: ExcelJS.Row): Record<string, number> {
+  const map: Record<string, number> = {};
+  row.eachCell((cell, col) => { map[cellText(cell.value)] = col; });
+  return map;
 }
 
 function findUploadedCriteriaFile(originalName: string): string | null {
@@ -347,6 +360,175 @@ router.put('/eval/bulk', async (req: Request, res: Response) => {
     }
   });
   res.json({ ok: true });
+});
+
+router.get('/domain-config/export', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = Number(req.query.semester);
+  const grade = Number(req.query.grade);
+  const subject = String(req.query.subject || '');
+  const domainName = String(req.query.domainName || '__SUBJECT_COMPREHENSIVE__');
+
+  const wb = new ExcelJS.Workbook();
+  const meta = wb.addWorksheet('기본정보');
+  meta.addRows([
+    ['학년도', year],
+    ['학기', semester],
+    ['학년', grade],
+    ['과목', subject],
+    ['영역', domainName],
+  ]);
+  meta.getColumn(1).width = 14;
+  meta.getColumn(2).width = 40;
+
+  const setechItems = await queryAll<{ type: string; title: string; prompt: string; extensions: string; sort_order: number }>(
+    'SELECT type, title, prompt, extensions, sort_order FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
+    [year, semester, grade, subject, domainName]
+  );
+  const evalItems = await queryAll<{ name: string; excel_col: string; item_type: string; rubric: string; sort_order: number }>(
+    'SELECT name, excel_col, item_type, rubric, sort_order FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
+    [year, semester, grade, subject, domainName]
+  );
+
+  const standards = wb.addWorksheet('성취평가기준');
+  standards.addRow(['sort_order', 'domain_name_ref', 'code', 'content', 'level']);
+  setechItems.filter(item => item.type === '성취기준').forEach((item, index) => {
+    let ref = { domain_name_ref: '', code: item.title, content: '', level: '' };
+    try { ref = { ...ref, ...JSON.parse(item.extensions || '{}') }; } catch { /* use fallback */ }
+    standards.addRow([item.sort_order ?? index, ref.domain_name_ref, ref.code, ref.content, ref.level]);
+  });
+
+  const evalSheet = wb.addWorksheet('채점기준');
+  evalSheet.addRow(['sort_order', 'item_type', 'name', 'excel_col', 'rubric']);
+  evalItems.forEach((item, index) => evalSheet.addRow([item.sort_order ?? index, item.item_type, item.name, item.excel_col, item.rubric]));
+
+  const setechSheet = wb.addWorksheet('세특기준');
+  setechSheet.addRow(['sort_order', 'type', 'title', 'prompt', 'extensions']);
+  setechItems.filter(item => item.type !== '성취기준').forEach((item, index) => {
+    setechSheet.addRow([item.sort_order ?? index, item.type, item.title, item.prompt, item.extensions]);
+  });
+
+  for (const sheet of wb.worksheets) {
+    sheet.getRow(1).font = { bold: true };
+    sheet.columns.forEach(col => {
+      col.width = Math.max(14, Math.min(60, Math.max(...(col.values || []).map(v => String(v || '').length + 4))));
+      col.alignment = { vertical: 'top', wrapText: true };
+    });
+    sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+
+  const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+  const safeDomain = domainName === '__SUBJECT_COMPREHENSIVE__' ? '종합세특' : domainName;
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(`${year}_${semester}_${grade}_${subject}_${safeDomain}_기준.xlsx`)}`);
+  res.send(buffer);
+});
+
+router.post('/domain-config/upload', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
+  const year = Number(req.body.year);
+  const semester = Number(req.body.semester);
+  const grade = Number(req.body.grade);
+  const subject = String(req.body.subject || '');
+  const domainName = String(req.body.domainName || '__SUBJECT_COMPREHENSIVE__');
+
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(req.file.path);
+
+    const standardRows: { domain_name_ref: string; code: string; content: string; level: string; sort_order: number }[] = [];
+    const standards = wb.getWorksheet('성취평가기준');
+    if (standards) {
+      const h = headerMap(standards.getRow(1));
+      standards.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+        const code = cellText(row.getCell(h.code).value);
+        if (!code) return;
+        standardRows.push({
+          sort_order: Number(cellText(row.getCell(h.sort_order).value)) || standardRows.length,
+          domain_name_ref: cellText(row.getCell(h.domain_name_ref).value),
+          code,
+          content: cellText(row.getCell(h.content).value),
+          level: cellText(row.getCell(h.level).value),
+        });
+      });
+    }
+
+    const evalRows: { name: string; excel_col: string; item_type: string; rubric: string; sort_order: number }[] = [];
+    const evalSheet = wb.getWorksheet('채점기준');
+    if (evalSheet) {
+      const h = headerMap(evalSheet.getRow(1));
+      evalSheet.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+        const name = cellText(row.getCell(h.name).value);
+        const itemType = cellText(row.getCell(h.item_type).value) || 'llm';
+        if (!name && itemType !== 'formula') return;
+        evalRows.push({
+          sort_order: Number(cellText(row.getCell(h.sort_order).value)) || evalRows.length,
+          item_type: itemType,
+          name: name || '합계',
+          excel_col: cellText(row.getCell(h.excel_col).value),
+          rubric: cellText(row.getCell(h.rubric).value),
+        });
+      });
+    }
+
+    const setechRows: { type: string; title: string; prompt: string; extensions: string; sort_order: number }[] = [];
+    const setechSheet = wb.getWorksheet('세특기준');
+    if (setechSheet) {
+      const h = headerMap(setechSheet.getRow(1));
+      setechSheet.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+        const type = cellText(row.getCell(h.type).value) || '항목';
+        const title = cellText(row.getCell(h.title).value);
+        const prompt = cellText(row.getCell(h.prompt).value);
+        if (!title && !prompt) return;
+        setechRows.push({
+          sort_order: Number(cellText(row.getCell(h.sort_order).value)) || setechRows.length,
+          type,
+          title,
+          prompt,
+          extensions: cellText(row.getCell(h.extensions).value),
+        });
+      });
+    }
+
+    await transaction(async () => {
+      await execute('DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
+      await execute('DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
+
+      for (const [index, row] of standardRows.entries()) {
+        const extensions = JSON.stringify({
+          domain_name_ref: row.domain_name_ref,
+          code: row.code,
+          content: row.content,
+          level: row.level,
+        });
+        await execute(
+          'INSERT INTO domain_setech(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+          [year, semester, grade, subject, domainName, '성취기준', row.code, '', extensions, row.sort_order ?? index]
+        );
+      }
+      for (const [index, row] of setechRows.entries()) {
+        await execute(
+          'INSERT INTO domain_setech(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+          [year, semester, grade, subject, domainName, row.type, row.title, row.prompt, row.extensions, row.sort_order ?? standardRows.length + index]
+        );
+      }
+      for (const [index, row] of evalRows.entries()) {
+        await execute(
+          'INSERT INTO domain_eval(year, semester, grade, subject, domain_name, name, excel_col, item_type, rubric, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+          [year, semester, grade, subject, domainName, row.name, row.excel_col, row.item_type === 'formula' ? 'formula' : 'llm', row.rubric, row.sort_order ?? index]
+        );
+      }
+    });
+
+    res.json({ ok: true, standards: standardRows.length, setech: setechRows.length, eval: evalRows.length });
+  } catch (e: unknown) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+  }
 });
 
 export default router;

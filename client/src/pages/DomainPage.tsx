@@ -216,10 +216,12 @@ export default function DomainPage() {
   const [achievementStandards, setAchievementStandards] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [uploadingDomains, setUploadingDomains] = useState(false);
+  const [uploadingConfig, setUploadingConfig] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem('hideDomainGuide') !== '1');
   const domainsFileRef = useRef<HTMLInputElement>(null);
+  const configFileRef = useRef<HTMLInputElement>(null);
 
   const loadSubjects = useCallback(async () => {
     const r = await criteriaApi.getSubjects();
@@ -364,6 +366,65 @@ export default function DomainPage() {
 
   const handleDownloadSubjectFile = (sub: SubjectItem) => {
     window.location.href = criteriaApi.sourceUrl('domains', sub.year, sub.semester, sub.grade, sub.subject);
+  };
+
+  const getDownloadFilename = (disposition: string, fallback: string) => {
+    const utf8Match = disposition.match(/filename\*=UTF-8''(.+)/i);
+    const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+    return utf8Match ? decodeURIComponent(utf8Match[1]) : plainMatch ? plainMatch[1] : fallback;
+  };
+
+  const handleDownloadConfig = async () => {
+    if (!selectedSubject) return;
+    const domainName = selectedDomain || '__SUBJECT_COMPREHENSIVE__';
+    try {
+      const r = await criteriaApi.exportDomainConfig(
+        selectedSubject.year,
+        selectedSubject.semester,
+        selectedSubject.grade,
+        selectedSubject.subject,
+        domainName
+      );
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = getDownloadFilename(
+        r.headers['content-disposition'] || '',
+        `${selectedSubject.year}_${selectedSubject.subject}_${selectedDomain || '종합세특'}_기준.xlsx`
+      );
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('기준 다운로드 실패');
+    }
+  };
+
+  const handleUploadConfig = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!selectedSubject || !e.target.files?.length) return;
+    const file = e.target.files[0];
+    const domainName = selectedDomain || '__SUBJECT_COMPREHENSIVE__';
+    if (!confirm('현재 화면의 기준을 업로드한 엑셀 내용으로 덮어씁니다. 계속하시겠습니까?')) {
+      e.target.value = '';
+      return;
+    }
+    setUploadingConfig(true);
+    try {
+      const r = await criteriaApi.importDomainConfig(
+        selectedSubject.year,
+        selectedSubject.semester,
+        selectedSubject.grade,
+        selectedSubject.subject,
+        domainName,
+        file
+      );
+      await loadCriteria(selectedSubject, domainName, isCustomDomain || !selectedDomain);
+      alert(`업로드 완료: 성취/평가기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 세특 기준 ${r.data.setech}개`);
+    } catch (err: any) {
+      alert(`기준 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
+    } finally {
+      setUploadingConfig(false);
+      if (configFileRef.current) configFileRef.current.value = '';
+    }
   };
 
   const handleDeleteSubjectFile = async (sub: SubjectItem) => {
@@ -520,6 +581,29 @@ export default function DomainPage() {
               <div className="flex gap-2">
                 <button className="btn-primary text-sm px-4" onClick={handleSave} disabled={saving}>
                   <Save size={14} /> {saving ? '저장 중...' : '저장'}
+                </button>
+                <label
+                  className={`btn-secondary p-2 cursor-pointer ${uploadingConfig ? 'opacity-60' : ''}`}
+                  title="작업 내용 업로드"
+                  aria-label="작업 내용 업로드"
+                >
+                  {uploadingConfig ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                  <input
+                    ref={configFileRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    onChange={handleUploadConfig}
+                    disabled={uploadingConfig}
+                  />
+                </label>
+                <button
+                  className="btn-secondary p-2"
+                  onClick={handleDownloadConfig}
+                  title="작업 내용 다운로드"
+                  aria-label="작업 내용 다운로드"
+                >
+                  <Download size={14} />
                 </button>
               </div>
             </div>
