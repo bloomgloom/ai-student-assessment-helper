@@ -1,0 +1,46 @@
+import express from 'express';
+import cors from 'cors';
+import path from 'path';
+import { initDb } from './services/db';
+
+import settingsRouter from './routes/settings';
+import criteriaRouter from './routes/criteria';
+import classesRouter from './routes/classes';
+import recordsRouter from './routes/records';
+import artifactsRouter from './routes/artifacts';
+import aiRouter from './routes/ai';
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:3001'], credentials: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+app.use('/api/settings', settingsRouter);
+app.use('/api/criteria', criteriaRouter);
+app.use('/api/classes', classesRouter);
+app.use('/api/records', recordsRouter);
+app.use('/api/artifacts', artifactsRouter);
+app.use('/api/ai', aiRouter);
+
+// 프로덕션: 빌드된 클라이언트 서빙
+const clientDist = path.join(__dirname, '../../client/dist');
+app.use(express.static(clientDist));
+app.get('*', (_req, res) => {
+  const indexPath = path.join(clientDist, 'index.html');
+  if (require('fs').existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(404).send('Client not built. Run: npm run build --workspace=client');
+  }
+});
+
+async function main() {
+  await initDb();
+  app.listen(PORT, () => {
+    console.log(`✅ Assessment server running at http://localhost:${PORT}`);
+  });
+}
+
+main().catch(console.error);
