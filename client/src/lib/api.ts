@@ -28,6 +28,10 @@ export const criteriaApi = {
     form.append('file', file);
     return api.post('/criteria/domains/upload', form);
   },
+  sourceUrl: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
+    `/api/criteria/${kind}/source-file?year=${year}&semester=${semester}&grade=${grade}&subject=${encodeURIComponent(subject)}`,
+  deleteSource: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
+    api.delete(`/criteria/${kind}/source-file`, { params: { year, semester, grade, subject } }),
   getStandards: (year: number, semester: number, grade: number, subject: string) =>
     api.get('/criteria/standards', { params: { year, semester, grade, subject } }),
   uploadStandards: (file: File) => {
@@ -78,6 +82,7 @@ export const recordsApi = {
 
 // Artifacts
 export const artifactsApi = {
+  getOne: (id: number) => api.get(`/artifacts/${id}`),
   getByStudent: (studentId: number) => api.get(`/artifacts/student/${studentId}`),
   getByDomain: (studentId: number, domain: string) =>
     api.get(`/artifacts/student/${studentId}/domain/${encodeURIComponent(domain)}`),
@@ -89,6 +94,7 @@ export const artifactsApi = {
   },
   delete: (id: number) => api.delete(`/artifacts/${id}`),
   fileUrl: (id: number) => `/api/artifacts/${id}/file`,
+  viewerUrl: (id: number) => `/artifacts/${id}/view`,
 };
 
 // Classes (수업 관리)
@@ -128,4 +134,5 @@ export const aiApi = {
     contentType: 'scoring' | 'setech';
     criteriaSetId: number;
   }) => api.post('/ai/generate', data),
+  spellcheck: (data: { text: string }) => api.post('/ai/spellcheck', data),
 };

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { artifactsApi } from '../lib/api';
-import { Upload, X, Loader2, Eye, File } from 'lucide-react';
+import { Upload, X, Loader2, Eye, File, Download } from 'lucide-react';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { javascript } from '@codemirror/lang-javascript';
@@ -223,8 +224,11 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
               <span className="font-medium text-sm text-gray-800 truncate max-w-[60%]">{viewing.filename}</span>
               <div className="flex gap-2 shrink-0">
-                <a href={artifactsApi.fileUrl(viewing.id)} target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs py-1">
+                <a href={artifactsApi.viewerUrl(viewing.id)} target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs py-1">
                   <Eye size={13} /> 새 탭
+                </a>
+                <a href={artifactsApi.fileUrl(viewing.id)} download={viewing.filename} className="btn-secondary text-xs py-1">
+                  <Download size={13} /> 다운로드
                 </a>
                 <button className="btn-secondary text-xs py-1" onClick={() => setViewing(null)}>
                   <X size={13} /> 닫기
@@ -232,50 +236,119 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
               </div>
             </div>
 
-            <div className="flex-1 overflow-hidden" style={{ textAlign: 'left' }}>
-              {isPdfFile(viewing.filename) ? (
-                <div className="h-full overflow-auto flex justify-center p-4 bg-gray-100">
-                  <Document file={artifactsApi.fileUrl(viewing.id)} onLoadSuccess={({ numPages }) => setPdfPages(numPages)}>
-                    {Array.from({ length: pdfPages }, (_, i) => (
-                      <Page key={i} pageNumber={i + 1} className="mb-2 shadow" width={Math.min(window.innerWidth * 0.75, 800)} />
-                    ))}
-                  </Document>
-                </div>
-              ) : isHwpxFile(viewing.filename) ? (
-                <HwpxRenderer fileUrl={artifactsApi.fileUrl(viewing.id)} />
-              ) : isHtmlFile(viewing.filename) ? (
-                <iframe
-                  src={artifactsApi.fileUrl(viewing.id)}
-                  className="w-full h-full border-none bg-white"
-                  title="HTML Viewer"
-                  sandbox="allow-scripts allow-same-origin"
-                />
-              ) : loadingCode ? (
-                <div className="flex items-center justify-center h-full">
-                  <Loader2 size={24} className="animate-spin text-gray-400" />
-                </div>
-              ) : isCodeFile(viewing.filename) ? (
-                <div className="h-full overflow-auto" style={{ textAlign: 'left' }}>
-                  <CodeMirror
-                    value={codeContent}
-                    theme={oneDark}
-                    extensions={[getLanguageExtension(viewing.filename)].filter(Boolean) as never[]}
-                    readOnly
-                    style={{ height: '100%', fontSize: 13 }}
-                    basicSetup={{ lineNumbers: true, foldGutter: true, tabSize: 4 }}
-                  />
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-500">
-                  <File size={48} className="text-gray-300" />
-                  <p>이 파일 형식은 뷰어에서 지원하지 않습니다.</p>
-                  <a href={artifactsApi.fileUrl(viewing.id)} className="btn-primary" download>다운로드</a>
-                </div>
-              )}
-            </div>
+            <ArtifactPreviewContent
+              artifact={viewing}
+              codeContent={codeContent}
+              loadingCode={loadingCode}
+              pdfPages={pdfPages}
+              setPdfPages={setPdfPages}
+            />
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ArtifactPreviewContent({
+  artifact,
+  codeContent,
+  loadingCode,
+  pdfPages,
+  setPdfPages,
+}: {
+  artifact: Artifact;
+  codeContent: string;
+  loadingCode: boolean;
+  pdfPages: number;
+  setPdfPages: (n: number) => void;
+}) {
+  return (
+    <div className="flex-1 overflow-hidden" style={{ textAlign: 'left' }}>
+      {isPdfFile(artifact.filename) ? (
+        <div className="h-full overflow-auto flex justify-center p-4 bg-gray-100">
+          <Document file={artifactsApi.fileUrl(artifact.id)} onLoadSuccess={({ numPages }) => setPdfPages(numPages)}>
+            {Array.from({ length: pdfPages }, (_, i) => (
+              <Page key={i} pageNumber={i + 1} className="mb-2 shadow" width={Math.min(window.innerWidth * 0.75, 800)} />
+            ))}
+          </Document>
+        </div>
+      ) : isHwpxFile(artifact.filename) ? (
+        <HwpxRenderer fileUrl={artifactsApi.fileUrl(artifact.id)} />
+      ) : isHtmlFile(artifact.filename) ? (
+        <iframe
+          src={artifactsApi.fileUrl(artifact.id)}
+          className="w-full h-full border-none bg-white"
+          title="HTML Viewer"
+          sandbox="allow-scripts allow-same-origin"
+        />
+      ) : loadingCode ? (
+        <div className="flex items-center justify-center h-full">
+          <Loader2 size={24} className="animate-spin text-gray-400" />
+        </div>
+      ) : isCodeFile(artifact.filename) ? (
+        <div className="h-full overflow-auto" style={{ textAlign: 'left' }}>
+          <CodeMirror
+            value={codeContent}
+            theme={oneDark}
+            extensions={[getLanguageExtension(artifact.filename)].filter(Boolean) as never[]}
+            readOnly
+            style={{ height: '100%', fontSize: 13 }}
+            basicSetup={{ lineNumbers: true, foldGutter: true, tabSize: 4 }}
+          />
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-500">
+          <File size={48} className="text-gray-300" />
+          <p>이 파일 형식은 뷰어에서 지원하지 않습니다.</p>
+          <a href={artifactsApi.fileUrl(artifact.id)} className="btn-primary" download={artifact.filename}>다운로드</a>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ArtifactStandalonePage() {
+  const { id } = useParams();
+  const artifactId = Number(id);
+  const [artifact, setArtifact] = useState<Artifact | null>(null);
+  const [codeContent, setCodeContent] = useState('');
+  const [pdfPages, setPdfPages] = useState(0);
+  const [loadingCode, setLoadingCode] = useState(false);
+
+  useEffect(() => {
+    if (!artifactId) return;
+    (async () => {
+      const r = await artifactsApi.getOne(artifactId);
+      setArtifact(r.data);
+      if (isCodeFile(r.data.filename)) {
+        setLoadingCode(true);
+        try {
+          setCodeContent(await (await fetch(artifactsApi.fileUrl(artifactId))).text());
+        } finally {
+          setLoadingCode(false);
+        }
+      }
+    })();
+  }, [artifactId]);
+
+  if (!artifact) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-gray-400" /></div>;
+
+  return (
+    <div className="h-screen flex flex-col bg-white">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
+        <span className="font-medium text-sm text-gray-800 truncate">{artifact.filename}</span>
+        <a href={artifactsApi.fileUrl(artifact.id)} download={artifact.filename} className="btn-secondary text-xs py-1">
+          <Download size={13} /> 다운로드
+        </a>
+      </div>
+      <ArtifactPreviewContent
+        artifact={artifact}
+        codeContent={codeContent}
+        loadingCode={loadingCode}
+        pdfPages={pdfPages}
+        setPdfPages={setPdfPages}
+      />
     </div>
   );
 }

@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { recordsApi, criteriaApi, classesApi } from '../lib/api';
+import { recordsApi, criteriaApi, classesApi, aiApi } from '../lib/api';
 import ArtifactViewer from '../components/ArtifactViewer';
 import {
   Download, Loader2, Users, ChevronRight, ChevronDown, Folder,
-  FileSpreadsheet, Bot, Save, Upload, Square, AlertCircle, CheckCircle2, Trash2
+  FileSpreadsheet, Bot, Save, Upload, Square, AlertCircle, CheckCircle2, Trash2, X
 } from 'lucide-react';
 
 interface ClassItem {
@@ -36,6 +36,12 @@ interface ContentItem {
   content_type: string;
   domain: string;
   content: string;
+}
+
+interface SpellcheckResult {
+  taggedText: string;
+  correctedText: string;
+  correctionCount: number;
 }
 
 interface TreeNode {
@@ -188,6 +194,9 @@ export default function RecordsPage() {
   const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number; message: string } | null>(null);
   const [uploadingZip, setUploadingZip] = useState(false);
   const [artifactRefreshKey, setArtifactRefreshKey] = useState(0);
+  const [spellcheckingIds, setSpellcheckingIds] = useState<Set<number>>(new Set());
+  const [spellcheckResults, setSpellcheckResults] = useState<Record<number, SpellcheckResult>>({});
+  const [spellcheckProgress, setSpellcheckProgress] = useState<{ completed: number; total: number } | null>(null);
   const [showScoring, setShowScoring] = useState(true);
   const [showSetech, setShowSetech] = useState(true);
   const [domainFilter, setDomainFilter] = useState<string>('all');
@@ -196,6 +205,7 @@ export default function RecordsPage() {
   // 파일 업로드 상태
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<{ type: 'success' | 'warn' | 'error'; text: string } | null>(null);
+  const [showGuide, setShowGuide] = useState(() => localStorage.getItem('hideRecordsGuide') !== '1');
   const classFilesRef = useRef<HTMLInputElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -249,6 +259,30 @@ export default function RecordsPage() {
     } catch {
       return { text: c };
     }
+  };
+
+  const countTextBytes = (text: string) => new TextEncoder().encode(text).length;
+
+  const renderTaggedSpellcheck = (taggedText: string) => {
+    const nodes: React.ReactNode[] = [];
+    const regex = /\[CHANGE\]([\s\S]*?)\[\/CHANGE\]/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(taggedText)) !== null) {
+      if (match.index > lastIndex) {
+        nodes.push(taggedText.slice(lastIndex, match.index));
+      }
+      nodes.push(
+        <span key={`${match.index}-${nodes.length}`} className="text-red-600 font-medium">
+          {match[1]}
+        </span>
+      );
+      lastIndex = regex.lastIndex;
+    }
+
+    if (lastIndex < taggedText.length) nodes.push(taggedText.slice(lastIndex));
+    return nodes;
   };
 
   const loadDomainData = useCallback(async (c: ClassItem) => {
@@ -349,6 +383,11 @@ export default function RecordsPage() {
       setUploadingFiles(false);
       if (classFilesRef.current) classFilesRef.current.value = '';
     }
+  };
+
+  const hideGuide = () => {
+    localStorage.setItem('hideRecordsGuide', '1');
+    setShowGuide(false);
   };
 
   const handleDeleteClass = useCallback(async (c: ClassItem) => {
@@ -453,6 +492,69 @@ export default function RecordsPage() {
       ...prev,
       [`${studentId}_${type}_${domain}`]: parseContent(content),
     }));
+  };
+
+  const runSpellcheckComprehensive = async (studentId: number, text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      alert('맞춤법 검사할 종합 세특 내용이 없습니다.');
+      return;
+    }
+
+    setSpellcheckingIds(prev => new Set(prev).add(studentId));
+
+    try {
+      const res = await aiApi.spellcheck({ text });
+      setSpellcheckResults(prev => ({
+        ...prev,
+        [studentId]: {
+          taggedText: res.data.taggedText || res.data.correctedText || text,
+          correctedText: res.data.correctedText || text,
+          correctionCount: Number(res.data.correctionCount || 0),
+        },
+      }));
+    } catch (err: any) {
+      const message = err?.response?.data?.error || '맞춤법 검사 중 오류가 발생했습니다.';
+      alert(message);
+    } finally {
+      setSpellcheckingIds(prev => {
+        const next = new Set(prev);
+        next.delete(studentId);
+        return next;
+      });
+    }
+  };
+
+  const handleBatchSpellcheck = async () => {
+    const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
+    if (!targetStudents.length) return;
+
+    setSpellcheckProgress({ completed: 0, total: targetStudents.length });
+    try {
+      for (let i = 0; i < targetStudents.length; i++) {
+        const student = targetStudents[i];
+        const key = `${student.id}_setech___SUBJECT_COMPREHENSIVE__`;
+        const text = contents[key]?.text || '';
+        if (text.trim()) await runSpellcheckComprehensive(student.id, text);
+        setSpellcheckProgress({ completed: i + 1, total: targetStudents.length });
+      }
+    } finally {
+      setSpellcheckProgress(null);
+    }
+  };
+
+  const applySpellcheckResult = async (studentId: number) => {
+    const result = spellcheckResults[studentId];
+    if (!result) return;
+
+    const key = `${studentId}_setech___SUBJECT_COMPREHENSIVE__`;
+    const nextContent = { text: result.correctedText };
+    setContents(prev => ({ ...prev, [key]: nextContent }));
+    await recordsApi.saveStudentContent(studentId, {
+      content_type: 'setech',
+      domain: '__SUBJECT_COMPREHENSIVE__',
+      content: JSON.stringify(nextContent),
+    });
   };
 
   const handleStopBatch = () => {
@@ -704,6 +806,9 @@ export default function RecordsPage() {
     num:  colWidths['_num']  ?? 48,
     name: colWidths['_name'] ?? 80,
   };
+  const compWidth = colWidths['_comp'] ?? 320;
+  const compCountWidth = colWidths['_comp_count'] ?? 74;
+  const compSpellWidth = colWidths['_comp_spell'] ?? 320;
   const sl = {
     chk:  0,
     cls:  cw.chk,
@@ -730,6 +835,19 @@ export default function RecordsPage() {
               disabled={uploadingFiles}
             />
           </label>
+          {showGuide && (
+            <div className="relative rounded border border-blue-200 bg-blue-50 p-2 pr-7 text-xs leading-relaxed text-blue-900">
+              <button className="absolute right-1.5 top-1.5 text-blue-500 hover:text-blue-700" onClick={hideGuide} title="다시 보지 않기">
+                <X size={12} />
+              </button>
+              <div className="font-medium">1. 수행평가 채점 파일 업로드</div>
+              <p>나이스 &gt; 교과담임 &gt; 성적 &gt; 수행평가 &gt; 수행평가성적관리에서</p>
+              <p>조회 후 일괄파일업로드 &gt; 엑셀다운로드를 선택하세요.</p>
+              <div className="mt-2 font-medium">2. 교과 세특 파일 업로드</div>
+              <p>나이스 &gt; 교과담임 &gt; 성적 &gt; 성적처리 &gt; 과목별세부능력및특기사항에서</p>
+              <p>조회 후 엑셀내려받기를 선택하세요.</p>
+            </div>
+          )}
           {uploadMsg && (
             <div className={`flex items-start gap-1.5 text-xs rounded p-2 border ${
               uploadMsg.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' :
@@ -843,6 +961,18 @@ export default function RecordsPage() {
                 </button>
               )}
 
+              {showSetech && (
+                <button
+                  className="btn-secondary text-xs py-1.5 ml-2"
+                  onClick={handleBatchSpellcheck}
+                  disabled={!!spellcheckProgress || spellcheckingIds.size > 0}
+                  title={selectedStudentIds.size > 0 ? '선택한 행 맞춤법 검사' : '전체 행 맞춤법 검사'}
+                >
+                  {spellcheckProgress ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                  맞춤법
+                </button>
+              )}
+
               <button className="btn-primary text-xs py-1.5 ml-2" onClick={handleSaveAll} disabled={saving}>
                 {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 저장
               </button>
@@ -878,6 +1008,24 @@ export default function RecordsPage() {
               >
                 <Square size={12} /> 중단
               </button>
+            </div>
+          )}
+
+          {spellcheckProgress && (
+            <div className="px-4 py-2 bg-green-50 border-b border-green-200 flex items-center gap-3 text-sm shrink-0">
+              <Loader2 size={14} className="animate-spin text-green-600 shrink-0" />
+              <div className="flex-1">
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-green-700">맞춤법 검사 중</span>
+                  <span className="text-gray-500">{spellcheckProgress.completed}/{spellcheckProgress.total}</span>
+                </div>
+                <div className="h-1.5 bg-green-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-green-500 rounded-full transition-all"
+                    style={{ width: `${(spellcheckProgress.completed / Math.max(spellcheckProgress.total, 1)) * 100}%` }}
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -940,12 +1088,26 @@ export default function RecordsPage() {
 
                     {/* Comp setech header */}
                     {showSetech && (
-                      <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b bg-blue-50/50 select-none"
-                          style={{ width: colWidths['_comp'] ?? 320, minWidth: colWidths['_comp'] ?? 320 }}>
-                        종합 세특 (과목 공통)
-                        <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
-                             onMouseDown={e => handleResizeStart(e, '_comp', 320)} />
-                      </th>
+                      <>
+                        <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 select-none"
+                            style={{ width: compWidth, minWidth: compWidth }}>
+                          종합 세특 (과목 공통)
+                          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                               onMouseDown={e => handleResizeStart(e, '_comp', 320)} />
+                        </th>
+                        <th rowSpan={2} className="relative px-2 py-3 font-semibold text-gray-700 border-b border-r bg-blue-50/50 select-none"
+                            style={{ width: compCountWidth, minWidth: compCountWidth }}>
+                          글자수
+                          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                               onMouseDown={e => handleResizeStart(e, '_comp_count', 74)} />
+                        </th>
+                        <th rowSpan={2} className="relative px-3 py-3 font-semibold text-gray-700 border-b bg-blue-50/50 select-none"
+                            style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
+                          맞춤법 검사 결과
+                          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                               onMouseDown={e => handleResizeStart(e, '_comp_spell', 320)} />
+                        </th>
+                      </>
                     )}
                   </tr>
                   <tr>
@@ -973,6 +1135,11 @@ export default function RecordsPage() {
                 <tbody className="divide-y divide-gray-100">
                   {students.map((s, rowIdx) => {
                     const compSetechData = contents[`${s.id}_setech___SUBJECT_COMPREHENSIVE__`] || {};
+                    const compSetechText = compSetechData.text || '';
+                    const compSetechBytes = countTextBytes(compSetechText);
+                    const isCompSetechOver = compSetechBytes > 1500;
+                    const isSpellchecking = spellcheckingIds.has(s.id);
+                    const spellcheckResult = spellcheckResults[s.id];
                     const classNum = Math.floor((s.student_num % 10000) / 100);
                     const stuNum = s.student_num % 100;
 
@@ -1061,15 +1228,53 @@ export default function RecordsPage() {
 
                         {/* Comp setech */}
                         {showSetech && (
-                          <td className="align-top p-1"
-                              style={{ width: colWidths['_comp'] ?? 320, minWidth: colWidths['_comp'] ?? 320 }}>
-                            <textarea className="textarea w-full text-sm resize-y bg-blue-50/20 border-blue-100" style={{ minHeight: 80 }}
-                              value={compSetechData.text || ''}
-                              onChange={ev => updateContent(s.id, 'setech', 'text', ev.target.value, '__SUBJECT_COMPREHENSIVE__')}
-                              data-row={rowIdx} data-col={tableLayout.compSetechColIdx}
-                              onKeyDown={e => handleKeyNav(e, rowIdx, tableLayout.compSetechColIdx)}
-                            />
-                          </td>
+                          <>
+                            <td className="align-top p-1 border-r"
+                                style={{ width: compWidth, minWidth: compWidth }}>
+                              <textarea className="textarea w-full text-sm resize-y bg-blue-50/20 border-blue-100" style={{ minHeight: 80 }}
+                                value={compSetechText}
+                                onChange={ev => updateContent(s.id, 'setech', 'text', ev.target.value, '__SUBJECT_COMPREHENSIVE__')}
+                                data-row={rowIdx} data-col={tableLayout.compSetechColIdx}
+                                onKeyDown={e => handleKeyNav(e, rowIdx, tableLayout.compSetechColIdx)}
+                              />
+                            </td>
+                            <td className="align-top p-1 border-r text-center"
+                                style={{ width: compCountWidth, minWidth: compCountWidth }}>
+                              <div className={`whitespace-pre-line text-xs font-semibold ${isCompSetechOver ? 'text-red-600' : 'text-gray-600'}`}>
+                                {isCompSetechOver ? '초과' : '적정'}
+                                {'\n'}({compSetechBytes} byte)
+                              </div>
+                              <button
+                                type="button"
+                                className="mt-2 inline-flex h-6 w-6 items-center justify-center rounded border border-blue-200 bg-white text-sm font-bold text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                onClick={() => applySpellcheckResult(s.id)}
+                                disabled={!spellcheckResult}
+                                title="맞춤법 검사 결과를 종합세특에 반영"
+                              >
+                                &lt;
+                              </button>
+                            </td>
+                            <td className="align-top p-2"
+                                style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
+                              {isSpellchecking ? (
+                                <div className="flex items-center gap-1.5 text-xs text-green-700">
+                                  <Loader2 size={12} className="animate-spin" />
+                                  검사 중...
+                                </div>
+                              ) : spellcheckResult ? (
+                                <div className="space-y-1">
+                                  <div className="text-[11px] font-medium text-gray-500">
+                                    수정 {spellcheckResult.correctionCount}건
+                                  </div>
+                                  <div className="whitespace-pre-wrap rounded border border-gray-200 bg-white p-2 text-sm leading-relaxed text-gray-800">
+                                    {renderTaggedSpellcheck(spellcheckResult.taggedText)}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-xs text-gray-400">검사 전</div>
+                              )}
+                            </td>
+                          </>
                         )}
                       </tr>
                     );

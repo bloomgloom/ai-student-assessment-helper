@@ -4,6 +4,7 @@ import SettingsPage from './pages/SettingsPage';
 import CriteriaPage from './pages/CriteriaPage';
 import DomainPage from './pages/DomainPage';
 import RecordsPage from './pages/RecordsPage';
+import { ArtifactStandalonePage } from './components/ArtifactViewer';
 
 function Sidebar() {
   const links = [
@@ -46,16 +47,23 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="flex min-h-screen">
-        <Sidebar />
-        <main className="flex-1 overflow-auto">
-          <Routes>
-            <Route path="/" element={<CriteriaPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/criteria" element={<CriteriaPage />} />
-            <Route path="/domains" element={<DomainPage />} />
-            <Route path="/records" element={<RecordsPage />} />
-          </Routes>
-        </main>
+        <Routes>
+          <Route path="/artifacts/:id/view" element={<ArtifactStandalonePage />} />
+          <Route path="*" element={
+            <>
+              <Sidebar />
+              <main className="flex-1 overflow-auto">
+                <Routes>
+                  <Route path="/" element={<CriteriaPage />} />
+                  <Route path="/settings" element={<SettingsPage />} />
+                  <Route path="/criteria" element={<CriteriaPage />} />
+                  <Route path="/domains" element={<DomainPage />} />
+                  <Route path="/records" element={<RecordsPage />} />
+                </Routes>
+              </main>
+            </>
+          } />
+        </Routes>
       </div>
     </BrowserRouter>
   );

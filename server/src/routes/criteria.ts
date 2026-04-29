@@ -17,6 +17,38 @@ const upload = multer({
   }),
 });
 
+function safeDownloadName(name: string): string {
+  return encodeURIComponent(name).replace(/['()]/g, escape);
+}
+
+function findUploadedCriteriaFile(originalName: string): string | null {
+  const normalized = originalName.normalize('NFC');
+  const files = fs.readdirSync(UPLOAD_DIR)
+    .filter((file) => file.normalize('NFC').endsWith(`_${normalized}`))
+    .sort()
+    .reverse();
+  const found = files.find((file) => fs.existsSync(path.join(UPLOAD_DIR, file)));
+  return found ? path.join(UPLOAD_DIR, found) : null;
+}
+
+async function getStandardsSource(year: number, semester: number, grade: number, subject: string) {
+  return queryOne<{ source_filename: string }>(
+    `SELECT source_filename FROM achievement_standards
+     WHERE year=? AND semester=? AND grade=? AND subject=?
+     ORDER BY id DESC LIMIT 1`,
+    [year, semester, grade, subject]
+  );
+}
+
+async function getDomainsSource(year: number, semester: number, grade: number, subject: string) {
+  return queryOne<{ source_filename: string }>(
+    `SELECT source_filename FROM subject_domains
+     WHERE year=? AND semester=? AND grade=? AND subject=?
+     ORDER BY id DESC LIMIT 1`,
+    [year, semester, grade, subject]
+  );
+}
+
 // --- 레거시 기준 세트 (RecordsPage 호환용) ---
 router.get('/sets', async (_req: Request, res: Response) => {
   const sets = await queryAll('SELECT * FROM criteria_sets ORDER BY id DESC');
@@ -91,6 +123,72 @@ router.get('/standard-subjects', async (_req: Request, res: Response) => {
     ORDER BY year DESC, semester, grade, subject, domain_name
   `);
   res.json(subjects);
+});
+
+router.get('/standards/source-file', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = Number(req.query.semester);
+  const grade = Number(req.query.grade);
+  const subject = String(req.query.subject || '');
+  const source = await getStandardsSource(year, semester, grade, subject);
+  if (!source?.source_filename) return res.status(404).json({ error: '원본 파일 정보가 없습니다.' });
+  const filepath = findUploadedCriteriaFile(source.source_filename);
+  if (!filepath) return res.status(404).json({ error: '원본 파일을 찾을 수 없습니다.' });
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(source.source_filename)}`);
+  res.sendFile(filepath);
+});
+
+router.delete('/standards/source-file', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = Number(req.query.semester);
+  const grade = Number(req.query.grade);
+  const subject = String(req.query.subject || '');
+  const source = await getStandardsSource(year, semester, grade, subject);
+  if (source?.source_filename) {
+    const filepath = findUploadedCriteriaFile(source.source_filename);
+    if (filepath) try { fs.unlinkSync(filepath); } catch {}
+  }
+  await execute(
+    'DELETE FROM achievement_standards WHERE year=? AND semester=? AND grade=? AND subject=?',
+    [year, semester, grade, subject]
+  );
+  res.json({ ok: true });
+});
+
+router.get('/domains/source-file', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = Number(req.query.semester);
+  const grade = Number(req.query.grade);
+  const subject = String(req.query.subject || '');
+  const source = await getDomainsSource(year, semester, grade, subject);
+  if (!source?.source_filename) return res.status(404).json({ error: '원본 파일 정보가 없습니다.' });
+  const filepath = findUploadedCriteriaFile(source.source_filename);
+  if (!filepath) return res.status(404).json({ error: '원본 파일을 찾을 수 없습니다.' });
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(source.source_filename)}`);
+  res.sendFile(filepath);
+});
+
+router.delete('/domains/source-file', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = Number(req.query.semester);
+  const grade = Number(req.query.grade);
+  const subject = String(req.query.subject || '');
+  const source = await getDomainsSource(year, semester, grade, subject);
+  if (source?.source_filename) {
+    const filepath = findUploadedCriteriaFile(source.source_filename);
+    if (filepath) try { fs.unlinkSync(filepath); } catch {}
+  }
+  await transaction(async () => {
+    await execute(
+      'DELETE FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
+    await execute(
+      'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
+  });
+  res.json({ ok: true });
 });
 
 router.get('/domains', async (req: Request, res: Response) => {

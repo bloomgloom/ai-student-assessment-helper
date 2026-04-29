@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { criteriaApi } from '../lib/api';
-import { AlertCircle, BookOpen, Loader2, Upload, ChevronDown, ChevronRight, ClipboardCheck, Folder } from 'lucide-react';
+import { AlertCircle, BookOpen, Loader2, Upload, ChevronDown, ChevronRight, ClipboardCheck, Folder, Download, Trash2, X } from 'lucide-react';
 
 interface SubjectItem {
   year: number;
@@ -50,7 +50,7 @@ function buildTree(items: SubjectItem[]): TreeNode[] {
       for (const [grade, subjectMap] of [...gradeMap.entries()].sort((a, b) => a[0] - b[0])) {
         const gradeNode: TreeNode = { label: `${grade}학년`, children: [] };
         for (const [subject, domains] of [...subjectMap.entries()].sort()) {
-          const subjectNode: TreeNode = { label: subject, children: [] };
+          const subjectNode: TreeNode = { label: subject, children: [], subject: domains[0] };
           for (const d of domains.sort((a, b) => a.domain_name.localeCompare(b.domain_name))) {
             subjectNode.children!.push({ label: d.domain_name, subject: d, domainName: d.domain_name });
           }
@@ -66,14 +66,17 @@ function buildTree(items: SubjectItem[]): TreeNode[] {
 }
 
 function TreeNodeView({
-  node, depth, selectedKey, onSelect
+  node, depth, selectedKey, onSelect, onDownloadSubject, onDeleteSubject
 }: {
   node: TreeNode;
   depth: number;
   selectedKey: string | null;
   onSelect: (sub: SubjectItem) => void;
+  onDownloadSubject: (sub: SubjectItem) => void;
+  onDeleteSubject: (sub: SubjectItem) => void;
 }) {
   const isLeaf = !!node.domainName;
+  const isSubject = !!node.subject && !node.domainName;
   const [open, setOpen] = useState(true);
   const pl = `${8 + depth * 14}px`;
 
@@ -97,7 +100,7 @@ function TreeNodeView({
   return (
     <div>
       <div
-        className="flex items-center gap-1 py-1 cursor-pointer hover:bg-gray-50 rounded text-sm text-gray-600 font-medium"
+        className="group flex items-center gap-1 py-1 cursor-pointer hover:bg-gray-50 rounded text-sm text-gray-600 font-medium"
         style={{ paddingLeft: pl }}
       >
         <div
@@ -107,12 +110,32 @@ function TreeNodeView({
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </div>
         <span className="flex-1">{node.label}</span>
+        {isSubject && (
+          <>
+            <button
+              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-500"
+              onClick={(e) => { e.stopPropagation(); onDownloadSubject(node.subject!); }}
+              title="원본 파일 다운로드"
+            >
+              <Download size={12} />
+            </button>
+            <button
+              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400"
+              onClick={(e) => { e.stopPropagation(); onDeleteSubject(node.subject!); }}
+              title="삭제"
+            >
+              <Trash2 size={12} />
+            </button>
+          </>
+        )}
       </div>
       {open && node.children?.map((child, i) => (
         <TreeNodeView
           key={i} node={child} depth={depth + 1}
           selectedKey={selectedKey}
           onSelect={onSelect}
+          onDownloadSubject={onDownloadSubject}
+          onDeleteSubject={onDeleteSubject}
         />
       ))}
     </div>
@@ -127,6 +150,7 @@ export default function CriteriaPage() {
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showGuide, setShowGuide] = useState(() => localStorage.getItem('hideCriteriaGuide') !== '1');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const loadSubjects = async () => {
@@ -162,6 +186,23 @@ export default function CriteriaPage() {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
     }
+  };
+
+  const hideGuide = () => {
+    localStorage.setItem('hideCriteriaGuide', '1');
+    setShowGuide(false);
+  };
+
+  const handleDownloadSubject = (sub: SubjectItem) => {
+    window.location.href = criteriaApi.sourceUrl('standards', sub.year, sub.semester, sub.grade, sub.subject);
+  };
+
+  const handleDeleteSubject = async (sub: SubjectItem) => {
+    if (!confirm(`${sub.subject} 성취/평가기준 파일과 데이터를 삭제하시겠습니까?`)) return;
+    await criteriaApi.deleteSource('standards', sub.year, sub.semester, sub.grade, sub.subject);
+    setSelected(null);
+    setStandards([]);
+    await loadSubjects();
   };
 
   const spans = useMemo(() => {
@@ -203,6 +244,16 @@ export default function CriteriaPage() {
             {uploading ? '처리 중...' : '성취기준 파일 업로드'}
             <input ref={fileRef} type="file" className="hidden" accept=".xlsx,.xls" onChange={handleUpload} disabled={uploading} />
           </label>
+          {showGuide && (
+            <div className="relative rounded border border-blue-200 bg-blue-50 p-2 pr-7 text-xs leading-relaxed text-blue-900">
+              <button className="absolute right-1.5 top-1.5 text-blue-500 hover:text-blue-700" onClick={hideGuide} title="다시 보지 않기">
+                <X size={12} />
+              </button>
+              <div className="font-medium mb-1">업로드 안내</div>
+              <p>나이스 &gt; 교과담임 &gt; 성적 &gt; 지필/수행선행작업 &gt; 성취기준관리에서</p>
+              <p>성취기준 및 성취수준(평가기준)을 조회 및 출력 후 파일 저장 버튼을 눌러 엑셀(XLS)를 선택하세요.</p>
+            </div>
+          )}
           {message && <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded p-2 leading-snug">{message}</p>}
           {error && (
             <div className="flex items-start gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
@@ -222,6 +273,8 @@ export default function CriteriaPage() {
               key={i} node={node} depth={0}
               selectedKey={selectedKey}
               onSelect={loadStandards}
+              onDownloadSubject={handleDownloadSubject}
+              onDeleteSubject={handleDeleteSubject}
             />
           ))}
         </div>

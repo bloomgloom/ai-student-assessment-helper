@@ -50,6 +50,45 @@ interface SetechCriterion {
   extensions: string;
 }
 
+function parseSpellcheckResult(textWithTags: string): { correctedText: string; correctionCount: number } {
+  const correctionCount = (textWithTags.match(/\[CHANGE\]/g) || []).length;
+  const correctedText = textWithTags
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```[a-zA-Z]*\n?/g, '').replace(/```/g, ''))
+    .replace(/\[CHANGE\]([\s\S]*?)\[\/CHANGE\]/g, '$1')
+    .trim();
+  return { correctedText, correctionCount };
+}
+
+router.post('/spellcheck', async (req: Request, res: Response) => {
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: '검사할 텍스트가 없습니다.' });
+
+  const prompt = `
+다음 텍스트의 맞춤법, 띄어쓰기, 문맥 오류를 교정해줘.
+원래 문장의 의미나 말투를 최대한 유지하면서, 어색한 부분만 자연스럽게 다듬어줘.
+
+[중요]
+교정하면서 수정되거나 추가된 부분은 반드시 [CHANGE]와 [/CHANGE] 태그로 감싸줘.
+변경되지 않은 부분은 태그 없이 그대로 둬.
+설명, 제목, 마크다운 코드블록 없이 교정된 본문만 반환해.
+
+예시:
+원본: 안냐세요 반갑습니당
+교정: [CHANGE]안녕하세요[/CHANGE] [CHANGE]반갑습니다[/CHANGE]
+
+[원본 텍스트]
+${text}
+`;
+
+  try {
+    const taggedText = (await callLLM(prompt)).trim();
+    const parsed = parseSpellcheckResult(taggedText);
+    res.json({ taggedText, ...parsed });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 async function getClassContextByStudent(studentId: number): Promise<ClassContext | null> {
   return queryOne<ClassContext>(`
     SELECT c.year, c.semester, c.grade, c.subject

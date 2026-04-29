@@ -357,8 +357,7 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
 
       const fileExt = path.extname(decodedName).toLowerCase();
 
-      const savePath = path.join(baseUploadDir, `${Date.now()}_${decodedName}`);
-      await deleteArtifactsByStudentDomainExt(student.id, domain, fileExt);
+      const savePath = path.join(baseUploadDir, `${Date.now()}_${count}_${decodedName}`);
       fs.writeFileSync(savePath, fileBuffer);
       const ct = TEXT_CONTENT_TYPES[fileExt] || '';
       await execute(
@@ -383,6 +382,15 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
 });
 
 // ── 파일 서빙 ──────────────────────────────────────────────────────────────────
+router.get('/:id', async (req: Request, res: Response) => {
+  const artifact = await queryOne(
+    'SELECT id, filename, mime_type, domain, uploaded_at FROM artifacts WHERE id=?',
+    [req.params.id]
+  );
+  if (!artifact) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+  res.json(artifact);
+});
+
 router.get('/:id/file', async (req: Request, res: Response) => {
   const artifact = await queryOne<{ filename: string; filepath: string; mime_type: string }>(
     'SELECT * FROM artifacts WHERE id=?', [req.params.id]
