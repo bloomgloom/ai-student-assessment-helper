@@ -5,6 +5,7 @@ import { queryAll } from './db';
 export interface LLMSettings {
   provider: 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'openai-compatible' | 'omlx';
   apiKey: string;
+  apiKeys: Record<string, string>;
   model: string;
   baseUrl: string;
   maxConcurrency: number;
@@ -31,9 +32,20 @@ export async function getLLMSettings(): Promise<LLMSettings> {
   for (const row of rows) map[row.key] = row.value;
 
   const maxConcurrency = parseInt(map['llm_max_concurrency'] || '5', 10);
+  const provider = (map['llm_provider'] as LLMSettings['provider']) || 'gemini';
+  
+  const apiKeys: Record<string, string> = {
+    gemini: map['llm_api_key_gemini'] || map['llm_api_key'] || '', // Fallback to old key for backward compatibility
+    openai: map['llm_api_key_openai'] || '',
+    anthropic: map['llm_api_key_anthropic'] || '',
+    omlx: map['llm_api_key_omlx'] || '',
+    'openai-compatible': map['llm_api_key_openai-compatible'] || '',
+  };
+
   return {
-    provider: (map['llm_provider'] as LLMSettings['provider']) || 'gemini',
-    apiKey: map['llm_api_key'] || '',
+    provider,
+    apiKey: apiKeys[provider] || '',
+    apiKeys,
     model: map['llm_model'] || '',
     baseUrl: map['llm_base_url'] || '',
     maxConcurrency,

@@ -234,6 +234,7 @@ export default function RecordsPage() {
   const [showSetech, setShowSetech] = useState(true);
   const [domainFilter, setDomainFilter] = useState<string>('all');
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   // 파일 업로드 상태
   const [uploadingFiles, setUploadingFiles] = useState(false);
@@ -674,6 +675,41 @@ export default function RecordsPage() {
     }
   };
 
+  const handleDeleteContent = async () => {
+    if (!selectedClass) return;
+    
+    const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
+    if (targetStudents.length === 0) return;
+
+    const contentTypes = [];
+    if (showScoring) contentTypes.push('scoring');
+    if (showSetech) contentTypes.push('setech');
+    if (contentTypes.length === 0) return;
+
+    const domainLabel = domainFilter === 'all' ? '전체 영역' : (domainFilter === '__SUBJECT_COMPREHENSIVE__' ? '종합 세특' : domainFilter);
+    const typeLabel = contentTypes.includes('scoring') && contentTypes.includes('setech') ? '채점 및 활동/세특' : (contentTypes.includes('scoring') ? '채점' : '활동/세특');
+    const targetLabel = selectedStudents.length > 0 ? `선택한 ${targetStudents.length}명` : `${targetStudents.length}명 전체`;
+    
+    if (!confirm(`${targetLabel}의 "${domainLabel}" ${typeLabel} 기록 데이터를 정말 삭제하시겠습니까?\n(학생 명단은 유지되며 생성된 기록 내용만 삭제됩니다)`)) return;
+
+    setDeleting(true);
+    try {
+      await recordsApi.deleteStudentContent({
+        classId: selectedClass.id,
+        studentIds: selectedStudents.length > 0 ? selectedStudents.map(s => s.id) : undefined,
+        domain: domainFilter !== 'all' ? domainFilter : undefined,
+        contentTypes
+      });
+      
+      await loadDomainData(selectedClass);
+      alert('삭제되었습니다.');
+    } catch (e) {
+      alert('삭제 중 오류가 발생했습니다.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleBatchGenerate = async (type: 'scoring' | 'setech', explicitDomain?: string) => {
     if (!selectedClass) return;
 
@@ -1087,6 +1123,10 @@ export default function RecordsPage() {
 
               <button className="btn-primary text-xs py-1.5 ml-2" onClick={handleSaveAll} disabled={saving}>
                 {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 저장
+              </button>
+
+              <button className="btn-secondary text-xs py-1.5 ml-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-300 transition-colors" onClick={handleDeleteContent} disabled={deleting || saving || batchGenerating}>
+                {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} 삭제
               </button>
 
               <label

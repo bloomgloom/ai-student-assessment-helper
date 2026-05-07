@@ -272,7 +272,7 @@ router.post('/generate', async (req: Request, res: Response) => {
         "SELECT * FROM eval_items WHERE domain_id=? AND item_type='llm'", [evalDomain.id]
       );
       if (items.length) {
-        parts.push(`[채점 기준]\n각 항목의 점수를 콤마(,)로 구분하여 한 줄로 반환해주세요.`);
+        parts.push(`[채점 기준]\n각 항목의 점수를 어떠한 부연 설명 없이 콤마(,)로만 구분하여 반환하세요.`);
         for (const item of items) {
           parts.push(`- ${item.name} (${item.excel_col}열): ${item.rubric}`);
         }
@@ -281,7 +281,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     }
     evalCriteria = await getDomainEvalCriteria(classContext, domain);
     if (!evalDomain && evalCriteria.length) {
-      parts.push(`[채점 기준]\n각 항목의 점수를 콤마(,)로 구분하여 한 줄로 반환해주세요.`);
+      parts.push(`[채점 기준]\n각 항목의 점수를 어떠한 부연 설명 없이 콤마(,)로만 구분하여 반환하세요.`);
       for (const item of evalCriteria.filter((i) => i.item_type === 'llm')) {
         parts.push(`- ${item.name} (${item.excel_col}): ${item.rubric}`);
       }
@@ -302,7 +302,7 @@ router.post('/generate', async (req: Request, res: Response) => {
   parts.push(
     criteriaSet.mode === '세특'
       ? '위 지시사항과 학생의 활동 내용을 종합하여 학생의 역량이 잘 드러나도록 기록을 작성해주세요.'
-      : '최종적으로 위 채점 기준에 따라 각 항목의 점수만 콤마(,)로 구분하여 한 줄로 반환해주세요.'
+      : '최종적으로 위 채점 기준에 따라 각 항목의 점수만 콤마(,)로 구분하여 한 줄로 반환해주세요. (어떠한 추가 설명, 제목, 이유도 작성하지 마세요. 오직 숫자와 콤마만 출력해야 합니다. 예시: 3,0,3,0,3,3,0,3,3,3)'
   );
 
   try {
@@ -473,7 +473,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
             for (const item of evalCriteria.filter((i) => i.item_type === 'llm')) {
               parts.push(`- ${item.name} (${item.excel_col}): ${item.rubric}`);
             }
-            parts.push('각 항목의 점수를 위 순서대로 콤마(,)로 구분하여 한 줄로 반환해주세요.');
+            parts.push('각 항목의 점수를 위 순서대로 콤마(,)로 구분하여 한 줄로 반환해주세요. 절대로 부연 설명을 포함하지 마세요.');
             parts.push('---');
           }
         }
@@ -483,7 +483,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
         if (hasContent || artifacts.length > 0) {
           parts.push(criteriaSet.mode === '세특'
             ? '위 내용을 종합하여 학생의 역량이 잘 드러나도록 기록을 작성해주세요.'
-            : '채점 기준에 따라 각 항목의 점수를 콤마로 구분하여 반환해주세요.'
+            : '채점 기준에 따라 각 항목의 점수를 콤마로 구분하여 반환해주세요. (어떠한 추가 설명, 제목, 이유도 작성하지 마세요. 오직 숫자와 콤마만 출력해야 합니다. 예시: 3,0,3,0,3,3,0,3,3,3)'
           );
           try {
             if (!settings) throw new Error('LLM 설정이 로드되지 않았습니다.');

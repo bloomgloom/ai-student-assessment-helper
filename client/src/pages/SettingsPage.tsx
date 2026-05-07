@@ -4,7 +4,8 @@ import { Save, TestTube, CheckCircle, XCircle, Loader2, RefreshCw, Server, Trash
 
 interface Settings {
   provider: string;
-  apiKey: string;
+  apiKey: string; // Current active provider's key
+  apiKeys: Record<string, string>; // Keys for all providers
   model: string;
   baseUrl: string;
   maxConcurrency: number;
@@ -39,6 +40,7 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings>({
     provider: 'gemini',
     apiKey: '',
+    apiKeys: {},
     model: '',
     baseUrl: '',
     maxConcurrency: 5,
@@ -64,6 +66,7 @@ export default function SettingsPage() {
     setSettings((s) => ({
       ...s,
       provider,
+      apiKey: s.apiKeys?.[provider] || '',
       model: DEFAULT_MODELS[provider] ?? '',
       baseUrl: DEFAULT_URLS[provider] ?? '',
       // omlx는 로컬 자원 보호를 위해 동시 요청 1개 기본값
@@ -194,8 +197,12 @@ export default function SettingsPage() {
               type="password"
               className="input font-mono text-xs"
               placeholder={isOmlx ? 'oMLX 설정에서 발급한 API 키' : 'API 키를 입력하세요'}
-              value={settings.apiKey}
-              onChange={(e) => setSettings((s) => ({ ...s, apiKey: e.target.value }))}
+              value={settings.apiKeys?.[settings.provider] || ''}
+              onChange={(e) => setSettings((s) => ({ 
+                ...s, 
+                apiKey: e.target.value,
+                apiKeys: { ...s.apiKeys, [s.provider]: e.target.value } 
+              }))}
             />
           </div>
         )}

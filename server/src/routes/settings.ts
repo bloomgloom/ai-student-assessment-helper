@@ -14,20 +14,35 @@ router.get('/', async (_req: Request, res: Response) => {
 });
 
 router.put('/', async (req: Request, res: Response) => {
-  const { provider, apiKey, model, baseUrl, maxConcurrency, loggingEnabled } =
-    req.body as Record<string, string>;
+  const { provider, apiKeys, model, baseUrl, maxConcurrency, loggingEnabled } = req.body;
   const concurrency = maxConcurrency != null ? Math.max(1, parseInt(String(maxConcurrency), 10) || 1) : undefined;
-  const pairs = [
+  
+  const pairs: [string, string][] = [
     ['llm_provider', provider],
-    ['llm_api_key', apiKey],
     ['llm_model', model],
     ['llm_base_url', baseUrl],
-    ['llm_max_concurrency', concurrency != null ? String(concurrency) : undefined],
-    ['llm_sequential_mode', concurrency != null ? String(concurrency <= 1) : undefined],
-    ['llm_logging_enabled', loggingEnabled != null ? String(loggingEnabled) : undefined],
-  ].filter((p): p is [string, string] => p[1] !== undefined);
+  ];
 
-  for (const [key, value] of pairs) {
+  if (concurrency != null) {
+    pairs.push(['llm_max_concurrency', String(concurrency)]);
+    pairs.push(['llm_sequential_mode', String(concurrency <= 1)]);
+  }
+  
+  if (loggingEnabled != null) {
+    pairs.push(['llm_logging_enabled', String(loggingEnabled)]);
+  }
+
+  if (apiKeys && typeof apiKeys === 'object') {
+    for (const [p, key] of Object.entries(apiKeys)) {
+      if (typeof key === 'string') {
+        pairs.push([`llm_api_key_${p}`, key]);
+      }
+    }
+  }
+
+  const validPairs = pairs.filter((p): p is [string, string] => p[1] !== undefined);
+
+  for (const [key, value] of validPairs) {
     await execute('INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)', [key, value]);
   }
   res.json({ ok: true });

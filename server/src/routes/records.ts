@@ -284,4 +284,41 @@ router.post('/import-full/:classId', upload.single('file'), async (req: Request,
   }
 });
 
+router.post('/delete-content', async (req: Request, res: Response) => {
+  const { classId, studentIds, domain, contentTypes } = req.body as {
+    classId: number;
+    studentIds?: number[];
+    domain?: string;
+    contentTypes: string[];
+  };
+
+  try {
+    let sql = `
+      DELETE FROM generated_content
+      WHERE student_id IN (SELECT id FROM class_students WHERE class_id = ?)
+    `;
+    const params: any[] = [classId];
+
+    if (studentIds && studentIds.length > 0) {
+      sql += ` AND student_id IN (${studentIds.map(() => '?').join(',')})`;
+      params.push(...studentIds);
+    }
+
+    if (domain && domain !== 'all') {
+      sql += ` AND domain = ?`;
+      params.push(domain);
+    }
+
+    if (contentTypes && contentTypes.length > 0) {
+      sql += ` AND content_type IN (${contentTypes.map(() => '?').join(',')})`;
+      params.push(...contentTypes);
+    }
+
+    await execute(sql, params);
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 export default router;

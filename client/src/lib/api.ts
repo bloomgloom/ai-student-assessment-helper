@@ -100,6 +100,12 @@ export const recordsApi = {
     form.append('file', file);
     return api.post(`/records/import-full/${classId}`, form);
   },
+  deleteStudentContent: (data: {
+    classId: number;
+    studentIds?: number[];
+    domain?: string;
+    contentTypes: string[];
+  }) => api.post('/records/delete-content', data),
 };
 
 // Artifacts
