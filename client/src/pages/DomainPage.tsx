@@ -267,8 +267,8 @@ export default function DomainPage() {
     setStandardRefs(refs);
     setSetechItems(allItems.filter(i => i.type !== '성취기준' && i.type !== '활동공통'));
 
-    // 성취기준 관리 데이터 로드 (커스텀 영역 아닐 때)
-    if (!isCustom) {
+    // 성취기준 관리 데이터 로드 (영역 세특은 고정/세특 전용 모두 성취기준을 참조)
+    if (domainName !== '__SUBJECT_COMPREHENSIVE__') {
       try {
         const stdRes = await criteriaApi.getStandards(sub.year, sub.semester, sub.grade, sub.subject);
         setAchievementStandards(stdRes.data);
@@ -308,7 +308,7 @@ export default function DomainPage() {
     setSetechMetaPrompts({});
     setEvalChecked(new Set());
     setSetechChecked(new Set());
-    setActiveTab(isCustom ? 'activity' : 'standards');
+    setActiveTab('standards');
     loadCriteria(sub, domain, isCustom);
     localStorage.setItem('domainPage_lastSelection', JSON.stringify({ classId: sub.class_id, domain }));
   }, [isDirty, loadCriteria]);
@@ -348,12 +348,18 @@ export default function DomainPage() {
 
   const handleAddCustomDomain = async (sub: SubjectItem) => {
     const name = prompt(`${sub.subject} 과목에 추가할 세특 전용 임의 영역 이름을 입력하세요:`);
-    if (!name || !name.trim()) return;
+    const trimmedName = name?.trim();
+    if (!trimmedName) return;
     try {
-      await criteriaApi.addCustomDomain({
-        year: sub.year, semester: sub.semester, grade: sub.grade, subject: sub.subject, name: name.trim()
+      const res = await criteriaApi.addCustomDomain({
+        year: sub.year, semester: sub.semester, grade: sub.grade, subject: sub.subject, name: trimmedName
       });
       await loadSubjects();
+      const nextSub = {
+        ...sub,
+        customDomains: [...sub.customDomains, { id: res.data.id, name: trimmedName }],
+      };
+      handleSelectDomain(nextSub, trimmedName, true);
     } catch (e: any) {
       alert('추가 실패: ' + (e.response?.data?.error || e.message));
     }
@@ -929,23 +935,21 @@ export default function DomainPage() {
             {/* 탭 바 (영역 선택 시) */}
             {selectedDomain && (
               <div className="flex border-b border-gray-200 bg-white shrink-0 px-5">
+                <button
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'standards' ? 'border-amber-500 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  onClick={() => setActiveTab('standards')}
+                >
+                  <Award size={14} />
+                  성취 기준
+                </button>
                 {!isCustomDomain && (
-                  <>
-                    <button
-                      className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'standards' ? 'border-amber-500 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                      onClick={() => setActiveTab('standards')}
-                    >
-                      <Award size={14} />
-                      성취 기준
-                    </button>
-                    <button
-                      className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'scoring' ? 'border-green-500 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                      onClick={() => setActiveTab('scoring')}
-                    >
-                      <ClipboardCheck size={14} />
-                      채점 기준
-                    </button>
-                  </>
+                  <button
+                    className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'scoring' ? 'border-green-500 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                    onClick={() => setActiveTab('scoring')}
+                  >
+                    <ClipboardCheck size={14} />
+                    채점 기준
+                  </button>
                 )}
                 <button
                   className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'activity' ? (isCustomDomain ? 'border-purple-500 text-purple-700' : 'border-blue-500 text-blue-700') : 'border-transparent text-gray-500 hover:text-gray-700'}`}
@@ -960,7 +964,7 @@ export default function DomainPage() {
             <div className="flex-1 overflow-y-auto p-6 space-y-8">
 
               {/* 성취 기준 설정 (고정 영역, 도메인 선택 시) */}
-              {!isCustomDomain && selectedDomain && (!selectedDomain || activeTab === 'standards') && (
+              {selectedDomain && activeTab === 'standards' && (
                 <section>
                   <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
                     <h3 className="font-semibold text-gray-800 flex items-center gap-2">
@@ -980,7 +984,7 @@ export default function DomainPage() {
                       <div className="flex gap-3">
                         <textarea
                           className="textarea flex-1 text-sm resize-y"
-                          style={{ minHeight: '56px' }}
+                          style={{ minHeight: '72px' }}
                           placeholder="성취 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)"
                           value={standardsMetaPrompt}
                           onChange={e => setStandardsMetaPrompt(e.target.value)}
