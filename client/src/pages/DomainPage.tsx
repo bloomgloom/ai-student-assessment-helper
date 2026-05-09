@@ -1,11 +1,20 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { criteriaApi, aiApi } from '../lib/api';
-import { useAiOverlayStore } from '../stores/aiOverlayStore';
+import { useAiAction } from '../hooks/useAiAction';
 import {
-  Plus, Trash2, Save, ChevronDown, ChevronRight, GripVertical,
-  BookOpen, ClipboardCheck, Folder, School, Upload, Loader2, AlertCircle,
+  Plus, Trash2, Save, GripVertical,
+  BookOpen, ClipboardCheck, School, Upload, Loader2, AlertCircle,
   Award, Download, X
 } from 'lucide-react';
+import { AiGenerateBox } from '../components/common/AiGenerateBox';
+import { CriteriaItemCard } from '../components/common/CriteriaItemCard';
+import { PageHeader } from '../components/common/PageHeader';
+import { PageSidebar } from '../components/common/PageSidebar';
+import { PageTabs, PageTab } from '../components/common/PageTabs';
+import { SectionTitle } from '../components/common/SectionTitle';
+import { SetechCriteriaPanels } from '../components/common/SetechCriteriaPanels';
+import { TreeView } from '../components/common/TreeView';
+import { TreeIconButton, TreeNodeView } from '../components/common/TreeNodeView';
 
 interface SubjectItem {
   year: number;
@@ -187,155 +196,6 @@ function buildTree(subjects: SubjectItem[]): TreeNode[] {
   return result;
 }
 
-function TreeNodeView({
-  node, depth, selectedDomainKey, selectedSubjectKey, onSelectDomain, onSelectSubject,
-  onDownloadSubject, onDeleteSubject, onAddNode, onDeleteNode, editing, onEditChange, onEditCommit, onEditCancel
-}: {
-  node: TreeNode;
-  depth: number;
-  selectedDomainKey: string | null;
-  selectedSubjectKey: string | null;
-  onSelectDomain: (sub: SubjectItem, domain: string, isCustom: boolean) => void;
-  onSelectSubject: (sub: SubjectItem) => void;
-  onDownloadSubject: (sub: SubjectItem) => void;
-  onDeleteSubject: (sub: SubjectItem) => void;
-  onAddNode: (node?: TreeNode) => void;
-  onDeleteNode: (node: TreeNode) => void;
-  editing: EditingTreeItem | null;
-  onEditChange: (value: string) => void;
-  onEditCommit: () => void;
-  onEditCancel: () => void;
-}) {
-  const isLeaf = node.kind === 'domain';
-  const isSubject = !!node.subject && !node.domainName;
-  const [open, setOpen] = useState(true);
-  const pl = `${8 + depth * 14}px`;
-  const isEditing = editing?.key === node.key;
-  const labelNode = isEditing ? (
-    <input
-      className="input h-6 flex-1 px-1.5 py-0 text-xs"
-      value={editing.value}
-      autoFocus
-      onChange={(e) => onEditChange(e.target.value)}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          onEditCommit();
-        }
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          onEditCancel();
-        }
-      }}
-      onBlur={onEditCommit}
-    />
-  ) : (
-    <span className="flex-1 truncate">{node.label}</span>
-  );
-
-  if (isLeaf) {
-    const sub = node.subject;
-    const key = sub ? `${sub.year}-${sub.semester}-${sub.grade}-${sub.subject}-${node.domainName}` : '';
-    const isSelected = !!sub && selectedDomainKey === key;
-    return (
-      <div
-        className={`group flex items-center gap-1.5 py-1.5 pr-5 cursor-pointer rounded text-sm transition-colors ${isSelected ? 'bg-blue-100 text-blue-700 font-medium' : 'hover:bg-gray-100 text-gray-700'
-          }`}
-        style={{ paddingLeft: pl }}
-        onClick={() => { if (!isEditing && sub) onSelectDomain(sub, node.domainName!, node.isCustom!); }}
-      >
-        {node.isCustom ? (
-          <BookOpen size={13} className="shrink-0 text-purple-500" />
-        ) : (
-          <ClipboardCheck size={13} className="shrink-0 text-green-500" />
-        )}
-        {labelNode}
-      </div>
-    );
-  }
-
-  const subjKey = isSubject ? `${node.subject!.year}-${node.subject!.semester}-${node.subject!.grade}-${node.subject!.subject}` : null;
-  const isSubjectSelected = isSubject && selectedSubjectKey === subjKey && !selectedDomainKey;
-
-  return (
-    <div>
-      <div
-        className={`group flex items-center gap-1 py-1 pr-5 cursor-pointer hover:bg-gray-50 rounded text-sm text-gray-600 font-medium ${isSubjectSelected ? 'bg-blue-100 text-blue-800' : isSubject ? 'text-blue-800' : ''}`}
-        style={{ paddingLeft: pl }}
-        onClick={() => {
-          if (isSubject) onSelectSubject(node.subject!);
-        }}
-      >
-        <div
-          onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-          className="p-0.5 hover:bg-gray-200 rounded text-gray-500"
-        >
-          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        </div>
-        {isSubject && <Folder size={13} className="text-blue-400 mr-0.5" />}
-        {isSubject && !isEditing ? <span className="flex-1 truncate">{node.label}</span> : labelNode}
-        {isSubject ? (
-          <>
-            {node.subject?.has_source ? (
-              <button
-                className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-500"
-                onClick={(e) => { e.stopPropagation(); onDownloadSubject(node.subject!); }}
-                title="원본 파일 다운로드"
-              >
-                <Download size={13} />
-              </button>
-            ) : (
-              <span className="w-[21px]" />
-            )}
-            <button
-              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400"
-              onClick={(e) => { e.stopPropagation(); onDeleteSubject(node.subject!); }}
-              title="삭제"
-            >
-              <Trash2 size={13} />
-            </button>
-          </>
-        ) : (
-          <div className="flex items-center gap-0.5">
-            <button
-              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-500"
-              onClick={(e) => { e.stopPropagation(); setOpen(true); onAddNode(node); }}
-              title="하위 항목 추가"
-            >
-              <Plus size={13} />
-            </button>
-            <button
-              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400"
-              onClick={(e) => { e.stopPropagation(); onDeleteNode(node); }}
-              title="삭제"
-            >
-              <Trash2 size={13} />
-            </button>
-          </div>
-        )}
-      </div>
-      {open && node.children?.map((child, i) => (
-        <TreeNodeView
-          key={i} node={child} depth={depth + 1}
-          selectedDomainKey={selectedDomainKey}
-          selectedSubjectKey={selectedSubjectKey}
-          onSelectDomain={onSelectDomain}
-          onSelectSubject={onSelectSubject}
-          onDownloadSubject={onDownloadSubject}
-          onDeleteSubject={onDeleteSubject}
-          onAddNode={onAddNode}
-          onDeleteNode={onDeleteNode}
-          editing={editing}
-          onEditChange={onEditChange}
-          onEditCommit={onEditCommit}
-          onEditCancel={onEditCancel}
-        />
-      ))}
-    </div>
-  );
-}
-
 export default function DomainPage() {
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -374,7 +234,7 @@ export default function DomainPage() {
   const [generatingSetech, setGeneratingSetech] = useState(false);
   const [activeTab, setActiveTab] = useState<'standards' | 'scoring' | 'activity' | 'ratio'>('standards');
   const [isDirty, setIsDirty] = useState(false);
-  const overlayStore = useAiOverlayStore();
+  const runAiAction = useAiAction();
   const domainRestoredRef = useRef(false);
 
   useEffect(() => {
@@ -910,9 +770,11 @@ export default function DomainPage() {
 
   const handleGenerateSubjectDomains = async () => {
     if (!selectedSubject) return;
-    const controller = overlayStore.start('반영비율/만점관리 생성 중');
-    setGeneratingSubjectDomains(true);
-    try {
+    await runAiAction({
+      title: '반영비율/만점관리 생성 중',
+      errorMessage: '반영비율/만점관리 생성에 실패했습니다.',
+      setLoading: setGeneratingSubjectDomains,
+    }, async ({ signal }) => {
       const existingRows = allSubjectDomains.map(row => ({
         eval_type: row.eval_type,
         name: row.name,
@@ -937,7 +799,7 @@ export default function DomainPage() {
         subjectDomainsMetaPrompt.trim() ? `추가 요청: ${subjectDomainsMetaPrompt.trim()}` : '',
         `현재 행: ${JSON.stringify(existingRows)}`,
       ].filter(Boolean).join('\n');
-      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
       const parsed = JSON.parse(res.data.result.replace(/```json/g, '').replace(/```/g, '').trim());
       if (!Array.isArray(parsed)) throw new Error('AI 응답이 배열이 아닙니다.');
       const generated = parsed
@@ -957,14 +819,7 @@ export default function DomainPage() {
         ...generated,
       ]);
       setIsDirty(true);
-    } catch (e: any) {
-      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
-        alert('반영비율/만점관리 생성에 실패했습니다.');
-      }
-    } finally {
-      overlayStore.finish();
-      setGeneratingSubjectDomains(false);
-    }
+    });
   };
 
   // 성취기준 참조 헬퍼
@@ -1019,9 +874,11 @@ export default function DomainPage() {
 
   const handleGenerateStandards = async () => {
     if (achievementStandards.length === 0) return alert('성취기준을 먼저 업로드하세요.');
-    const controller = overlayStore.start('성취 기준 선택 중');
-    setGeneratingStandards(true);
-    try {
+    await runAiAction({
+      title: '성취 기준 선택 중',
+      errorMessage: '생성 실패: 다시 시도해주세요.',
+      setLoading: setGeneratingStandards,
+    }, async ({ signal }) => {
       // 코드 기준으로 중복 제거
       const uniqueStandards: any[] = Array.from(
         new Map(achievementStandards.map((s: any) => [s.code, s])).values()
@@ -1033,7 +890,7 @@ export default function DomainPage() {
       const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
       const extra = standardsMetaPrompt.trim() ? `\n추가 요청: ${standardsMetaPrompt.trim()}` : '\n위 과목과 영역에 가장 관련성 높은 성취기준을 2~4개 선택해주세요.';
       const prompt = `${base}${extra}\n\n사용 가능한 성취기준 목록:\n${stdList}`;
-      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
       const codes: string[] = JSON.parse(res.data.result.replace(/```json/g, '').replace(/```/g, '').trim());
       const selected = uniqueStandards.filter((s: any) => codes.includes(s.code));
       if (selected.length === 0) return alert('선택된 성취기준이 없습니다. 다시 시도해보세요.');
@@ -1043,32 +900,21 @@ export default function DomainPage() {
         content: s.content,
       })));
       setIsDirty(true);
-    } catch (e: any) {
-      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
-        alert('생성 실패: 다시 시도해주세요.');
-      }
-    } finally {
-      overlayStore.finish();
-      setGeneratingStandards(false);
-    }
+    });
   };
 
   const handleGenerateCommon = async (type: string, metaPrompt: string) => {
     const label = type === '공통' ? '세특 공통 기준' : '종합 세특 기준';
-    const controller = overlayStore.start(`${label} 생성 중`);
-    try {
+    await runAiAction({
+      title: `${label} 생성 중`,
+      errorMessage: '기준 생성에 실패했습니다.',
+    }, async ({ signal }) => {
       const systemPrompt = `당신은 ${label} 생성 AI입니다. 주어진 과목/조건에 맞게 AI 기록 작성 지시 프롬프트를 작성하세요. 부가적인 설명 없이 생성된 프롬프트 내용만 반환하세요.`;
       const base = `과목: ${selectedSubject?.subject}\n기준 유형: ${label}`;
       const extra = metaPrompt.trim() ? `\n추가 요청: ${metaPrompt.trim()}` : '';
-      const res = await aiApi.generatePrompt({ prompt: base + extra, systemPrompt }, controller.signal);
+      const res = await aiApi.generatePrompt({ prompt: base + extra, systemPrompt }, signal);
       updateSubjectSetech(type, res.data.result.trim());
-    } catch (e: any) {
-      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
-        alert('기준 생성에 실패했습니다.');
-      }
-    } finally {
-      overlayStore.finish();
-    }
+    });
   };
 
   // 성취 기준 컨텍스트 문자열 빌더
@@ -1097,9 +943,11 @@ export default function DomainPage() {
 
   // 채점 항목 목록 AI 생성 (상단 버튼)
   const handleGenerateEvalItems = async () => {
-    const controller = overlayStore.start('채점 항목 생성 중');
-    setGeneratingEval(true);
-    try {
+    await runAiAction({
+      title: '채점 항목 생성 중',
+      errorMessage: '생성 실패',
+      setLoading: setGeneratingEval,
+    }, async ({ signal }) => {
       const formulaItem = evalItems.find(i => i.item_type === 'formula');
       const stdCtx = buildStandardsContext();
       const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
@@ -1109,7 +957,7 @@ export default function DomainPage() {
       const extra = evalMetaPrompts[-1]?.trim() ? `\n추가 요청: ${evalMetaPrompts[-1]}` : '';
       const systemPrompt = `당신은 채점 기준 생성 AI입니다. 과목·영역·성취기준을 참고하여 채점 항목 목록(이름, 배점, 루브릭)을 JSON 배열로 생성하세요. 배점 합계는 만점에서 기본점수를 뺀 값이어야 합니다. 반드시 아래 형식만 반환하세요: [{"name":"항목명","score":"배점","rubric":"루브릭 내용"}]`;
       const prompt = `${base}\n만점: ${maxScore}, 기본점수: ${baseScore}${stdPart}${extra}`;
-      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
       const newItems = JSON.parse(res.data.result.replace(/```json/g, '').replace(/```/g, '').trim());
       setEvalItems(prev => {
         const fItems = prev.filter(i => i.item_type === 'formula');
@@ -1122,14 +970,7 @@ export default function DomainPage() {
         }))];
       });
       setIsDirty(true);
-    } catch (e: any) {
-      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
-        alert('생성 실패');
-      }
-    } finally {
-      overlayStore.finish();
-      setGeneratingEval(false);
-    }
+    });
   };
 
   // 채점 항목 루브릭 AI 생성 (소제목 옆 버튼 - 선택/전체 항목)
@@ -1139,39 +980,36 @@ export default function DomainPage() {
     if (targets.length === 0) return;
     const targetLabel = evalChecked.size > 0 ? `선택한 ${evalChecked.size}개` : `전체 ${targets.length}개`;
     if (!confirm(`${targetLabel} 채점 루브릭을 AI로 생성하시겠습니까?`)) return;
-    const controller = overlayStore.start('채점 루브릭 생성 중');
-    overlayStore.setProgress(0, `0/${targets.length} 완료`);
-    setGeneratingEval(true);
-    try {
+    await runAiAction({
+      title: '채점 루브릭 생성 중',
+      errorMessage: '생성 실패',
+      setLoading: setGeneratingEval,
+      initialProgress: { progress: 0, message: `0/${targets.length} 완료` },
+    }, async ({ signal, setProgress }) => {
       const stdCtx = buildStandardsContext();
       const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
       const stdPart = stdCtx ? `\n\n성취 기준:\n${stdCtx}` : '';
       const systemPrompt = `당신은 채점 기준 생성 AI입니다. 과목·영역·성취기준·항목명·배점을 참고하여 채점 루브릭(기준 내용)을 생성하세요. 루브릭 내용만 반환하고 부가 설명은 하지 마세요.`;
       for (let i = 0; i < targets.length; i++) {
-        if (controller.signal.aborted) break;
+        if (signal.aborted) break;
         const idx = targets[i];
         const item = evalItems[idx];
         const extra = evalMetaPrompts[idx]?.trim() ? `\n추가 요청: ${evalMetaPrompts[idx]}` : '';
         const prompt = `${base}\n항목명: ${item.name || '(미입력)'}\n배점: ${item.score || '?'}점${stdPart}${extra}`;
-        const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+        const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
         updateEvalItem(idx, 'rubric', res.data.result.trim());
-        overlayStore.setProgress(((i + 1) / targets.length) * 100, `${i + 1}/${targets.length} 완료`);
+        setProgress(((i + 1) / targets.length) * 100, `${i + 1}/${targets.length} 완료`);
       }
-    } catch (e: any) {
-      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
-        alert('생성 실패');
-      }
-    } finally {
-      overlayStore.finish();
-      setGeneratingEval(false);
-    }
+    });
   };
 
   // 활동 기록 항목 목록 AI 생성 (상단 버튼)
   const handleGenerateSetechItems = async () => {
-    const controller = overlayStore.start('기록 기준 항목 생성 중');
-    setGeneratingSetech(true);
-    try {
+    await runAiAction({
+      title: '기록 기준 항목 생성 중',
+      errorMessage: '생성 실패',
+      setLoading: setGeneratingSetech,
+    }, async ({ signal }) => {
       const stdCtx = buildStandardsContext();
       const actCtx = buildActivityContext();
       const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
@@ -1180,7 +1018,7 @@ export default function DomainPage() {
       const extra = setechMetaPrompts[-1]?.trim() ? `\n\n추가 요청: ${setechMetaPrompts[-1]}` : '';
       const systemPrompt = `당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준을 참고하여 활동 기록 항목 목록(제목, 기록 작성 지시사항)을 JSON 배열로 생성하세요. 반드시 아래 형식만 반환하세요: [{"title":"항목명","prompt":"기록 작성 지시사항"}]`;
       const prompt = `${base}${stdPart}${actPart}${extra}`;
-      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
       const newItems = JSON.parse(res.data.result.replace(/```json/g, '').replace(/```/g, '').trim());
       setSetechItems(newItems.map((item: any, j: number) => ({
         title: item.title || '',
@@ -1190,14 +1028,7 @@ export default function DomainPage() {
         sort_order: j,
       })));
       setIsDirty(true);
-    } catch (e: any) {
-      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
-        alert('생성 실패');
-      }
-    } finally {
-      overlayStore.finish();
-      setGeneratingSetech(false);
-    }
+    });
   };
 
   // 활동 기록 항목 기준 AI 생성 (소제목 옆 버튼 - 선택/전체 항목)
@@ -1208,10 +1039,12 @@ export default function DomainPage() {
     if (targets.length === 0) return;
     const targetLabel = setechChecked.size > 0 ? `선택한 ${setechChecked.size}개` : `전체 ${targets.length}개`;
     if (!confirm(`${targetLabel} 기록 작성 기준을 AI로 생성하시겠습니까?`)) return;
-    const controller = overlayStore.start('기록 작성 기준 생성 중');
-    overlayStore.setProgress(0, `0/${targets.length} 완료`);
-    setGeneratingSetech(true);
-    try {
+    await runAiAction({
+      title: '기록 작성 기준 생성 중',
+      errorMessage: '생성 실패',
+      setLoading: setGeneratingSetech,
+      initialProgress: { progress: 0, message: `0/${targets.length} 완료` },
+    }, async ({ signal, setProgress }) => {
       const stdCtx = buildStandardsContext();
       const actCtx = buildActivityContext();
       const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
@@ -1219,23 +1052,16 @@ export default function DomainPage() {
       const actPart = actCtx ? `\n\n${actCtx}` : '';
       const systemPrompt = `당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준·항목명을 참고하여 활동 기록 작성 지시사항을 생성하세요. 지시사항 내용만 반환하고 부가 설명은 하지 마세요.`;
       for (let i = 0; i < targets.length; i++) {
-        if (controller.signal.aborted) break;
+        if (signal.aborted) break;
         const idx = targets[i];
         const item = setechItems[idx];
         const extra = setechMetaPrompts[idx]?.trim() ? `\n\n추가 요청: ${setechMetaPrompts[idx]}` : '';
         const prompt = `${base}\n항목명: ${item.title || '(미입력)'}${stdPart}${actPart}${extra}`;
-        const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+        const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
         updateSetechItem(idx, 'prompt', res.data.result.trim());
-        overlayStore.setProgress(((i + 1) / targets.length) * 100, `${i + 1}/${targets.length} 완료`);
+        setProgress(((i + 1) / targets.length) * 100, `${i + 1}/${targets.length} 완료`);
       }
-    } catch (e: any) {
-      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
-        alert('생성 실패');
-      }
-    } finally {
-      overlayStore.finish();
-      setGeneratingSetech(false);
-    }
+    });
   };
 
   // 계산 로직
@@ -1255,16 +1081,21 @@ export default function DomainPage() {
   const currentMaxScore = selectedSubject?.fixedDomains.find(d => d.name === selectedDomain)?.max_score || 0;
   const calculatedScore = calculateTotal();
   const isScoreMismatch = !isCustomDomain && currentMaxScore > 0 && calculatedScore !== currentMaxScore;
+  const domainTabs: PageTab<typeof activeTab>[] = [
+    { value: 'standards', label: '성취 기준', icon: <Award size={14} />, color: 'amber' },
+    ...(!isCustomDomain ? [{ value: 'scoring' as const, label: '채점 기준', icon: <ClipboardCheck size={14} />, color: 'green' as const }] : []),
+    { value: 'activity', label: '기록 기준', icon: <BookOpen size={14} />, color: isCustomDomain ? 'purple' : 'blue' },
+  ];
+  const subjectTabs: PageTab<typeof activeTab>[] = [
+    { value: 'ratio', label: '반영비율/만점관리', icon: <ClipboardCheck size={14} />, color: 'green' },
+    { value: 'activity', label: '세특 기준 관리', icon: <BookOpen size={14} />, color: 'blue' },
+  ];
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* 좌측: 트리 */}
-      <div className="w-72 border-r border-gray-200 bg-white flex flex-col shrink-0">
-        <div className="p-3 border-b border-gray-200 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-gray-700">평가 영역 관리</h2>
-            <div className="h-8 w-8 shrink-0" />
-          </div>
+      <PageSidebar
+        title="평가 영역 관리"
+        upload={(
           <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploadingDomains ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
             {uploadingDomains ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
             {uploadingDomains ? '처리 중...' : '영역 관리 파일 업로드'}
@@ -1277,6 +1108,9 @@ export default function DomainPage() {
               disabled={uploadingDomains}
             />
           </label>
+        )}
+        notices={(
+          <>
           {showGuide && (
             <div className="relative rounded border border-blue-200 bg-blue-50 p-2 pr-7 text-xs leading-relaxed text-blue-900">
               <button className="absolute right-1.5 top-1.5 text-blue-500 hover:text-blue-700" onClick={hideGuide} title="다시 보지 않기">
@@ -1294,10 +1128,12 @@ export default function DomainPage() {
               <p className="whitespace-pre-wrap leading-snug">{uploadError}</p>
             </div>
           )}
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-2 group/tree">
-          {visibleTree.length === 0 ? (
+          </>
+        )}
+        tree={(
+        <TreeView
+          nodes={visibleTree}
+          empty={(
             <div className="text-center py-10 text-gray-400">
               <School size={32} className="mx-auto mb-2 opacity-30" />
               <p className="text-xs">영역 관리 파일을 업로드하면<br />과목과 수행평가 영역이 표시됩니다</p>
@@ -1309,38 +1145,69 @@ export default function DomainPage() {
                 <Plus size={14} />
               </button>
             </div>
-          ) : (
-            <>
-              {visibleTree.map((node, i) => (
-                <TreeNodeView
-                  key={node.key || i} node={node} depth={0}
-                  selectedDomainKey={selectedDomainKey}
-                  selectedSubjectKey={selectedSubjectKey}
-                  onSelectDomain={handleSelectDomain}
-                  onSelectSubject={handleSelectSubject}
-                  onDownloadSubject={handleDownloadSubjectFile}
-                  onDeleteSubject={handleDeleteSubjectFile}
-                  onAddNode={handleAddNode}
-                  onDeleteNode={handleDeleteNode}
-                  editing={editing}
-                  onEditChange={(value) => setEditing(prev => prev ? { ...prev, value } : prev)}
-                  onEditCommit={commitEditing}
-                  onEditCancel={cancelEditing}
-                />
-              ))}
-              <div className="mt-1">
-                <button
-                  className="flex w-full items-center justify-center rounded border border-dashed border-transparent py-1 text-blue-500 opacity-0 transition hover:border-blue-200 hover:bg-blue-50 hover:opacity-100 group-hover/tree:opacity-100"
-                  onClick={() => handleAddNode()}
-                  title="학년도 추가"
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-            </>
           )}
-        </div>
-      </div>
+          addYearButton={(
+            <button
+              className="flex w-full items-center justify-center rounded border border-dashed border-transparent py-1 text-blue-500 opacity-0 transition hover:border-blue-200 hover:bg-blue-50 hover:opacity-100 group-hover/tree:opacity-100"
+              onClick={() => handleAddNode()}
+              title="학년도 추가"
+            >
+              <Plus size={14} />
+            </button>
+          )}
+        >
+          {(node, i) => (
+            <TreeNodeView
+              key={node.key || i}
+              node={node}
+              editing={editing}
+              selected={(item) => {
+                if (!item.subject) return false;
+                if (item.kind === 'domain') {
+                  const key = `${item.subject.year}-${item.subject.semester}-${item.subject.grade}-${item.subject.subject}-${item.domainName}`;
+                  return selectedDomainKey === key;
+                }
+                if (item.kind === 'subject' && !selectedDomainKey) {
+                  const key = `${item.subject.year}-${item.subject.semester}-${item.subject.grade}-${item.subject.subject}`;
+                  return selectedSubjectKey === key;
+                }
+                return false;
+              }}
+              clickable={(item) => (item.kind === 'subject' || item.kind === 'domain') && !!item.subject}
+              onSelect={(item) => {
+                if (!item.subject) return;
+                if (item.kind === 'domain') handleSelectDomain(item.subject, item.domainName!, !!item.isCustom);
+                else if (item.kind === 'subject') handleSelectSubject(item.subject);
+              }}
+              canAdd={(item) => item.kind !== 'subject' && item.kind !== 'domain'}
+              onAdd={handleAddNode}
+              canDelete={(item) => item.kind !== 'domain'}
+              onDelete={(item) => {
+                const isSubject = !!item.subject && !item.domainName;
+                if (isSubject) handleDeleteSubjectFile(item.subject!);
+                else handleDeleteNode(item);
+              }}
+              actions={(item) => item.kind === 'subject' ? (
+                item.subject?.has_source ? (
+                  <TreeIconButton
+                    title="원본 파일 다운로드"
+                    onClick={() => handleDownloadSubjectFile(item.subject!)}
+                    variant="blue"
+                  >
+                    <Download size={13} />
+                  </TreeIconButton>
+                ) : (
+                  <span className="w-[21px]" />
+                )
+              ) : null}
+              onEditChange={(value) => setEditing(prev => prev ? { ...prev, value } : prev)}
+              onEditCommit={commitEditing}
+              onEditCancel={cancelEditing}
+            />
+          )}
+        </TreeView>
+        )}
+      />
 
       {/* 우측: 편집 영역 */}
       <div className="flex-1 flex flex-col overflow-hidden">
@@ -1354,16 +1221,15 @@ export default function DomainPage() {
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-white shrink-0">
-              <div>
-                <div className="text-xs text-gray-500 mb-0.5">
+            <PageHeader
+              eyebrow={(
+                <>
                   {selectedSubject?.year}학년도 {selectedSubject?.semester}학기 {selectedSubject?.grade}학년 &gt; {selectedSubject?.subject}
-                </div>
-                <h2 className="text-lg font-bold flex items-center gap-2">
-                  {selectedDomain ? selectedDomain : '종합 세특 기준 (과목 공통)'}
-                </h2>
-              </div>
-              <div className="flex gap-2">
+                </>
+              )}
+              title={selectedDomain ? selectedDomain : '종합 세특 기준 (과목 공통)'}
+              actions={(
+                <>
                 <button className="btn-primary text-sm px-4" onClick={handleSave} disabled={saving}>
                   <Save size={14} /> {saving ? '저장 중...' : '저장'}
                 </button>
@@ -1390,86 +1256,30 @@ export default function DomainPage() {
                 >
                   <Download size={14} />
                 </button>
-              </div>
-            </div>
+                </>
+              )}
+            />
 
-            {/* 탭 바 */}
-            {selectedDomain ? (
-              <div className="flex border-b border-gray-200 bg-white shrink-0 px-5">
-                <button
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'standards' ? 'border-amber-500 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                  onClick={() => setActiveTab('standards')}
-                >
-                  <Award size={14} />
-                  성취 기준
-                </button>
-                {!isCustomDomain && (
-                  <button
-                    className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'scoring' ? 'border-green-500 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    onClick={() => setActiveTab('scoring')}
-                  >
-                    <ClipboardCheck size={14} />
-                    채점 기준
-                  </button>
-                )}
-                <button
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'activity' ? (isCustomDomain ? 'border-purple-500 text-purple-700' : 'border-blue-500 text-blue-700') : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                  onClick={() => setActiveTab('activity')}
-                >
-                  <BookOpen size={14} />
-                  기록 기준
-                </button>
-              </div>
-            ) : (
-              <div className="flex border-b border-gray-200 bg-white shrink-0 px-5">
-                <button
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'ratio' ? 'border-green-500 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                  onClick={() => setActiveTab('ratio')}
-                >
-                  <ClipboardCheck size={14} />
-                  반영비율/만점관리
-                </button>
-                <button
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'activity' ? 'border-blue-500 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                  onClick={() => setActiveTab('activity')}
-                >
-                  <BookOpen size={14} />
-                  세특 기준 관리
-                </button>
-              </div>
-            )}
+            <PageTabs value={activeTab} tabs={selectedDomain ? domainTabs : subjectTabs} onChange={setActiveTab} />
 
             <div className="flex-1 overflow-y-auto p-6 space-y-8">
 
               {/* 과목 반영비율/만점관리 */}
               {!selectedDomain && activeTab === 'ratio' && (
                 <section>
-                  <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
-                    <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                      <ClipboardCheck size={16} className="text-green-500" />
-                      반영비율/만점관리
-                    </h3>
-                  </div>
-                  <div className="space-y-2 mb-4">
-                    <div className="flex items-center py-1">
-                      <span className="text-sm font-medium text-gray-600">평가 영역 자동 생성</span>
-                    </div>
-                    <div className="flex gap-3">
-                      <textarea
-                        className="textarea flex-1 text-sm resize-y"
-                        style={{ minHeight: '72px' }}
-                        placeholder="반영비율/만점관리 생성을 위한 지시사항을 입력하세요. (예: 수행평가 2개와 기록 영역 1개로 구성)"
-                        value={subjectDomainsMetaPrompt}
-                        onChange={e => setSubjectDomainsMetaPrompt(e.target.value)}
-                      />
-                      <button
-                        className="btn-rainbow text-xs px-5 py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch"
-                        onClick={handleGenerateSubjectDomains}
-                        disabled={generatingSubjectDomains}
-                      >
-                        {generatingSubjectDomains ? <><Loader2 size={12} className="animate-spin" /> 생성 중…</> : <>✨ 생성</>}
-                      </button>
-                    </div>
+                  <SectionTitle icon={<ClipboardCheck size={16} className="text-green-500" />}>
+                    반영비율/만점관리
+                  </SectionTitle>
+                  <div className="mb-4">
+                    <AiGenerateBox
+                      label="평가 영역 자동 생성"
+                      placeholder="반영비율/만점관리 생성을 위한 지시사항을 입력하세요. (예: 수행평가 2개와 기록 영역 1개로 구성)"
+                      value={subjectDomainsMetaPrompt}
+                      onChange={setSubjectDomainsMetaPrompt}
+                      onGenerate={handleGenerateSubjectDomains}
+                      generating={generatingSubjectDomains}
+                      buttonClassName="px-5"
+                    />
                   </div>
                   <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
                     <div className={`flex h-8 items-center gap-1.5 border-b px-3 text-xs transition-colors ${subjectAssessmentRatioError ? 'border-red-200 bg-red-50 text-red-700' : 'border-gray-100 bg-gray-50 text-transparent'}`}>
@@ -1605,37 +1415,23 @@ export default function DomainPage() {
               {/* 성취 기준 설정 (고정 영역, 도메인 선택 시) */}
               {selectedDomain && activeTab === 'standards' && (
                 <section>
-                  <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
-                    <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                      <Award size={16} className="text-amber-500" />
-                      성취 기준 관리
-                    </h3>
-                  </div>
+                  <SectionTitle icon={<Award size={16} className="text-amber-500" />}>
+                    성취 기준 관리
+                  </SectionTitle>
                   {achievementStandards.length === 0 ? (
                     <p className="text-xs text-gray-400 mb-2 text-center py-2 bg-gray-50 rounded border border-dashed border-gray-200">
                       기준 관리에 성취기준을 먼저 업로드하세요.
                     </p>
                   ) : (
-                    <div className="space-y-2 mb-3">
-                      <div className="flex items-center py-1">
-                        <span className="text-sm font-medium text-gray-600">성취 기준 항목 자동 생성</span>
-                      </div>
-                      <div className="flex gap-3">
-                        <textarea
-                          className="textarea flex-1 text-sm resize-y"
-                          style={{ minHeight: '72px' }}
-                          placeholder="성취 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)"
-                          value={standardsMetaPrompt}
-                          onChange={e => setStandardsMetaPrompt(e.target.value)}
-                        />
-                        <button
-                          className="btn-rainbow text-xs px-3 py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch"
-                          onClick={handleGenerateStandards}
-                          disabled={generatingStandards}
-                        >
-                          {generatingStandards ? <><Loader2 size={12} className="animate-spin" /> 생성 중…</> : <>✨ 생성</>}
-                        </button>
-                      </div>
+                    <div className="mb-3">
+                      <AiGenerateBox
+                        label="성취 기준 항목 자동 생성"
+                        placeholder="성취 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)"
+                        value={standardsMetaPrompt}
+                        onChange={setStandardsMetaPrompt}
+                        onGenerate={handleGenerateStandards}
+                        generating={generatingStandards}
+                      />
                     </div>
                   )}
                   <div className="flex items-center justify-between py-1 mb-2">

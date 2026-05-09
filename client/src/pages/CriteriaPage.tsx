@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { criteriaApi } from '../lib/api';
-import { AlertCircle, BookOpen, Folder, Loader2, Upload, ChevronDown, ChevronRight, ClipboardCheck, Download, Trash2, X, Plus, Pencil } from 'lucide-react';
+import { AlertCircle, BookOpen, Loader2, Upload, Download, Trash2, X, Plus } from 'lucide-react';
+import { PageHeader } from '../components/common/PageHeader';
+import { PageSidebar } from '../components/common/PageSidebar';
+import { TreeView } from '../components/common/TreeView';
+import { TreeIconButton, TreeNodeView } from '../components/common/TreeNodeView';
 
 interface SubjectItem {
   year: number;
@@ -99,8 +103,6 @@ function displayValue(node: TreeNode) {
   return node.domainName || node.label;
 }
 
-const HiddenPencilIcon = Pencil;
-
 function mergeDraftNodes(nodes: TreeNode[], drafts: TreeNode[], parentKey: string | null = null): TreeNode[] {
   const existingKeys = new Set(nodes.map(node => node.key));
   const directDrafts = drafts
@@ -113,142 +115,6 @@ function mergeDraftNodes(nodes: TreeNode[], drafts: TreeNode[], parentKey: strin
     })),
     ...directDrafts,
   ];
-}
-
-function TreeNodeView({
-  node, depth, selectedKey, editing, onSelect, onDownloadSubject, onDeleteSubject, onAddNode, onEditNode: _onEditNode, onDeleteNode, onAddYear, onEditChange, onEditCommit, onEditCancel
-}: {
-  node: TreeNode;
-  depth: number;
-  selectedKey: string | null;
-  editing: EditingTreeItem | null;
-  onSelect: (sub: SubjectItem) => void;
-  onDownloadSubject: (sub: SubjectItem) => void;
-  onDeleteSubject: (sub: SubjectItem) => void;
-  onAddNode: (node: TreeNode) => void;
-  onEditNode: (node: TreeNode) => void;
-  onDeleteNode: (node: TreeNode) => void;
-  onAddYear: () => void;
-  onEditChange: (value: string) => void;
-  onEditCommit: () => void;
-  onEditCancel: () => void;
-}) {
-  const isLeaf = node.kind === 'domain';
-  const isSubject = !!node.subject && !node.domainName;
-  const [open, setOpen] = useState(true);
-  const pl = `${8 + depth * 14}px`;
-  const isEditing = editing?.key === node.key;
-  const labelNode = isEditing ? (
-    <input
-      className="input h-6 flex-1 px-1.5 py-0 text-xs"
-      value={editing.value}
-      autoFocus
-      onChange={(e) => onEditChange(e.target.value)}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          onEditCommit();
-        }
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          onEditCancel();
-        }
-      }}
-      onBlur={onEditCommit}
-    />
-  ) : (
-    <span className="flex-1 truncate">{node.label}</span>
-  );
-
-  if (isLeaf) {
-    const sub = node.subject;
-    const key = sub ? `${sub.year}-${sub.semester}-${sub.grade}-${sub.subject}-${node.domainName}` : '';
-    const isSelected = !!sub && selectedKey === key;
-    return (
-      <div
-        className={`group flex items-center gap-1.5 py-1.5 pr-2 cursor-pointer rounded text-sm transition-colors ${isSelected ? 'bg-blue-100 text-blue-700 font-medium' : 'hover:bg-gray-100 text-gray-700'
-          }`}
-        style={{ paddingLeft: pl }}
-        onClick={() => { if (!isEditing && sub) onSelect(sub); }}
-      >
-        <ClipboardCheck size={13} className="shrink-0 text-green-500" />
-        {labelNode}
-      </div>
-    );
-  }
-
-  return (
-    <div className="group/year">
-      <div
-        className="group flex items-center gap-1 py-1 pr-5 cursor-pointer hover:bg-gray-50 rounded text-sm text-gray-600 font-medium"
-        style={{ paddingLeft: pl }}
-      >
-        <div
-          onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-          className="p-0.5 hover:bg-gray-200 rounded text-gray-500"
-        >
-          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        </div>
-        <Folder size={13} className="text-blue-400 mr-0.5 shrink-0" />
-        {isSubject && !isEditing ? (
-          <>
-            <span className="truncate">{node.label}</span>
-            <span className="flex-1" />
-          </>
-        ) : labelNode}
-        {!isLeaf && (
-          <div className="flex items-center gap-0.5">
-            {node.kind !== 'subject' && (
-              <button
-                className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-500"
-                onClick={(e) => { e.stopPropagation(); onAddNode(node); }}
-                title="하위 항목 추가"
-              >
-                <Plus size={12} />
-              </button>
-            )}
-            {node.kind === 'subject' && !!node.subject?.has_source && (
-              <button
-                className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-400"
-                onClick={(e) => { e.stopPropagation(); onDownloadSubject(node.subject!); }}
-                title="원본 파일 다운로드"
-              >
-                <Download size={12} />
-              </button>
-            )}
-            {node.kind === 'subject' && !node.subject?.has_source && (
-              <span className="w-[17px]" />
-            )}
-            <button
-              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400"
-              onClick={(e) => { e.stopPropagation(); isSubject ? onDeleteSubject(node.subject!) : onDeleteNode(node); }}
-              title="삭제"
-            >
-              <Trash2 size={12} />
-            </button>
-          </div>
-        )}
-      </div>
-      {open && node.children?.map((child, i) => (
-        <TreeNodeView
-          key={i} node={child} depth={depth + 1}
-          selectedKey={selectedKey}
-          editing={editing}
-          onSelect={onSelect}
-          onDownloadSubject={onDownloadSubject}
-          onDeleteSubject={onDeleteSubject}
-          onAddNode={onAddNode}
-          onEditNode={_onEditNode}
-          onDeleteNode={onDeleteNode}
-          onAddYear={onAddYear}
-          onEditChange={onEditChange}
-          onEditCommit={onEditCommit}
-          onEditCancel={onEditCancel}
-        />
-      ))}
-    </div>
-  );
 }
 
 export default function CriteriaPage() {
@@ -659,18 +525,17 @@ export default function CriteriaPage() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
-      <HiddenPencilIcon size={0} className="hidden" aria-hidden="true" />
-      <div className="w-72 border-r border-gray-200 bg-white flex flex-col shrink-0">
-        <div className="p-3 border-b border-gray-200 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-gray-700">성취 기준 관리</h2>
-            <div className="h-8 w-8 shrink-0" />
-          </div>
+      <PageSidebar
+        title="성취 기준 관리"
+        upload={(
           <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploading ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
             {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
             {uploading ? '처리 중...' : '성취 기준 파일 업로드'}
             <input ref={fileRef} type="file" className="hidden" accept=".xlsx,.xls" onChange={handleUpload} disabled={uploading} />
           </label>
+        )}
+        notices={(
+          <>
           {showGuide && (
             <div className="relative rounded border border-blue-200 bg-blue-50 p-2 pr-7 text-xs leading-relaxed text-blue-900">
               <button className="absolute right-1.5 top-1.5 text-blue-500 hover:text-blue-700" onClick={hideGuide} title="다시 보지 않기">
@@ -688,9 +553,12 @@ export default function CriteriaPage() {
               <p className="whitespace-pre-wrap leading-snug">{error}</p>
             </div>
           )}
-        </div>
-        <div className="flex-1 overflow-y-auto p-1.5 group/tree">
-          {visibleTree.length === 0 ? (
+          </>
+        )}
+        tree={(
+        <TreeView
+          nodes={visibleTree}
+          empty={(
             <div className="text-center py-10 text-gray-400">
               <BookOpen size={32} className="mx-auto mb-2 opacity-30" />
               <p className="text-xs">성취 기준 파일을 업로드하세요</p>
@@ -702,56 +570,72 @@ export default function CriteriaPage() {
                 <Plus size={14} />
               </button>
             </div>
-          ) : (
-            <>
-              {visibleTree.map((node, i) => (
-                <TreeNodeView
-              key={node.key || i} node={node} depth={0}
-              selectedKey={selectedKey}
+          )}
+          addYearButton={(
+            <button
+              className="flex w-full items-center justify-center rounded border border-dashed border-transparent py-1 text-blue-500 opacity-0 transition hover:border-blue-200 hover:bg-blue-50 hover:opacity-100 group-hover/tree:opacity-100"
+              onClick={() => handleAddNode()}
+              title="학년도 추가"
+            >
+              <Plus size={14} />
+            </button>
+          )}
+        >
+          {(node, i) => (
+            <TreeNodeView
+              key={node.key || i}
+              node={node}
               editing={editing}
-              onSelect={loadStandards}
-              onDownloadSubject={handleDownloadSubject}
-              onDeleteSubject={handleDeleteSubject}
-              onAddNode={handleAddNode}
-              onEditNode={handleEditNode}
-              onDeleteNode={handleDeleteNode}
-              onAddYear={() => handleAddNode()}
+              selected={(item) => {
+                const sub = item.subject;
+                const key = sub ? `${sub.year}-${sub.semester}-${sub.grade}-${sub.subject}-${item.domainName}` : '';
+                return item.kind === 'domain' && !!sub && selectedKey === key;
+              }}
+              clickable={(item) => item.kind === 'domain' && !!item.subject}
+              onSelect={(item) => item.subject && loadStandards(item.subject)}
+              canAdd={(item) => item.kind !== 'subject' && item.kind !== 'domain'}
+              onAdd={handleAddNode}
+              canDelete={(item) => item.kind !== 'domain'}
+              onDelete={(item) => {
+                const isSubject = !!item.subject && !item.domainName;
+                if (isSubject) handleDeleteSubject(item.subject!);
+                else handleDeleteNode(item);
+              }}
+              actions={(item) => item.kind === 'subject' ? (
+                item.subject?.has_source ? (
+                  <TreeIconButton
+                    title="원본 파일 다운로드"
+                    onClick={() => handleDownloadSubject(item.subject!)}
+                    variant="blue"
+                  >
+                    <Download size={13} />
+                  </TreeIconButton>
+                ) : (
+                  <span className="w-[21px]" />
+                )
+              ) : null}
               onEditChange={(value) => setEditing(prev => prev ? { ...prev, value } : prev)}
               onEditCommit={commitEditing}
               onEditCancel={cancelEditing}
             />
-          ))}
-          {visibleTree.length > 0 && (
-            <div className="mt-1">
-              <button
-                className="flex w-full items-center justify-center rounded border border-dashed border-transparent py-1 text-blue-500 opacity-0 transition hover:border-blue-200 hover:bg-blue-50 hover:opacity-100 group-hover/tree:opacity-100"
-                onClick={() => handleAddNode()}
-                title="학년도 추가"
-              >
-                <Plus size={14} />
-              </button>
-            </div>
           )}
-          </>
-          )}
-        </div>
-      </div>
+        </TreeView>
+        )}
+      />
 
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {!selected ? (
           <div className="h-full flex items-center justify-center text-gray-400 text-sm">왼쪽에서 영역을 선택하세요</div>
         ) : (
           <>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-white shrink-0">
-              <div>
-                <div className="text-xs text-gray-500 mb-0.5">
+            <PageHeader
+              eyebrow={(
+                <>
                   {selected.year}학년도 {selected.semester}학기 {selected.grade}학년 &gt; {selected.subject}
-                </div>
-                <h2 className="text-lg font-bold text-gray-900">
-                  {selected.domain_name}
-                </h2>
-              </div>
-            </div>
+                </>
+              )}
+              title={selected.domain_name}
+            />
 
             <div className="flex-1 overflow-y-auto p-6">
               <div className="bg-white border border-gray-200 rounded-md overflow-hidden">

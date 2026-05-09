@@ -2,9 +2,11 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } fro
 import { recordsApi, criteriaApi, classesApi, aiApi } from '../lib/api';
 import { useAiBatchStore } from '../stores/aiBatchStore';
 import {
-  Download, Loader2, Users, ChevronRight, ChevronDown, Folder,
-  FileSpreadsheet, Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen, Square
+  Download, Loader2, Users,
+  Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen, Square
 } from 'lucide-react';
+import { TreeView } from '../components/common/TreeView';
+import { TreeIconButton, TreeNodeView, TreeNodeKind } from '../components/common/TreeNodeView';
 
 const ArtifactViewer = lazy(() => import('../components/ArtifactViewer'));
 
@@ -47,6 +49,7 @@ interface SpellcheckResult {
 }
 
 interface TreeNode {
+  kind: TreeNodeKind;
   year?: number;
   semester?: number;
   grade?: number;
@@ -65,7 +68,7 @@ function buildTree(classes: ClassItem[], subjects: any[]): TreeNode[] {
 
   for (const c of classes) {
     if (!yMap.has(c.year)) {
-      const node: TreeNode = { year: c.year, label: `${c.year}학년도`, children: [], path: `y${c.year}` };
+      const node: TreeNode = { kind: 'year', year: c.year, label: `${c.year}학년도`, children: [], path: `y${c.year}` };
       yMap.set(c.year, node);
       result.push(node);
     }
@@ -73,25 +76,25 @@ function buildTree(classes: ClassItem[], subjects: any[]): TreeNode[] {
 
     let sNode = yNode.children!.find(n => n.semester === c.semester);
     if (!sNode) {
-      sNode = { semester: c.semester, label: `${c.semester}학기`, children: [], path: `y${c.year}s${c.semester}` };
+      sNode = { kind: 'semester', semester: c.semester, label: `${c.semester}학기`, children: [], path: `y${c.year}s${c.semester}` };
       yNode.children!.push(sNode);
     }
 
     let gNode = sNode.children!.find(n => n.grade === c.grade);
     if (!gNode) {
-      gNode = { grade: c.grade, label: `${c.grade}학년`, children: [], path: `y${c.year}s${c.semester}g${c.grade}` };
+      gNode = { kind: 'grade', grade: c.grade, label: `${c.grade}학년`, children: [], path: `y${c.year}s${c.semester}g${c.grade}` };
       sNode.children!.push(gNode);
     }
 
     let subNode = gNode.children!.find(n => n.subject === c.subject);
     if (!subNode) {
-      subNode = { subject: c.subject, label: c.subject, children: [], path: `y${c.year}s${c.semester}g${c.grade}_${c.subject}` };
+      subNode = { kind: 'subject', subject: c.subject, label: c.subject, children: [], path: `y${c.year}s${c.semester}g${c.grade}_${c.subject}` };
       gNode.children!.push(subNode);
     }
 
     let roomNode = subNode.children!.find(n => n.room === c.room);
     if (!roomNode) {
-      roomNode = { room: c.room, label: c.room, classItem: c, children: [] };
+      roomNode = { kind: 'room', room: c.room, label: c.room, classItem: c, children: [] };
       subNode.children!.push(roomNode);
     }
   }
@@ -129,90 +132,6 @@ function getDomainColumnDefaultWidth(type: string) {
   if (type === 'artifact') return 56;
   if (type === 'total') return 64;
   return 80;
-}
-
-function TreeNodeView({
-  node, depth, selectedClassId, selectedDomain, onSelectDomain, onSelectClass,
-  onDeleteClass, onDeleteScoring, onDeleteSetech, openStates, onToggleOpen
-}: {
-  node: TreeNode;
-  depth: number;
-  selectedClassId: number | null;
-  selectedDomain: string | null;
-  onSelectDomain: (c: ClassItem, d: string) => void;
-  onSelectClass: (c: ClassItem) => void;
-  onDeleteClass: (c: ClassItem) => void;
-  onDeleteScoring: (c: ClassItem) => void;
-  onDeleteSetech: (c: ClassItem) => void;
-  openStates: Record<string, boolean>;
-  onToggleOpen: (path: string) => void;
-}) {
-  const isRoom = !!node.room;
-  const open = node.path ? (openStates[node.path] ?? true) : true;
-  const pl = `${8 + depth * 14}px`;
-
-  const isRoomSelected = isRoom && selectedClassId === node.classItem!.id;
-
-  return (
-    <div>
-      <div
-        className={`flex items-center gap-1.5 py-1.5 pr-2 cursor-pointer font-medium transition-colors border-l-2 whitespace-nowrap group ${isRoomSelected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-transparent hover:bg-gray-100 text-gray-700'
-          }`}
-        style={{ paddingLeft: pl }}
-        onClick={() => { if (isRoom) onSelectClass(node.classItem!); }}
-      >
-        {!isRoom && (
-          <div onClick={(e) => { e.stopPropagation(); if (node.path) onToggleOpen(node.path); }} className="p-0.5 hover:bg-gray-200 rounded text-gray-400">
-            {open ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-          </div>
-        )}
-        {isRoom && <div className="w-[14px] shrink-0" />}
-        {isRoom ? <FileSpreadsheet size={14} className="text-green-500 shrink-0" /> : <Folder size={14} className="text-blue-400 shrink-0" />}
-        <span className="text-sm whitespace-nowrap flex-1">{node.label}</span>
-        {isRoom && (
-          <>
-            <button
-              style={{ visibility: node.classItem!.scoring_filename ? 'visible' : 'hidden' }}
-              className="w-7 h-5 inline-flex items-center justify-center rounded border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors shrink-0"
-              onClick={(e) => { e.stopPropagation(); onDeleteScoring(node.classItem!); }}
-              title="채점 파일 삭제"
-            >
-              <Trash2 size={12} />
-            </button>
-            <button
-              style={{ visibility: node.classItem!.setech_filename ? 'visible' : 'hidden' }}
-              className="w-7 h-5 inline-flex items-center justify-center rounded border border-violet-200 bg-violet-50 text-violet-600 hover:bg-violet-100 transition-colors shrink-0"
-              onClick={(e) => { e.stopPropagation(); onDeleteSetech(node.classItem!); }}
-              title="세특 파일 삭제"
-            >
-              <Trash2 size={12} />
-            </button>
-            <button
-              className="p-0.5 hover:bg-red-100 rounded text-red-400 hover:text-red-600 transition-all shrink-0"
-              onClick={(e) => { e.stopPropagation(); onDeleteClass(node.classItem!); }}
-              title="전체 삭제"
-            >
-              <Trash2 size={13} />
-            </button>
-          </>
-        )}
-      </div>
-      {open && node.children?.map((child, idx) => (
-        <TreeNodeView
-          key={idx} node={child} depth={depth + 1}
-          selectedClassId={selectedClassId}
-          selectedDomain={selectedDomain}
-          onSelectDomain={onSelectDomain}
-          onSelectClass={onSelectClass}
-          onDeleteClass={onDeleteClass}
-          onDeleteScoring={onDeleteScoring}
-          onDeleteSetech={onDeleteSetech}
-          openStates={openStates}
-          onToggleOpen={onToggleOpen}
-        />
-      ))}
-    </div>
-  );
 }
 
 export default function RecordsPage() {
@@ -1032,8 +951,8 @@ export default function RecordsPage() {
             </div>
           )}
         </div>
-        <div className={`flex-1 overflow-auto ${treeCollapsed ? 'py-2 px-2' : 'py-2'}`}>
-          {treeCollapsed ? (
+        {treeCollapsed ? (
+          <div className="flex-1 overflow-auto py-2 px-2">
             <div className="flex flex-col items-center gap-0.5 py-1">
               {(() => {
                 const sorted = sortClassesForCollapsedTree(classes);
@@ -1162,28 +1081,53 @@ export default function RecordsPage() {
                 <div className="py-6 text-center text-xs text-gray-400">없음</div>
               )}
             </div>
-          ) : (
-            <>
-              {tree.map((node, idx) => (
+          </div>
+        ) : (
+          <TreeView
+            nodes={tree}
+            empty={<p className="text-xs text-gray-400 text-center py-8">수업이 없습니다</p>}
+          >
+            {(node, idx) => (
                 <TreeNodeView
-                  key={idx} node={node} depth={0}
-                  selectedClassId={selectedClass?.id || null}
-                  selectedDomain={selectedDomain}
-                  onSelectDomain={handleSelectDomain}
-                  onSelectClass={handleSelectClass}
-                  onDeleteClass={handleDeleteClass}
-                  onDeleteScoring={handleDeleteScoring}
-                  onDeleteSetech={handleDeleteSetech}
+                  key={node.path || idx}
+                  node={node}
+                  selected={(item) => item.kind === 'room' && selectedClass?.id === item.classItem?.id}
+                  clickable={(item) => item.kind === 'room' && !!item.classItem}
+                  onSelect={(item) => item.classItem && handleSelectClass(item.classItem)}
                   openStates={treeOpenStates}
                   onToggleOpen={toggleNodeOpen}
+                  actions={(item) => item.kind === 'room' && item.classItem ? (
+                    <>
+                      <TreeIconButton
+                        title="채점 파일 삭제"
+                        onClick={() => handleDeleteScoring(item.classItem!)}
+                        variant="blue"
+                        visible={item.classItem.scoring_filename ? 'always' : 'hidden'}
+                      >
+                        <Trash2 size={12} />
+                      </TreeIconButton>
+                      <TreeIconButton
+                        title="세특 파일 삭제"
+                        onClick={() => handleDeleteSetech(item.classItem!)}
+                        variant="purple"
+                        visible={item.classItem.setech_filename ? 'always' : 'hidden'}
+                      >
+                        <Trash2 size={12} />
+                      </TreeIconButton>
+                      <TreeIconButton
+                        title="전체 삭제"
+                        onClick={() => handleDeleteClass(item.classItem!)}
+                        variant="red"
+                        visible="always"
+                      >
+                        <Trash2 size={13} />
+                      </TreeIconButton>
+                    </>
+                  ) : null}
                 />
-              ))}
-              {tree.length === 0 && (
-                <p className="text-xs text-gray-400 text-center py-8">수업이 없습니다</p>
-              )}
-            </>
-          )}
-        </div>
+            )}
+          </TreeView>
+        )}
       </div>
 
       {!selectedClass ? (
