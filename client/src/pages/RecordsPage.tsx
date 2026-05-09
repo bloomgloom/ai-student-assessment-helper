@@ -916,7 +916,7 @@ export default function RecordsPage() {
     );
     const fixedDomains: any[] = subj?.fixedDomains || [];
     const customDomains: any[] = subj?.customDomains || [];
-    const allDomains = [...fixedDomains, ...customDomains];
+    const allDomains = [...fixedDomains, ...(showSetech ? customDomains : [])];
     const visibleDomains = domainFilter === 'all' ? allDomains : allDomains.filter((d: any) => d.name === domainFilter);
 
     let fi = 0;
@@ -941,8 +941,6 @@ export default function RecordsPage() {
           sitems.forEach((item, i) =>
             cols.push({ id: `setech_${i}`, label: item.title, type: 'setech_item', fi: fi++, itemTitle: item.title })
           );
-        } else {
-          cols.push({ id: 'setech', label: '기록', type: 'setech', fi: fi++ });
         }
       }
       domainCols.set(d.name, cols);
@@ -1236,7 +1234,7 @@ export default function RecordsPage() {
                 {subjects.find(s => s.subject === selectedClass.subject)?.fixedDomains.map((d: any) => (
                   <option key={d.name} value={d.name}>{d.name}</option>
                 ))}
-                {subjects.find(s => s.subject === selectedClass.subject)?.customDomains.map((d: any) => (
+                {showSetech && subjects.find(s => s.subject === selectedClass.subject)?.customDomains.map((d: any) => (
                   <option key={d.name} value={d.name}>{d.name} (세특)</option>
                 ))}
               </select>

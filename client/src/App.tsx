@@ -31,7 +31,7 @@ function Sidebar() {
   };
 
   return (
-    <aside className={`${collapsed ? 'w-16' : 'w-52'} min-h-screen bg-gray-900 text-gray-100 flex flex-col transition-[width] duration-200 shrink-0`}>
+    <aside className={`${collapsed ? 'w-16' : 'w-52'} h-screen overflow-y-auto bg-gray-900 text-gray-100 flex flex-col transition-[width] duration-200 shrink-0`}>
       <div className={`border-b border-gray-700 ${collapsed ? 'px-2 py-3' : 'px-3 py-4'}`}>
         <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-2'}`}>
           <button
@@ -44,8 +44,8 @@ function Sidebar() {
           </button>
           {!collapsed && (
             <div className="min-w-0">
-              <h1 className="text-base font-bold leading-tight">학생 평가 도우미</h1>
-              <p className="text-xs text-gray-400 mt-0.5">AI 세특·채점 보조</p>
+              <h1 className="text-base font-bold leading-tight">학생 평가 관리</h1>
+              <p className="text-xs text-gray-400 mt-0.5">AI 채점·세특</p>
             </div>
           )}
         </div>
@@ -174,7 +174,7 @@ function AiOverlay() {
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="flex min-h-screen">
+      <div className="flex h-screen overflow-hidden">
         <Routes>
           <Route path="/artifacts/:id/view" element={
             <Suspense fallback={<div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-gray-400" /></div>}>

@@ -25,7 +25,7 @@ router.get('/', async (_req: Request, res: Response) => {
   const classes = await queryAll<{
     id: number; year: number; semester: number; grade: number;
     subject: string; room: string; filename: string; created_at: string;
-  }>('SELECT * FROM classes ORDER BY year DESC, semester, grade, subject, room');
+  }>('SELECT * FROM classes ORDER BY year ASC, semester, grade, subject, room');
   res.json(classes);
 });
 
