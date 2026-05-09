@@ -38,7 +38,7 @@ interface ClassContext {
 
 interface EvalCriterion {
   name: string;
-  excel_col: string;
+  score: string;
   item_type: 'llm' | 'formula';
   rubric: string;
 }
@@ -59,9 +59,20 @@ function parseSpellcheckResult(textWithTags: string): { correctedText: string; c
   return { correctedText, correctionCount };
 }
 
+function requestAbortSignal(req: Request, res: Response): AbortSignal {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.on('aborted', abort);
+  res.on('close', () => {
+    if (!res.writableEnded) abort();
+  });
+  return controller.signal;
+}
+
 router.post('/spellcheck', async (req: Request, res: Response) => {
   const text = String(req.body?.text || '').trim();
   if (!text) return res.status(400).json({ error: '검사할 텍스트가 없습니다.' });
+  const signal = requestAbortSignal(req, res);
 
   const prompt = `
 다음 텍스트의 맞춤법, 띄어쓰기, 문맥 오류를 교정해줘.
@@ -81,10 +92,27 @@ ${text}
 `;
 
   try {
-    const taggedText = (await callLLM(prompt)).trim();
+    const taggedText = (await callLLM(prompt, undefined, signal)).trim();
     const parsed = parseSpellcheckResult(taggedText);
     res.json({ taggedText, ...parsed });
   } catch (e) {
+    if (signal.aborted) return;
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+router.post('/generate-prompt', async (req: Request, res: Response) => {
+  const { prompt, systemPrompt } = req.body;
+  if (!prompt) return res.status(400).json({ error: '프롬프트가 없습니다.' });
+  const signal = requestAbortSignal(req, res);
+
+  try {
+    const settings = await getLLMSettings();
+    const fullPrompt = systemPrompt ? `[System]\n${systemPrompt}\n\n[User]\n${prompt}` : prompt;
+    const result = await callLLM(fullPrompt, settings, signal);
+    res.json({ result });
+  } catch (e) {
+    if (signal.aborted) return;
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
@@ -109,7 +137,7 @@ async function getClassContextByClass(classId?: number): Promise<ClassContext | 
 async function getDomainEvalCriteria(classContext: ClassContext | null, domain: string): Promise<EvalCriterion[]> {
   if (!classContext) return [];
   return queryAll<EvalCriterion>(
-    `SELECT name, excel_col, item_type, rubric
+    `SELECT name, score, item_type, rubric
      FROM domain_eval
      WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?
      ORDER BY sort_order, id`,
@@ -142,7 +170,7 @@ function buildScoringContent(result: string, criteria: EvalCriterion[]): string 
 
   const base = criteria
     .filter((item) => item.item_type === 'formula')
-    .reduce((sum, item) => sum + (Number(item.excel_col) || 0), 0);
+    .reduce((sum, item) => sum + (Number(item.score) || 0), 0);
   const scoreTotal = llmItems.reduce((sum, item) => sum + (Number(content[item.name]) || 0), 0);
   content.total = base + scoreTotal;
 
@@ -159,7 +187,7 @@ function buildDefaultScoringContent(criteria: EvalCriterion[]): string {
   let base = 0;
   for (const item of criteria) {
     if (item.item_type === 'formula') {
-      base += Number(item.excel_col) || 0;
+      base += Number(item.score) || 0;
     } else {
       content[item.name] = 0;
     }
@@ -283,7 +311,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     if (!evalDomain && evalCriteria.length) {
       parts.push(`[채점 기준]\n각 항목의 점수를 어떠한 부연 설명 없이 콤마(,)로만 구분하여 반환하세요.`);
       for (const item of evalCriteria.filter((i) => i.item_type === 'llm')) {
-        parts.push(`- ${item.name} (${item.excel_col}): ${item.rubric}`);
+        parts.push(`- ${item.name} (${item.score}): ${item.rubric}`);
       }
       parts.push('---');
     }
@@ -400,13 +428,13 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
               parts.push(`[기록 작성 지시사항]\n학생의 전체 교과 활동을 종합하여 세특을 작성해주세요.\n---`);
             }
           } else {
-            // 영역 세특: 공통기준 + 성취/평가기준 + 채점기준/획득점수 + 산출물
+            // 영역 세특: 공통기준 + 성취 기준 + 채점기준/획득점수 + 산출물
             // 1) 공통기준
             const subjectCriteria = await getDomainSetechCriteria(classContext, '__SUBJECT_COMPREHENSIVE__');
             const commonCriterion = subjectCriteria.find((c) => c.type === '공통');
             if (commonCriterion?.prompt) parts.push(`[공통 기준]\n${commonCriterion.prompt}\n---`);
 
-            // 2) 성취/평가기준
+            // 2) 성취 기준
             const domainAllCriteria = await getDomainSetechCriteria(classContext, domain);
             const standardRefs = domainAllCriteria.filter((c) => c.type === '성취기준');
             if (standardRefs.length) {
@@ -417,7 +445,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
                   if (ext.content) stdParts.push(`[${ext.code}] ${ext.content}`);
                 } catch { /* skip */ }
               }
-              if (stdParts.length) parts.push(`[성취/평가기준]\n${stdParts.join('\n')}\n---`);
+              if (stdParts.length) parts.push(`[성취 기준]\n${stdParts.join('\n')}\n---`);
             }
 
             // 3) 채점기준 및 획득점수
@@ -434,7 +462,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
               if (llmItems.length) {
                 const scoringParts = llmItems.map((item) => {
                   const score = scoringData[item.name] ?? '미채점';
-                  return `- ${item.name}: 배점 ${item.excel_col}점, 획득 ${score}점\n  루브릭: ${item.rubric}`;
+                  return `- ${item.name}: 배점 ${item.score}점, 획득 ${score}점\n  루브릭: ${item.rubric}`;
                 });
                 parts.push(`[채점 기준 및 획득 점수]\n${scoringParts.join('\n')}\n---`);
               }
@@ -471,7 +499,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
           if (evalCriteria.length) {
             parts.push('[채점 기준]');
             for (const item of evalCriteria.filter((i) => i.item_type === 'llm')) {
-              parts.push(`- ${item.name} (${item.excel_col}): ${item.rubric}`);
+              parts.push(`- ${item.name} (${item.score}): ${item.rubric}`);
             }
             parts.push('각 항목의 점수를 위 순서대로 콤마(,)로 구분하여 한 줄로 반환해주세요. 절대로 부연 설명을 포함하지 마세요.');
             parts.push('---');

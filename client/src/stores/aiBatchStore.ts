@@ -197,11 +197,9 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
         },
       } : {});
 
-      if (!stopped) {
-        clearTimer = window.setTimeout(() => {
-          if (get().currentJob?.id === jobId) get().clearFinished();
-        }, 5000);
-      }
+      clearTimer = window.setTimeout(() => {
+        if (get().currentJob?.id === jobId) get().clearFinished();
+      }, stopped ? 300 : 1200);
 
       return !stopped;
     } catch (e) {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { criteriaApi } from '../lib/api';
+import { criteriaApi, aiApi } from '../lib/api';
+import { useAiOverlayStore } from '../stores/aiOverlayStore';
 import {
   Plus, Trash2, Save, ChevronDown, ChevronRight, GripVertical,
   BookOpen, ClipboardCheck, Folder, School, Upload, Loader2, AlertCircle,
@@ -28,7 +29,7 @@ interface SetechItem {
 interface EvalItem {
   id?: number;
   name: string;
-  excel_col: string;
+  score: string;
   item_type: 'llm' | 'formula';
   rubric: string;
   sort_order: number;
@@ -38,7 +39,6 @@ interface StandardRef {
   domain_name_ref: string;
   code: string;
   content: string;
-  level: string;
 }
 
 
@@ -223,6 +223,27 @@ export default function DomainPage() {
   const domainsFileRef = useRef<HTMLInputElement>(null);
   const configFileRef = useRef<HTMLInputElement>(null);
 
+  const [evalMetaPrompts, setEvalMetaPrompts] = useState<Record<number, string>>({});
+  const [setechMetaPrompts, setSetechMetaPrompts] = useState<Record<number, string>>({});
+  const [evalChecked, setEvalChecked] = useState<Set<number>>(new Set());
+  const [setechChecked, setSetechChecked] = useState<Set<number>>(new Set());
+  const [standardsMetaPrompt, setStandardsMetaPrompt] = useState<string>('');
+  const [subjectCommonPrompt, setSubjectCommonPrompt] = useState<string>('');
+  const [generatingStandards, setGeneratingStandards] = useState(false);
+  const [generatingEval, setGeneratingEval] = useState(false);
+  const [generatingSetech, setGeneratingSetech] = useState(false);
+  const [activeTab, setActiveTab] = useState<'standards' | 'scoring' | 'activity'>('standards');
+  const [isDirty, setIsDirty] = useState(false);
+  const overlayStore = useAiOverlayStore();
+  const domainRestoredRef = useRef(false);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty]);
+
   const loadSubjects = useCallback(async () => {
     const r = await criteriaApi.getSubjects();
     setSubjects(r.data);
@@ -235,15 +256,16 @@ export default function DomainPage() {
   }, [subjects]);
 
   const loadCriteria = useCallback(async (sub: SubjectItem, domainName: string, isCustom: boolean) => {
+    setIsDirty(false);
     const sr = await criteriaApi.getSetech(sub.year, sub.semester, sub.grade, sub.subject, domainName);
     const allItems = sr.data as SetechItem[];
 
-    // '성취기준' 타입은 standardRefs로 분리
+    // '성취기준' 타입은 standardRefs로 분리, '활동공통' 타입은 공통 기준으로 분리
     const refs: StandardRef[] = allItems
       .filter(i => i.type === '성취기준')
-      .map(i => { try { return JSON.parse(i.extensions || '{}'); } catch { return { domain_name_ref: '', code: '', content: '', level: '' }; } });
+      .map(i => { try { return JSON.parse(i.extensions || '{}'); } catch { return { domain_name_ref: '', code: '', content: '' }; } });
     setStandardRefs(refs);
-    setSetechItems(allItems.filter(i => i.type !== '성취기준'));
+    setSetechItems(allItems.filter(i => i.type !== '성취기준' && i.type !== '활동공통'));
 
     // 성취기준 관리 데이터 로드 (커스텀 영역 아닐 때)
     if (!isCustom) {
@@ -260,30 +282,69 @@ export default function DomainPage() {
       let loaded = er.data as EvalItem[];
       loaded.sort((a, b) => a.sort_order - b.sort_order);
       if (!loaded.find(i => i.item_type === 'formula')) {
-        loaded.unshift({ name: '합계', excel_col: '0', item_type: 'formula', rubric: '', sort_order: -1 });
+        loaded.unshift({ name: '합계', score: '0', item_type: 'formula', rubric: '', sort_order: -1 });
       }
       setEvalItems(loaded);
+
+      // 과목 공통 세특 기준 로드 (AI 생성 context용)
+      try {
+        const subjRes = await criteriaApi.getSetech(sub.year, sub.semester, sub.grade, sub.subject, '__SUBJECT_COMPREHENSIVE__');
+        const commonItem = (subjRes.data as SetechItem[]).find(i => i.type === '공통');
+        setSubjectCommonPrompt(commonItem?.prompt || '');
+      } catch { setSubjectCommonPrompt(''); }
     } else {
       setEvalItems([]);
+      setSubjectCommonPrompt('');
     }
   }, []);
 
-  const handleSelectDomain = (sub: SubjectItem, domain: string, isCustom: boolean) => {
+  const handleSelectDomain = useCallback((sub: SubjectItem, domain: string, isCustom: boolean) => {
+    if (isDirty && !confirm('저장되지 않은 변경 사항이 있습니다. 이동하시겠습니까?')) return;
     setSelectedSubject(sub);
     setSelectedDomain(domain);
     setIsCustomDomain(isCustom);
     setAllSubjectDomains([]);
+    setEvalMetaPrompts({});
+    setSetechMetaPrompts({});
+    setEvalChecked(new Set());
+    setSetechChecked(new Set());
+    setActiveTab(isCustom ? 'activity' : 'standards');
     loadCriteria(sub, domain, isCustom);
-  };
+    localStorage.setItem('domainPage_lastSelection', JSON.stringify({ classId: sub.class_id, domain }));
+  }, [isDirty, loadCriteria]);
 
-  const handleSelectSubject = async (sub: SubjectItem) => {
+  const handleSelectSubject = useCallback(async (sub: SubjectItem) => {
+    if (isDirty && !confirm('저장되지 않은 변경 사항이 있습니다. 이동하시겠습니까?')) return;
     setSelectedSubject(sub);
     setSelectedDomain(null);
-    setIsCustomDomain(true); // Treat subject level as custom so eval panel is hidden
+    setIsCustomDomain(true);
+    setSetechMetaPrompts({});
+    setSetechChecked(new Set());
+    setActiveTab('activity');
     loadCriteria(sub, '__SUBJECT_COMPREHENSIVE__', true);
     const dr = await criteriaApi.getDomains(sub.year, sub.semester, sub.grade, sub.subject);
     setAllSubjectDomains(dr.data);
-  };
+    localStorage.setItem('domainPage_lastSelection', JSON.stringify({ classId: sub.class_id, domain: null }));
+  }, [isDirty, loadCriteria]);
+
+  // 마지막 선택 복원
+  useEffect(() => {
+    if (domainRestoredRef.current || subjects.length === 0) return;
+    domainRestoredRef.current = true;
+    const saved = localStorage.getItem('domainPage_lastSelection');
+    if (!saved) return;
+    try {
+      const { classId, domain } = JSON.parse(saved);
+      const sub = subjects.find(s => s.class_id === classId);
+      if (!sub) return;
+      if (domain) {
+        const isCustom = sub.customDomains.some((d: any) => d.name === domain);
+        handleSelectDomain(sub, domain, isCustom);
+      } else {
+        handleSelectSubject(sub);
+      }
+    } catch { /* ignore */ }
+  }, [subjects, handleSelectDomain, handleSelectSubject]);
 
   const handleAddCustomDomain = async (sub: SubjectItem) => {
     const name = prompt(`${sub.subject} 과목에 추가할 세특 전용 임의 영역 이름을 입력하세요:`);
@@ -309,8 +370,8 @@ export default function DomainPage() {
     await loadSubjects();
   };
 
-  const handleSave = async () => {
-    if (!selectedSubject) return;
+  const handleSave = async (): Promise<boolean> => {
+    if (!selectedSubject) return false;
     const domainToSave = selectedDomain || '__SUBJECT_COMPREHENSIVE__';
     setSaving(true);
     try {
@@ -333,8 +394,11 @@ export default function DomainPage() {
         await criteriaApi.bulkSaveEval(selectedSubject.year, selectedSubject.semester, selectedSubject.grade, selectedSubject.subject, selectedDomain, eItems);
       }
       alert('저장되었습니다.');
+      setIsDirty(false);
+      return true;
     } catch (e) {
       alert('저장 실패');
+      return false;
     } finally {
       setSaving(false);
     }
@@ -418,7 +482,7 @@ export default function DomainPage() {
         file
       );
       await loadCriteria(selectedSubject, domainName, isCustomDomain || !selectedDomain);
-      alert(`업로드 완료: 성취/평가기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 세특 기준 ${r.data.setech}개`);
+      alert(`업로드 완료: 성취 기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 기록 기준 ${r.data.setech}개`);
     } catch (err: any) {
       alert(`기준 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
     } finally {
@@ -443,19 +507,39 @@ export default function DomainPage() {
     ? `${selectedSubject.year}-${selectedSubject.semester}-${selectedSubject.grade}-${selectedSubject.subject}`
     : null;
 
-  const updateSetechItem = (idx: number, field: keyof SetechItem, value: string) => setSetechItems(p => p.map((item, i) => i === idx ? { ...item, [field]: value } : item));
-  const removeSetechItem = (idx: number) => setSetechItems(p => p.filter((_, i) => i !== idx));
+  const updateSetechItem = (idx: number, field: keyof SetechItem, value: string) => {
+    setSetechItems(p => p.map((item, i) => i === idx ? { ...item, [field]: value } : item));
+    setIsDirty(true);
+  };
+  const removeSetechItem = (idx: number) => {
+    setSetechItems(p => p.filter((_, i) => i !== idx));
+    setIsDirty(true);
+  };
 
-  const addDomainSetechItem = () => setSetechItems(p => [...p, { type: '항목', title: '', prompt: '', extensions: '', sort_order: p.length }]);
+  const addDomainSetechItem = () => {
+    setSetechItems(p => [...p, { type: '항목', title: '', prompt: '', extensions: '', sort_order: p.length }]);
+    setIsDirty(true);
+  };
 
   // 성취기준 참조 헬퍼
-  const addStandardRef = () => setStandardRefs(p => [...p, { domain_name_ref: '', code: '', content: '', level: '' }]);
-  const removeStandardRef = (idx: number) => setStandardRefs(p => p.filter((_, i) => i !== idx));
-  const updateStandardRefDomain = (idx: number, domain: string) =>
+  const addStandardRef = () => {
+    setStandardRefs(p => [...p, { domain_name_ref: '', code: '', content: '' }]);
+    setIsDirty(true);
+  };
+  const removeStandardRef = (idx: number) => {
+    setStandardRefs(p => p.filter((_, i) => i !== idx));
+    setIsDirty(true);
+  };
+  const updateStandardRefDomain = (idx: number, domain: string) => {
     setStandardRefs(p => p.map((r, i) => i === idx ? { ...r, domain_name_ref: domain, code: '', content: '', level: '' } : r));
+    setIsDirty(true);
+  };
   const updateStandardRefCode = (idx: number, code: string) => {
-    const std = achievementStandards.find(s => s.code === code);
-    setStandardRefs(p => p.map((r, i) => i === idx ? { ...r, code, content: std?.content || '', level: std?.level || '' } : r));
+    // 항상 A 레벨 행을 우선 참조
+    const candidates = achievementStandards.filter(s => s.code === code);
+    const std = candidates.find(s => s.level === 'A') ?? candidates[0];
+    setStandardRefs(p => p.map((r, i) => i === idx ? { ...r, code, content: std?.content || '' } : r));
+    setIsDirty(true);
   };
 
   // 성취기준 데이터 보조
@@ -471,11 +555,242 @@ export default function DomainPage() {
       }
       return [...prev, { type, title: type === '공통' ? '세특 공통 기준' : '종합 세특 기준', prompt, extensions: '', sort_order: type === '공통' ? 0 : 1 }];
     });
+    setIsDirty(true);
   };
 
-  const addEvalItem = () => setEvalItems(p => [...p, { name: '', excel_col: '2', item_type: 'llm', rubric: '', sort_order: p.length }]);
-  const updateEvalItem = (idx: number, field: keyof EvalItem, value: string) => setEvalItems(p => p.map((item, i) => i === idx ? { ...item, [field]: value } : item));
-  const removeEvalItem = (idx: number) => setEvalItems(p => p.filter((_, i) => i !== idx && p[i].item_type !== 'formula'));
+  const addEvalItem = () => {
+    setEvalItems(p => [...p, { name: '', score: '2', item_type: 'llm', rubric: '', sort_order: p.length }]);
+    setIsDirty(true);
+  };
+  const updateEvalItem = (idx: number, field: keyof EvalItem, value: string) => {
+    setEvalItems(p => p.map((item, i) => i === idx ? { ...item, [field]: value } : item));
+    setIsDirty(true);
+  };
+  const removeEvalItem = (idx: number) => {
+    setEvalItems(p => p.filter((_, i) => i !== idx && p[i].item_type !== 'formula'));
+    setIsDirty(true);
+  };
+
+  const handleGenerateStandards = async () => {
+    if (achievementStandards.length === 0) return alert('성취기준을 먼저 업로드하세요.');
+    const controller = overlayStore.start('성취 기준 선택 중');
+    setGeneratingStandards(true);
+    try {
+      // 코드 기준으로 중복 제거
+      const uniqueStandards: any[] = Array.from(
+        new Map(achievementStandards.map((s: any) => [s.code, s])).values()
+      );
+      const stdList = uniqueStandards.map((s: any) =>
+        `{"code":"${s.code}","domain":"${s.domain_name}","content":${JSON.stringify(s.content)}}`
+      ).join('\n');
+      const systemPrompt = `당신은 교육과정 성취기준 선택 AI입니다. 주어진 성취기준 목록에서 적합한 성취기준들을 선택하여 code 배열을 JSON으로 반환하세요. 반드시 아래 형식만 반환하세요: ["코드1","코드2",...]`;
+      const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
+      const extra = standardsMetaPrompt.trim() ? `\n추가 요청: ${standardsMetaPrompt.trim()}` : '\n위 과목과 영역에 가장 관련성 높은 성취기준을 2~4개 선택해주세요.';
+      const prompt = `${base}${extra}\n\n사용 가능한 성취기준 목록:\n${stdList}`;
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+      const codes: string[] = JSON.parse(res.data.result.replace(/```json/g, '').replace(/```/g, '').trim());
+      const selected = uniqueStandards.filter((s: any) => codes.includes(s.code));
+      if (selected.length === 0) return alert('선택된 성취기준이 없습니다. 다시 시도해보세요.');
+      setStandardRefs(selected.map((s: any) => ({
+        domain_name_ref: s.domain_name,
+        code: s.code,
+        content: s.content,
+      })));
+      setIsDirty(true);
+    } catch (e: any) {
+      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
+        alert('생성 실패: 다시 시도해주세요.');
+      }
+    } finally {
+      overlayStore.finish();
+      setGeneratingStandards(false);
+    }
+  };
+
+  const handleGenerateCommon = async (type: string, metaPrompt: string) => {
+    const label = type === '공통' ? '세특 공통 기준' : '종합 세특 기준';
+    const controller = overlayStore.start(`${label} 생성 중`);
+    try {
+      const systemPrompt = `당신은 ${label} 생성 AI입니다. 주어진 과목/조건에 맞게 AI 기록 작성 지시 프롬프트를 작성하세요. 부가적인 설명 없이 생성된 프롬프트 내용만 반환하세요.`;
+      const base = `과목: ${selectedSubject?.subject}\n기준 유형: ${label}`;
+      const extra = metaPrompt.trim() ? `\n추가 요청: ${metaPrompt.trim()}` : '';
+      const res = await aiApi.generatePrompt({ prompt: base + extra, systemPrompt }, controller.signal);
+      updateSubjectSetech(type, res.data.result.trim());
+    } catch (e: any) {
+      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
+        alert('기준 생성에 실패했습니다.');
+      }
+    } finally {
+      overlayStore.finish();
+    }
+  };
+
+  // 성취 기준 컨텍스트 문자열 빌더
+  const buildStandardsContext = () =>
+    standardRefs.filter(r => r.content).map(r => `[${r.code}] ${r.content}`).join('\n');
+
+  // 세특 공통 기준 + 채점 기준 컨텍스트 빌더
+  const buildActivityContext = () => {
+    const parts: string[] = [];
+    if (subjectCommonPrompt.trim()) {
+      parts.push(`세특 공통 기준:\n${subjectCommonPrompt.trim()}`);
+    }
+    const formulaRubric = evalItems.find(i => i.item_type === 'formula')?.rubric?.trim();
+    const itemRubrics = evalItems
+      .filter(i => i.item_type === 'llm' && (i.name || i.rubric))
+      .map(i => `  - ${i.name}(${i.score}점)${i.rubric ? `: ${i.rubric}` : ''}`)
+      .join('\n');
+    if (formulaRubric || itemRubrics) {
+      const scoringParts: string[] = [];
+      if (formulaRubric) scoringParts.push(`  공통: ${formulaRubric}`);
+      if (itemRubrics) scoringParts.push(itemRubrics);
+      parts.push(`채점 기준:\n${scoringParts.join('\n')}`);
+    }
+    return parts.join('\n\n');
+  };
+
+  // 채점 항목 목록 AI 생성 (상단 버튼)
+  const handleGenerateEvalItems = async () => {
+    const controller = overlayStore.start('채점 항목 생성 중');
+    setGeneratingEval(true);
+    try {
+      const formulaItem = evalItems.find(i => i.item_type === 'formula');
+      const stdCtx = buildStandardsContext();
+      const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
+      const stdPart = stdCtx ? `\n\n성취 기준:\n${stdCtx}` : '';
+      const maxScore = currentMaxScore > 0 ? `${currentMaxScore}점` : '미설정';
+      const baseScore = formulaItem ? `${formulaItem.score}점` : '0점';
+      const extra = evalMetaPrompts[-1]?.trim() ? `\n추가 요청: ${evalMetaPrompts[-1]}` : '';
+      const systemPrompt = `당신은 채점 기준 생성 AI입니다. 과목·영역·성취기준을 참고하여 채점 항목 목록(이름, 배점, 루브릭)을 JSON 배열로 생성하세요. 배점 합계는 만점에서 기본점수를 뺀 값이어야 합니다. 반드시 아래 형식만 반환하세요: [{"name":"항목명","score":"배점","rubric":"루브릭 내용"}]`;
+      const prompt = `${base}\n만점: ${maxScore}, 기본점수: ${baseScore}${stdPart}${extra}`;
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+      const newItems = JSON.parse(res.data.result.replace(/```json/g, '').replace(/```/g, '').trim());
+      setEvalItems(prev => {
+        const fItems = prev.filter(i => i.item_type === 'formula');
+        return [...fItems, ...newItems.map((item: any, j: number) => ({
+          name: item.name || '',
+          score: String(item.score ?? '2'),
+          rubric: item.rubric || '',
+          item_type: 'llm' as const,
+          sort_order: j,
+        }))];
+      });
+      setIsDirty(true);
+    } catch (e: any) {
+      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
+        alert('생성 실패');
+      }
+    } finally {
+      overlayStore.finish();
+      setGeneratingEval(false);
+    }
+  };
+
+  // 채점 항목 루브릭 AI 생성 (소제목 옆 버튼 - 선택/전체 항목)
+  const handleGenerateEvalRubrics = async () => {
+    const llmIndices = evalItems.map((_, i) => i).filter(i => evalItems[i].item_type !== 'formula');
+    const targets = evalChecked.size > 0 ? llmIndices.filter(i => evalChecked.has(i)) : llmIndices;
+    if (targets.length === 0) return;
+    const targetLabel = evalChecked.size > 0 ? `선택한 ${evalChecked.size}개` : `전체 ${targets.length}개`;
+    if (!confirm(`${targetLabel} 채점 루브릭을 AI로 생성하시겠습니까?`)) return;
+    const controller = overlayStore.start('채점 루브릭 생성 중');
+    overlayStore.setProgress(0, `0/${targets.length} 완료`);
+    setGeneratingEval(true);
+    try {
+      const stdCtx = buildStandardsContext();
+      const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
+      const stdPart = stdCtx ? `\n\n성취 기준:\n${stdCtx}` : '';
+      const systemPrompt = `당신은 채점 기준 생성 AI입니다. 과목·영역·성취기준·항목명·배점을 참고하여 채점 루브릭(기준 내용)을 생성하세요. 루브릭 내용만 반환하고 부가 설명은 하지 마세요.`;
+      for (let i = 0; i < targets.length; i++) {
+        if (controller.signal.aborted) break;
+        const idx = targets[i];
+        const item = evalItems[idx];
+        const extra = evalMetaPrompts[idx]?.trim() ? `\n추가 요청: ${evalMetaPrompts[idx]}` : '';
+        const prompt = `${base}\n항목명: ${item.name || '(미입력)'}\n배점: ${item.score || '?'}점${stdPart}${extra}`;
+        const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+        updateEvalItem(idx, 'rubric', res.data.result.trim());
+        overlayStore.setProgress(((i + 1) / targets.length) * 100, `${i + 1}/${targets.length} 완료`);
+      }
+    } catch (e: any) {
+      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
+        alert('생성 실패');
+      }
+    } finally {
+      overlayStore.finish();
+      setGeneratingEval(false);
+    }
+  };
+
+  // 활동 기록 항목 목록 AI 생성 (상단 버튼)
+  const handleGenerateSetechItems = async () => {
+    const controller = overlayStore.start('기록 기준 항목 생성 중');
+    setGeneratingSetech(true);
+    try {
+      const stdCtx = buildStandardsContext();
+      const actCtx = buildActivityContext();
+      const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
+      const stdPart = stdCtx ? `\n\n성취 기준:\n${stdCtx}` : '';
+      const actPart = actCtx ? `\n\n${actCtx}` : '';
+      const extra = setechMetaPrompts[-1]?.trim() ? `\n\n추가 요청: ${setechMetaPrompts[-1]}` : '';
+      const systemPrompt = `당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준을 참고하여 활동 기록 항목 목록(제목, 기록 작성 지시사항)을 JSON 배열로 생성하세요. 반드시 아래 형식만 반환하세요: [{"title":"항목명","prompt":"기록 작성 지시사항"}]`;
+      const prompt = `${base}${stdPart}${actPart}${extra}`;
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+      const newItems = JSON.parse(res.data.result.replace(/```json/g, '').replace(/```/g, '').trim());
+      setSetechItems(newItems.map((item: any, j: number) => ({
+        title: item.title || '',
+        prompt: item.prompt || '',
+        type: '항목',
+        extensions: '',
+        sort_order: j,
+      })));
+      setIsDirty(true);
+    } catch (e: any) {
+      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
+        alert('생성 실패');
+      }
+    } finally {
+      overlayStore.finish();
+      setGeneratingSetech(false);
+    }
+  };
+
+  // 활동 기록 항목 기준 AI 생성 (소제목 옆 버튼 - 선택/전체 항목)
+  const handleGenerateSetechCriteria = async () => {
+    const targets = setechChecked.size > 0
+      ? setechItems.map((_, i) => i).filter(i => setechChecked.has(i))
+      : setechItems.map((_, i) => i);
+    if (targets.length === 0) return;
+    const targetLabel = setechChecked.size > 0 ? `선택한 ${setechChecked.size}개` : `전체 ${targets.length}개`;
+    if (!confirm(`${targetLabel} 기록 작성 기준을 AI로 생성하시겠습니까?`)) return;
+    const controller = overlayStore.start('기록 작성 기준 생성 중');
+    overlayStore.setProgress(0, `0/${targets.length} 완료`);
+    setGeneratingSetech(true);
+    try {
+      const stdCtx = buildStandardsContext();
+      const actCtx = buildActivityContext();
+      const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
+      const stdPart = stdCtx ? `\n\n성취 기준:\n${stdCtx}` : '';
+      const actPart = actCtx ? `\n\n${actCtx}` : '';
+      const systemPrompt = `당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준·항목명을 참고하여 활동 기록 작성 지시사항을 생성하세요. 지시사항 내용만 반환하고 부가 설명은 하지 마세요.`;
+      for (let i = 0; i < targets.length; i++) {
+        if (controller.signal.aborted) break;
+        const idx = targets[i];
+        const item = setechItems[idx];
+        const extra = setechMetaPrompts[idx]?.trim() ? `\n\n추가 요청: ${setechMetaPrompts[idx]}` : '';
+        const prompt = `${base}\n항목명: ${item.title || '(미입력)'}${stdPart}${actPart}${extra}`;
+        const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+        updateSetechItem(idx, 'prompt', res.data.result.trim());
+        overlayStore.setProgress(((i + 1) / targets.length) * 100, `${i + 1}/${targets.length} 완료`);
+      }
+    } catch (e: any) {
+      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
+        alert('생성 실패');
+      }
+    } finally {
+      overlayStore.finish();
+      setGeneratingSetech(false);
+    }
+  };
 
   // 계산 로직
   const calculateTotal = () => {
@@ -483,9 +798,9 @@ export default function DomainPage() {
     let base = 0;
     evalItems.forEach(item => {
       if (item.item_type === 'formula') {
-        base = Number(item.excel_col) || 0;
+        base = Number(item.score) || 0;
       } else if (item.item_type === 'llm') {
-        total += Number(item.excel_col) || 0;
+        total += Number(item.score) || 0;
       }
     });
     return total + base;
@@ -500,7 +815,10 @@ export default function DomainPage() {
       {/* 좌측: 트리 */}
       <div className="w-72 border-r border-gray-200 bg-white flex flex-col shrink-0">
         <div className="p-3 border-b border-gray-200 space-y-2">
-          <h2 className="text-sm font-semibold text-gray-700">영역 관리</h2>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-gray-700">평가 영역 관리</h2>
+            <div className="h-8 w-8 shrink-0" />
+          </div>
           <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploadingDomains ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
             {uploadingDomains ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
             {uploadingDomains ? '처리 중...' : '영역 관리 파일 업로드'}
@@ -608,28 +926,84 @@ export default function DomainPage() {
               </div>
             </div>
 
+            {/* 탭 바 (영역 선택 시) */}
+            {selectedDomain && (
+              <div className="flex border-b border-gray-200 bg-white shrink-0 px-5">
+                {!isCustomDomain && (
+                  <>
+                    <button
+                      className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'standards' ? 'border-amber-500 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                      onClick={() => setActiveTab('standards')}
+                    >
+                      <Award size={14} />
+                      성취 기준
+                    </button>
+                    <button
+                      className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'scoring' ? 'border-green-500 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                      onClick={() => setActiveTab('scoring')}
+                    >
+                      <ClipboardCheck size={14} />
+                      채점 기준
+                    </button>
+                  </>
+                )}
+                <button
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'activity' ? (isCustomDomain ? 'border-purple-500 text-purple-700' : 'border-blue-500 text-blue-700') : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  onClick={() => setActiveTab('activity')}
+                >
+                  <BookOpen size={14} />
+                  기록 기준
+                </button>
+              </div>
+            )}
+
             <div className="flex-1 overflow-y-auto p-6 space-y-8">
 
-              {/* 성취/평가기준 설정 (고정 영역, 도메인 선택 시) */}
-              {!isCustomDomain && selectedDomain && (
+              {/* 성취 기준 설정 (고정 영역, 도메인 선택 시) */}
+              {!isCustomDomain && selectedDomain && (!selectedDomain || activeTab === 'standards') && (
                 <section>
-                  <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
+                  <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
                     <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                       <Award size={16} className="text-amber-500" />
-                      성취/평가기준 설정
+                      성취 기준 관리
                     </h3>
+                  </div>
+                  {achievementStandards.length === 0 ? (
+                    <p className="text-xs text-gray-400 mb-2 text-center py-2 bg-gray-50 rounded border border-dashed border-gray-200">
+                      기준 관리에 성취기준을 먼저 업로드하세요.
+                    </p>
+                  ) : (
+                    <div className="space-y-2 mb-3">
+                      <div className="flex items-center py-1">
+                        <span className="text-sm font-medium text-gray-600">항목 자동 생성</span>
+                      </div>
+                      <div className="flex gap-3">
+                        <textarea
+                          className="textarea flex-1 text-sm resize-y"
+                          style={{ minHeight: '56px' }}
+                          placeholder="AI가 성취기준을 선택할 기준을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)"
+                          value={standardsMetaPrompt}
+                          onChange={e => setStandardsMetaPrompt(e.target.value)}
+                        />
+                        <button
+                          className="btn-rainbow text-xs px-3 py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch"
+                          onClick={handleGenerateStandards}
+                          disabled={generatingStandards}
+                        >
+                          {generatingStandards ? <><Loader2 size={12} className="animate-spin" /> 생성 중…</> : <>✨ 생성</>}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between py-1 mb-2">
+                    <span className="text-sm font-medium text-gray-600">성취 기준 항목</span>
                     <button className="btn-secondary text-xs px-2 py-1" onClick={addStandardRef}>
                       <Plus size={12} /> 기준 추가
                     </button>
                   </div>
-                  {achievementStandards.length === 0 && (
-                    <p className="text-xs text-gray-400 mb-2 text-center py-2 bg-gray-50 rounded border border-dashed border-gray-200">
-                      기준 관리에 성취기준을 먼저 업로드하세요.
-                    </p>
-                  )}
                   <div className="space-y-2">
                     {standardRefs.length === 0 && achievementStandards.length > 0 && (
-                      <p className="text-center py-4 text-gray-400 text-sm">참조할 성취기준을 추가하세요.</p>
+                      <p className="text-center py-4 text-gray-400 text-sm">참조할 성취기준을 추가하거나 AI로 선택하세요.</p>
                     )}
                     {standardRefs.map((ref, idx) => {
                       const codes = uniqueCodesForDomain(ref.domain_name_ref);
@@ -677,79 +1051,149 @@ export default function DomainPage() {
               )}
 
               {/* 채점 항목 설정 (고정 영역일 때만 표시) */}
-              {!isCustomDomain && (
+              {!isCustomDomain && (!selectedDomain || activeTab === 'scoring') && (
                 <section>
-                  <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
+                  <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
                     <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                       <ClipboardCheck size={16} className="text-green-500" />
-                      채점 기준 설정
+                      채점 기준 관리
                     </h3>
-                    <button className="btn-secondary text-xs px-2 py-1" onClick={addEvalItem}>
-                      <Plus size={12} /> 채점 항목 추가
-                    </button>
                   </div>
-                  <div className="space-y-3">
-                    {evalItems.length === 0 && (
-                      <p className="text-center py-6 text-gray-400 text-sm">이 영역의 채점 기준을 추가하세요.</p>
-                    )}
-                    {evalItems.map((item, idx) => {
-                      if (item.item_type === 'formula') {
-                        return (
-                          <div key={idx} className={`border rounded-lg p-4 shadow-sm flex gap-3 items-center ${isScoreMismatch ? 'bg-red-50 border-red-300' : 'bg-blue-50 border-blue-200'}`}>
-                            <div className={`font-bold w-24 ${isScoreMismatch ? 'text-red-800' : 'text-blue-800'}`}>만점</div>
-                            <div className={`text-sm flex-1 font-medium ${isScoreMismatch ? 'text-red-700' : 'text-blue-700'}`}>
-                              {currentMaxScore}점
-                              {isScoreMismatch && <span className="ml-2 font-bold">(합계 {calculatedScore}점)</span>}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className={`text-sm font-medium ${isScoreMismatch ? 'text-red-800' : 'text-blue-800'}`}>기본점수:</span>
-                              <input
-                                className="input w-20 text-sm text-center"
-                                type="number"
-                                placeholder="0"
-                                value={item.excel_col}
-                                onChange={e => updateEvalItem(idx, 'excel_col', e.target.value)}
-                              />
-                            </div>
-                          </div>
-                        );
-                      }
-
+                  <div className="space-y-4">
+                    {/* 만점 행 */}
+                    {(() => {
+                      const formulaIdx = evalItems.findIndex(i => i.item_type === 'formula');
+                      if (formulaIdx < 0) return null;
+                      const formulaItem = evalItems[formulaIdx];
                       return (
-                        <div key={idx} className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm flex gap-3 items-start">
-                          <div className="flex-1 space-y-3">
-                            <div className="flex gap-4 items-center">
-                              <input
-                                className="input flex-1 text-sm font-medium"
-                                placeholder="채점 항목명 (예: 코드 완성도)"
-                                value={item.name}
-                                onChange={(e) => updateEvalItem(idx, 'name', e.target.value)}
-                              />
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className="text-sm text-gray-600">배점:</span>
-                                <input
-                                  className="input w-16 text-sm text-center"
-                                  type="number"
-                                  placeholder="2"
-                                  value={item.excel_col}
-                                  onChange={(e) => updateEvalItem(idx, 'excel_col', e.target.value)}
-                                />
-                              </div>
-                            </div>
-                            <textarea
-                              className="textarea w-full text-sm leading-relaxed"
-                              rows={3}
-                              placeholder="루브릭 (채점 기준) (예: A(10점): 코드가 완벽히 동작하고 예외 처리가 됨, B(8점): ...)"
-                              value={item.rubric}
-                              onChange={(e) => updateEvalItem(idx, 'rubric', e.target.value)}
+                        <div className={`border rounded-lg p-4 shadow-sm flex gap-3 items-center ${isScoreMismatch ? 'bg-red-50 border-red-300' : 'bg-blue-50 border-blue-200'}`}>
+                          <div className={`font-bold w-24 ${isScoreMismatch ? 'text-red-800' : 'text-blue-800'}`}>만점</div>
+                          <div className={`text-sm flex-1 font-medium ${isScoreMismatch ? 'text-red-700' : 'text-blue-700'}`}>
+                            {currentMaxScore}점
+                            {isScoreMismatch && <span className="ml-2 font-bold">(합계 {calculatedScore}점)</span>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-sm font-medium ${isScoreMismatch ? 'text-red-800' : 'text-blue-800'}`}>기본점수:</span>
+                            <input
+                              className="input w-20 text-sm text-center"
+                              type="number"
+                              placeholder="0"
+                              value={formulaItem.score}
+                              onChange={e => updateEvalItem(formulaIdx, 'score', e.target.value)}
                             />
                           </div>
-                          <button
-                            className="p-1.5 hover:bg-red-50 text-red-400 rounded mt-1 transition-colors shrink-0"
-                            onClick={() => removeEvalItem(idx)}
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                        </div>
+                      );
+                    })()}
+
+                    {/* 항목 자동 생성 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center py-1">
+                        <span className="text-sm font-medium text-gray-600">항목 자동 생성</span>
+                      </div>
+                      <div className="flex gap-3">
+                        <textarea
+                          className="textarea flex-1 text-sm leading-relaxed resize-y"
+                          style={{ minHeight: '72px' }}
+                          placeholder="채점 항목을 AI로 생성할 내용을 입력하세요. (예: 코드 기반 수행평가, 4단계 루브릭으로)"
+                          value={evalMetaPrompts[-1] || ''}
+                          onChange={e => setEvalMetaPrompts(p => ({ ...p, [-1]: e.target.value }))}
+                        />
+                        <button
+                          className="btn-rainbow text-xs px-3 py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch"
+                          onClick={handleGenerateEvalItems}
+                          disabled={generatingEval}
+                          title="AI로 채점 항목 목록 생성"
+                        >
+                          {generatingEval ? <><Loader2 size={12} className="animate-spin" /> 생성 중…</> : <>✨ 생성</>}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 채점 기준 항목 소제목 + 루브릭 AI 버튼 + 수동 추가 버튼 */}
+                    <div className="flex items-center justify-between py-1">
+                      <span className="text-sm font-medium text-gray-600">채점 기준 항목</span>
+                      <div className="flex gap-2">
+                        <button
+                          className="btn-rainbow text-xs px-2 py-1 flex items-center gap-1"
+                          onClick={handleGenerateEvalRubrics}
+                          disabled={generatingEval || evalItems.filter(i => i.item_type !== 'formula').length === 0}
+                        >
+                          {generatingEval ? <><Loader2 size={12} className="animate-spin" /> 생성 중…</> : <>✨ 생성</>}
+                        </button>
+                        <button className="btn-secondary text-xs px-2 py-1" onClick={addEvalItem}>
+                          <Plus size={12} /> 채점 항목 추가
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 채점 항목 목록 */}
+                    {evalItems.filter(i => i.item_type !== 'formula').length === 0 && (
+                      <p className="text-center py-6 text-gray-400 text-sm">채점 항목을 추가하거나 AI로 생성하세요.</p>
+                    )}
+                    {evalItems.map((item, idx) => {
+                      if (item.item_type === 'formula') return null;
+                      const isChecked = evalChecked.has(idx);
+                      return (
+                        <div key={idx} className={`bg-white border rounded-lg p-4 shadow-sm ${isChecked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-gray-200'}`}>
+                          {/* 항목 헤더 */}
+                          <div className="flex gap-3 items-center mb-3">
+                            <input
+                              type="checkbox"
+                              className="w-4 h-4 shrink-0 accent-blue-500"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const next = new Set(evalChecked);
+                                if (e.target.checked) next.add(idx); else next.delete(idx);
+                                setEvalChecked(next);
+                              }}
+                            />
+                            <input
+                              className="input flex-1 text-sm font-medium"
+                              placeholder="채점 항목명 (예: 코드 완성도)"
+                              value={item.name}
+                              onChange={(e) => updateEvalItem(idx, 'name', e.target.value)}
+                            />
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-sm text-gray-600">배점:</span>
+                              <input
+                                className="input w-16 text-sm text-center"
+                                type="number"
+                                placeholder="2"
+                                value={item.score}
+                                onChange={(e) => updateEvalItem(idx, 'score', e.target.value)}
+                              />
+                            </div>
+                            <button
+                              className="p-1.5 hover:bg-red-50 text-red-400 rounded transition-colors shrink-0"
+                              onClick={() => removeEvalItem(idx)}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                          {/* 프롬프트 입력 | 루브릭 */}
+                          <div className="flex gap-3 items-start">
+                            <div className="flex-1 flex flex-col gap-1">
+                              <span className="text-xs text-gray-500 font-medium">지시 사항</span>
+                              <textarea
+                                className="textarea w-full text-sm leading-relaxed resize-y"
+                                style={{ minHeight: '80px' }}
+                                placeholder="루브릭을 AI로 생성할 내용을 입력하세요. (예: 코드 완성도 기준으로 4단계로 나눠줘)"
+                                value={evalMetaPrompts[idx] || ''}
+                                onChange={e => setEvalMetaPrompts(p => ({ ...p, [idx]: e.target.value }))}
+                              />
+                            </div>
+                            <div className="flex-1 flex flex-col gap-1">
+                              <span className="text-xs text-gray-500 font-medium">루브릭 (채점 기준)</span>
+                              <textarea
+                                className="textarea w-full text-sm leading-relaxed resize-y"
+                                style={{ minHeight: '80px' }}
+                                placeholder="루브릭 내용 (예: A(10점): 코드가 완벽히 동작하고 예외 처리가 됨, B(8점): ...)"
+                                value={item.rubric}
+                                onChange={(e) => updateEvalItem(idx, 'rubric', e.target.value)}
+                              />
+                            </div>
+                          </div>
                         </div>
                       );
                     })}
@@ -757,31 +1201,80 @@ export default function DomainPage() {
                 </section>
               )}
 
-              {/* 세특 항목 설정 */}
-              <section>
-                <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
+              {/* 활동 기록 기준 설정 / 세특 기준 설정 */}
+              {(!selectedDomain || activeTab === 'activity') && <section>
+                <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
                   <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                     <BookOpen size={16} className={isCustomDomain ? 'text-purple-500' : 'text-blue-500'} />
-                    세특 기준 설정
+                    {selectedDomain ? '기록 기준 관리' : '기록 기준 관리'}
                   </h3>
-                  {selectedDomain && (
-                    <button className="btn-secondary text-xs px-2 py-1" onClick={addDomainSetechItem}>
-                      <Plus size={12} /> 항목 추가
-                    </button>
-                  )}
                 </div>
 
                 {selectedDomain ? (
-                  // 도메인 레벨 세특 설정
-                  <div className="space-y-3">
+                  // 도메인 레벨 활동 기준 설정
+                  <div className="space-y-4">
+                    {/* 항목 자동 생성 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center py-1">
+                        <span className="text-sm font-medium text-gray-600">항목 자동 생성</span>
+                      </div>
+                      <div className="flex gap-3">
+                        <textarea
+                          className="textarea flex-1 text-sm leading-relaxed resize-y"
+                          style={{ minHeight: '72px' }}
+                          placeholder="기록 기준 항목을 AI로 생성할 내용을 입력하세요. (예: 보고서와 코드를 각각 기록하는 항목으로 구성)"
+                          value={setechMetaPrompts[-1] || ''}
+                          onChange={e => setSetechMetaPrompts(p => ({ ...p, [-1]: e.target.value }))}
+                        />
+                        <button
+                          className="btn-rainbow text-xs px-3 py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch"
+                          onClick={handleGenerateSetechItems}
+                          disabled={generatingSetech}
+                          title="AI로 기록 기준 항목 목록 생성"
+                        >
+                          {generatingSetech ? <><Loader2 size={12} className="animate-spin" /> 생성 중…</> : <>✨ 생성</>}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 기록 기준 항목 소제목 + 기준 AI 버튼 + 수동 추가 버튼 */}
+                    <div className="flex items-center justify-between py-1">
+                      <span className="text-sm font-medium text-gray-600">기록 기준 항목</span>
+                      <div className="flex gap-2">
+                        <button
+                          className="btn-rainbow text-xs px-2 py-1 flex items-center gap-1"
+                          onClick={handleGenerateSetechCriteria}
+                          disabled={generatingSetech || setechItems.length === 0}
+                        >
+                          {generatingSetech ? <><Loader2 size={12} className="animate-spin" /> 생성 중…</> : <>✨ 생성</>}
+                        </button>
+                        <button className="btn-secondary text-xs px-2 py-1" onClick={addDomainSetechItem}>
+                          <Plus size={12} /> 항목 추가
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 활동 항목 목록 */}
                     {setechItems.length === 0 && (
-                      <p className="text-center py-6 text-gray-400 text-sm">이 영역의 세특 항목을 추가하세요.</p>
+                      <p className="text-center py-6 text-gray-400 text-sm">활동 기록 항목을 추가하거나 AI로 생성하세요.</p>
                     )}
                     {setechItems.map((item, idx) => {
+                      const isChecked = setechChecked.has(idx);
                       return (
-                        <div key={idx} className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
+                        <div key={idx} className={`bg-white border rounded-lg p-4 shadow-sm ${isChecked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-gray-200'}`}>
+                          {/* 항목 헤더 */}
                           <div className="flex items-center gap-3 mb-3">
-                            <GripVertical size={16} className="text-gray-300 cursor-grab" />
+                            <input
+                              type="checkbox"
+                              className="w-4 h-4 shrink-0 accent-blue-500"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const next = new Set(setechChecked);
+                                if (e.target.checked) next.add(idx); else next.delete(idx);
+                                setSetechChecked(next);
+                              }}
+                            />
+                            <GripVertical size={16} className="text-gray-300 cursor-grab shrink-0" />
                             <input
                               className="input flex-1 text-sm font-medium"
                               placeholder="항목 이름 (예: 자료수집 및 분석)"
@@ -789,19 +1282,35 @@ export default function DomainPage() {
                               onChange={(e) => updateSetechItem(idx, 'title', e.target.value)}
                             />
                             <button
-                              className="p-1.5 hover:bg-red-50 text-red-400 rounded transition-colors"
+                              className="p-1.5 hover:bg-red-50 text-red-400 rounded transition-colors shrink-0"
                               onClick={() => removeSetechItem(idx)}
                             >
-                              <Trash2 size={16} />
+                              <Trash2 size={15} />
                             </button>
                           </div>
-                          <textarea
-                            className="textarea w-full text-sm leading-relaxed"
-                            rows={4}
-                            placeholder="이 항목의 기록 작성 기준을 입력하세요. (예: 학생이 제출한 산출물을 분석하여 성취수준을 평가하고...)"
-                            value={item.prompt}
-                            onChange={(e) => updateSetechItem(idx, 'prompt', e.target.value)}
-                          />
+                          {/* 프롬프트 입력 | 기록 작성 기준 */}
+                          <div className="flex gap-3 items-start">
+                            <div className="flex-1 flex flex-col gap-1">
+                              <span className="text-xs text-gray-500 font-medium">지시 사항</span>
+                              <textarea
+                                className="textarea w-full text-sm leading-relaxed resize-y"
+                                style={{ minHeight: '90px' }}
+                                placeholder="이 항목의 기준을 AI로 생성할 내용을 입력하세요. (예: 학생의 탐구 과정 중심으로 작성 기준 생성)"
+                                value={setechMetaPrompts[idx] || ''}
+                                onChange={e => setSetechMetaPrompts(p => ({ ...p, [idx]: e.target.value }))}
+                              />
+                            </div>
+                            <div className="flex-1 flex flex-col gap-1">
+                              <span className="text-xs text-gray-500 font-medium">기록 작성 기준</span>
+                              <textarea
+                                className="textarea w-full text-sm leading-relaxed resize-y"
+                                style={{ minHeight: '90px' }}
+                                placeholder="이 항목의 기록 작성 기준 (예: 학생이 제출한 산출물을 분석하여 성취수준을 평가하고...)"
+                                value={item.prompt}
+                                onChange={(e) => updateSetechItem(idx, 'prompt', e.target.value)}
+                              />
+                            </div>
+                          </div>
                         </div>
                       );
                     })}
@@ -864,32 +1373,71 @@ export default function DomainPage() {
 
                     {/* 세특 공통/종합 기준 */}
                     <div className="space-y-4">
-                      <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
-                        <div className="mb-2 font-medium text-gray-700 text-sm">세특 공통 기준</div>
-                        <p className="text-xs text-gray-500 mb-3">모든 영역별 세특 및 종합 세특을 작성할 때 AI에게 공통으로 지시할 프롬프트를 입력하세요.</p>
-                        <textarea
-                          className="textarea w-full text-sm leading-relaxed"
-                          rows={5}
-                          placeholder="공통 지시사항을 입력하세요. (예: 학생의 긍정적인 면을 부각하고, ~이다. 체로 작성할 것 등)"
-                          value={setechItems.find(i => i.type === '공통')?.prompt || ''}
-                          onChange={(e) => updateSubjectSetech('공통', e.target.value)}
-                        />
-                      </div>
-                      <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
-                        <div className="mb-2 font-medium text-gray-700 text-sm">종합 세특 기준</div>
-                        <p className="text-xs text-gray-500 mb-3">각 영역별 수행 내용(학생 산출물 및 채점 결과)을 모두 종합하여 최종 학기말 세특을 작성할 때 사용할 프롬프트를 입력하세요.</p>
-                        <textarea
-                          className="textarea w-full text-sm leading-relaxed"
-                          rows={6}
-                          placeholder="종합 세특 지시사항을 입력하세요. (예: 전체 영역의 성취도를 바탕으로 학생의 전반적인 교과 역량을 1500바이트 내외로 종합하여 작성하라...)"
-                          value={setechItems.find(i => i.type === '종합')?.prompt || ''}
-                          onChange={(e) => updateSubjectSetech('종합', e.target.value)}
-                        />
-                      </div>
+                      {['공통', '종합'].map((type) => {
+                        const item = setechItems.find(i => i.type === type);
+                        let metaPrompt = '';
+                        try { metaPrompt = JSON.parse(item?.extensions || '{}').metaPrompt || ''; } catch { }
+                        const label = type === '공통' ? '세특 공통 기준' : '종합 세특 기준';
+                        const desc = type === '공통'
+                          ? '모든 영역별 세특 및 종합 세특을 작성할 때 AI에게 공통으로 지시할 프롬프트입니다.'
+                          : '최종 학기말 세특을 작성할 때 사용할 프롬프트입니다.';
+
+                        return (
+                          <div key={type} className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                            <div className="flex items-center gap-2 mb-3">
+                              <BookOpen size={14} className="text-blue-400" />
+                              <span className="font-medium text-gray-700 text-sm">{label}</span>
+                              <span className="text-xs text-gray-400 ml-1">{desc}</span>
+                            </div>
+                            <div className="grid gap-x-2 gap-y-1" style={{ gridTemplateColumns: '1fr auto 1fr' }}>
+                              <span className="text-xs text-gray-500 font-medium">지시 사항</span>
+                              <div />
+                              <span className="text-xs text-gray-500 font-medium">생성된 기준</span>
+                              <textarea
+                                className="textarea w-full text-sm leading-relaxed resize-y"
+                                style={{ minHeight: '100px' }}
+                                placeholder={`${label}을 AI로 생성할 내용을 입력하세요.`}
+                                value={metaPrompt}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setSetechItems(prev => {
+                                    if (prev.find(i => i.type === type)) {
+                                      return prev.map(i => {
+                                        if (i.type === type) {
+                                          const ext = { ...JSON.parse(i.extensions || '{}'), metaPrompt: val };
+                                          return { ...i, extensions: JSON.stringify(ext) };
+                                        }
+                                        return i;
+                                      });
+                                    }
+                                    return [...prev, { type, title: label, prompt: '', extensions: JSON.stringify({ metaPrompt: val }), sort_order: type === '공통' ? 0 : 1 }];
+                                  });
+                                  setIsDirty(true);
+                                }}
+                              />
+                              <button
+                                className="btn-rainbow px-3 text-xs flex items-center justify-center gap-1 whitespace-nowrap"
+                                style={{ alignSelf: 'stretch' }}
+                                onClick={() => handleGenerateCommon(type, metaPrompt)}
+                                title={`AI로 ${label} 생성`}
+                              >
+                                ✨ 생성
+                              </button>
+                              <textarea
+                                className="textarea w-full text-sm leading-relaxed resize-y"
+                                style={{ minHeight: '100px' }}
+                                placeholder="생성된 기준이 여기에 표시됩니다. 직접 수정도 가능합니다."
+                                value={item?.prompt || ''}
+                                onChange={(e) => updateSubjectSetech(type, e.target.value)}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
-              </section>
+              </section>}
 
             </div>
           </>

@@ -3,7 +3,7 @@ import { recordsApi, criteriaApi, classesApi, aiApi } from '../lib/api';
 import { useAiBatchStore } from '../stores/aiBatchStore';
 import {
   Download, Loader2, Users, ChevronRight, ChevronDown, Folder,
-  FileSpreadsheet, Bot, Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen
+  FileSpreadsheet, Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen, Square
 } from 'lucide-react';
 
 const ArtifactViewer = lazy(() => import('../components/ArtifactViewer'));
@@ -28,7 +28,7 @@ interface Student {
 
 interface EvalItem {
   name: string;
-  excel_col: string;
+  score: string;
   item_type: 'llm' | 'formula';
   sort_order: number;
 }
@@ -56,6 +56,7 @@ interface TreeNode {
   classItem?: ClassItem;
   label: string;
   children?: TreeNode[];
+  path?: string; // unique key for open/close state sharing
 }
 
 function buildTree(classes: ClassItem[], subjects: any[]): TreeNode[] {
@@ -64,7 +65,7 @@ function buildTree(classes: ClassItem[], subjects: any[]): TreeNode[] {
 
   for (const c of classes) {
     if (!yMap.has(c.year)) {
-      const node: TreeNode = { year: c.year, label: `${c.year}학년도`, children: [] };
+      const node: TreeNode = { year: c.year, label: `${c.year}학년도`, children: [], path: `y${c.year}` };
       yMap.set(c.year, node);
       result.push(node);
     }
@@ -72,19 +73,19 @@ function buildTree(classes: ClassItem[], subjects: any[]): TreeNode[] {
 
     let sNode = yNode.children!.find(n => n.semester === c.semester);
     if (!sNode) {
-      sNode = { semester: c.semester, label: `${c.semester}학기`, children: [] };
+      sNode = { semester: c.semester, label: `${c.semester}학기`, children: [], path: `y${c.year}s${c.semester}` };
       yNode.children!.push(sNode);
     }
 
     let gNode = sNode.children!.find(n => n.grade === c.grade);
     if (!gNode) {
-      gNode = { grade: c.grade, label: `${c.grade}학년`, children: [] };
+      gNode = { grade: c.grade, label: `${c.grade}학년`, children: [], path: `y${c.year}s${c.semester}g${c.grade}` };
       sNode.children!.push(gNode);
     }
 
     let subNode = gNode.children!.find(n => n.subject === c.subject);
     if (!subNode) {
-      subNode = { subject: c.subject, label: c.subject, children: [] };
+      subNode = { subject: c.subject, label: c.subject, children: [], path: `y${c.year}s${c.semester}g${c.grade}_${c.subject}` };
       gNode.children!.push(subNode);
     }
 
@@ -108,11 +109,11 @@ function roomIconLabel(room: string) {
 
 function sortClassesForCollapsedTree(items: ClassItem[]) {
   return [...items].sort((a, b) =>
-    a.grade - b.grade ||
-    roomIconLabel(a.room).localeCompare(roomIconLabel(b.room), 'ko', { numeric: true }) ||
-    a.subject.localeCompare(b.subject, 'ko') ||
     a.year - b.year ||
-    a.semester - b.semester
+    a.semester - b.semester ||
+    a.grade - b.grade ||
+    a.subject.localeCompare(b.subject, 'ko') ||
+    roomIconLabel(a.room).localeCompare(roomIconLabel(b.room), 'ko', { numeric: true })
   );
 }
 
@@ -124,7 +125,7 @@ const FROZEN_DEFAULT_WIDTHS = {
 };
 
 function getDomainColumnDefaultWidth(type: string) {
-  if (type === 'setech') return 200;
+  if (type === 'setech' || type === 'setech_item') return 200;
   if (type === 'artifact') return 56;
   if (type === 'total') return 64;
   return 80;
@@ -132,7 +133,7 @@ function getDomainColumnDefaultWidth(type: string) {
 
 function TreeNodeView({
   node, depth, selectedClassId, selectedDomain, onSelectDomain, onSelectClass,
-  onDeleteClass, onDeleteScoring, onDeleteSetech
+  onDeleteClass, onDeleteScoring, onDeleteSetech, openStates, onToggleOpen
 }: {
   node: TreeNode;
   depth: number;
@@ -143,9 +144,11 @@ function TreeNodeView({
   onDeleteClass: (c: ClassItem) => void;
   onDeleteScoring: (c: ClassItem) => void;
   onDeleteSetech: (c: ClassItem) => void;
+  openStates: Record<string, boolean>;
+  onToggleOpen: (path: string) => void;
 }) {
   const isRoom = !!node.room;
-  const [open, setOpen] = useState(true);
+  const open = node.path ? (openStates[node.path] ?? true) : true;
   const pl = `${8 + depth * 14}px`;
 
   const isRoomSelected = isRoom && selectedClassId === node.classItem!.id;
@@ -159,7 +162,7 @@ function TreeNodeView({
         onClick={() => { if (isRoom) onSelectClass(node.classItem!); }}
       >
         {!isRoom && (
-          <div onClick={(e) => { e.stopPropagation(); setOpen(!open); }} className="p-0.5 hover:bg-gray-200 rounded text-gray-400">
+          <div onClick={(e) => { e.stopPropagation(); if (node.path) onToggleOpen(node.path); }} className="p-0.5 hover:bg-gray-200 rounded text-gray-400">
             {open ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
           </div>
         )}
@@ -204,6 +207,8 @@ function TreeNodeView({
           onDeleteClass={onDeleteClass}
           onDeleteScoring={onDeleteScoring}
           onDeleteSetech={onDeleteSetech}
+          openStates={openStates}
+          onToggleOpen={onToggleOpen}
         />
       ))}
     </div>
@@ -222,6 +227,7 @@ export default function RecordsPage() {
 
   const [contents, setContents] = useState<Record<string, any>>({});
   const [evalItemsMap, setEvalItemsMap] = useState<Record<string, EvalItem[]>>({});
+  const [setechItemsMap, setSetechItemsMap] = useState<Record<string, Array<{ title: string }>>>({});
 
   const [saving, setSaving] = useState(false);
   const [uploadingZip, setUploadingZip] = useState(false);
@@ -230,6 +236,7 @@ export default function RecordsPage() {
   const [spellcheckingIds, setSpellcheckingIds] = useState<Set<number>>(new Set());
   const [spellcheckResults, setSpellcheckResults] = useState<Record<number, SpellcheckResult>>({});
   const [spellcheckProgress, setSpellcheckProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [spellcheckStopping, setSpellcheckStopping] = useState(false);
   const [showScoring, setShowScoring] = useState(true);
   const [showSetech, setShowSetech] = useState(true);
   const [domainFilter, setDomainFilter] = useState<string>('all');
@@ -241,7 +248,14 @@ export default function RecordsPage() {
   const [uploadMsg, setUploadMsg] = useState<{ type: 'success' | 'warn' | 'error'; text: string } | null>(null);
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem('hideRecordsGuide') !== '1');
   const [treeCollapsed, setTreeCollapsed] = useState(() => localStorage.getItem('recordsTreeCollapsed') === '1');
+  const [treeOpenStates, setTreeOpenStates] = useState<Record<string, boolean>>({});
   const classFilesRef = useRef<HTMLInputElement>(null);
+  const spellcheckAbortRef = useRef<AbortController | null>(null);
+  const recordsRestoredRef = useRef(false);
+
+  const getNodeOpen = (path: string) => path in treeOpenStates ? treeOpenStates[path] : true;
+  const toggleNodeOpen = (path: string) =>
+    setTreeOpenStates(prev => ({ ...prev, [path]: !(path in prev ? prev[path] : true) }));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fullRecordsInputRef = useRef<HTMLInputElement>(null);
@@ -250,7 +264,6 @@ export default function RecordsPage() {
   const aiBatchJob = useAiBatchStore(state => state.currentJob);
   const aiBatchUpdates = useAiBatchStore(state => state.updates);
   const startAiBatch = useAiBatchStore(state => state.startBatch);
-  const stopAiBatch = useAiBatchStore(state => state.stopBatch);
   const isAiCellLocked = useAiBatchStore(state => state.isCellLocked);
   const appliedUpdateCountRef = useRef(0);
   const batchGenerating = aiBatchJob?.status === 'running' || aiBatchJob?.status === 'stopping';
@@ -273,17 +286,34 @@ export default function RecordsPage() {
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
   const handleKeyNav = (e: React.KeyboardEvent, ri: number, ci: number) => {
-    const isTA = (e.currentTarget as HTMLElement).tagName === 'TEXTAREA';
-    let dr = 0, dc = 0;
-    if (e.key === 'ArrowUp') dr = -1;
-    else if (e.key === 'ArrowDown') dr = 1;
-    else if (!isTA && e.key === 'ArrowLeft') dc = -1;
-    else if (!isTA && e.key === 'ArrowRight') dc = 1;
-    else return;
-    const t = tableRef.current?.querySelector<HTMLElement>(
-      `[data-row="${ri + dr}"][data-col="${ci + dc}"]`
-    );
-    if (t) { e.preventDefault(); t.focus(); }
+    if (e.key !== 'Tab' && e.key !== 'Enter') return;
+
+    const cells = Array.from(
+      tableRef.current?.querySelectorAll<HTMLElement>('[data-row][data-col]:not(:disabled)') ?? []
+    ).sort((a, b) => {
+      const ar = Number(a.dataset.row ?? 0);
+      const br = Number(b.dataset.row ?? 0);
+      if (ar !== br) return ar - br;
+      return Number(a.dataset.col ?? 0) - Number(b.dataset.col ?? 0);
+    });
+    if (!cells.length) return;
+
+    let target: HTMLElement | undefined;
+    if (e.key === 'Tab') {
+      const currentIndex = cells.findIndex(cell => Number(cell.dataset.row) === ri && Number(cell.dataset.col) === ci);
+      if (currentIndex < 0) return;
+      target = cells[currentIndex + (e.shiftKey ? -1 : 1)];
+    } else {
+      const direction = e.shiftKey ? -1 : 1;
+      const sameColumnCells = cells.filter(cell => Number(cell.dataset.col) === ci);
+      target = direction > 0
+        ? sameColumnCells.find(cell => Number(cell.dataset.row) > ri)
+        : sameColumnCells.reverse().find(cell => Number(cell.dataset.row) < ri);
+    }
+
+    if (!target) return;
+    e.preventDefault();
+    target.focus();
   };
 
   const loadData = useCallback(async () => {
@@ -347,6 +377,19 @@ export default function RecordsPage() {
     }
     setEvalItemsMap(eMap);
 
+    // Load setech activity items for all domains
+    const siMap: Record<string, Array<{ title: string }>> = {};
+    const allDoms = [...subj.fixedDomains, ...subj.customDomains];
+    await Promise.all(allDoms.map(async (d: any) => {
+      try {
+        const sr = await criteriaApi.getSetech(c.year, c.semester, c.grade, c.subject, d.name);
+        siMap[d.name] = (sr.data as any[])
+          .filter(i => i.type === '항목' && i.title)
+          .map(i => ({ title: i.title }));
+      } catch { siMap[d.name] = []; }
+    }));
+    setSetechItemsMap(siMap);
+
     // Load all content
     const cr = await fetch(`/api/records/classes/${c.id}/content`);
     const cData = await cr.json() as ContentItem[];
@@ -369,8 +412,19 @@ export default function RecordsPage() {
     if (hasScoring && !hasSetech) { setShowScoring(true); setShowSetech(false); }
     else if (!hasScoring && hasSetech) { setShowScoring(false); setShowSetech(true); }
     else { setShowScoring(true); setShowSetech(true); }
+    localStorage.setItem('recordsPage_lastClassId', String(c.id));
     await loadDomainData(c);
   }, [loadDomainData]);
+
+  // 마지막 선택 강의실 복원
+  useEffect(() => {
+    if (recordsRestoredRef.current || classes.length === 0 || subjects.length === 0) return;
+    recordsRestoredRef.current = true;
+    const savedId = localStorage.getItem('recordsPage_lastClassId');
+    if (!savedId) return;
+    const cls = classes.find(c => c.id === Number(savedId));
+    if (cls) handleSelectClass(cls);
+  }, [classes, subjects, handleSelectClass]);
 
   const handleClassFilesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -504,7 +558,7 @@ export default function RecordsPage() {
         let total = 0;
         let base = 0;
         evalItemsMap[explicitDomain].forEach(item => {
-          if (item.item_type === 'formula') base = Number(item.excel_col) || 0;
+          if (item.item_type === 'formula') base = Number(item.score) || 0;
           else if (item.item_type === 'llm') total += (Number(newObj[item.name]) || 0);
         });
         newObj['total'] = total + base;
@@ -565,17 +619,17 @@ export default function RecordsPage() {
     appliedUpdateCountRef.current = aiBatchUpdates.length;
   }, [aiBatchUpdates, selectedClass, students]);
 
-  const runSpellcheckComprehensive = async (studentId: number, text: string) => {
+  const runSpellcheckComprehensive = async (studentId: number, text: string, signal?: AbortSignal) => {
     const trimmed = text.trim();
     if (!trimmed) {
-      alert('맞춤법 검사할 종합 세특 내용이 없습니다.');
+      alert('맞춤법 검사할 세특 내용이 없습니다.');
       return;
     }
 
     setSpellcheckingIds(prev => new Set(prev).add(studentId));
 
     try {
-      const res = await aiApi.spellcheck({ text });
+      const res = await aiApi.spellcheck({ text }, signal);
       setSpellcheckResults(prev => ({
         ...prev,
         [studentId]: {
@@ -585,6 +639,7 @@ export default function RecordsPage() {
         },
       }));
     } catch (err: any) {
+      if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return;
       const message = err?.response?.data?.error || '맞춤법 검사 중 오류가 발생했습니다.';
       alert(message);
     } finally {
@@ -600,17 +655,23 @@ export default function RecordsPage() {
     const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
     if (!targetStudents.length) return;
 
+    const controller = new AbortController();
+    spellcheckAbortRef.current = controller;
+    setSpellcheckStopping(false);
     setSpellcheckProgress({ completed: 0, total: targetStudents.length });
     try {
       for (let i = 0; i < targetStudents.length; i++) {
+        if (controller.signal.aborted) break;
         const student = targetStudents[i];
         const key = `${student.id}_setech___SUBJECT_COMPREHENSIVE__`;
         const text = contents[key]?.text || '';
-        if (text.trim()) await runSpellcheckComprehensive(student.id, text);
+        if (text.trim()) await runSpellcheckComprehensive(student.id, text, controller.signal);
         setSpellcheckProgress({ completed: i + 1, total: targetStudents.length });
       }
     } finally {
       setSpellcheckProgress(null);
+      setSpellcheckStopping(false);
+      spellcheckAbortRef.current = null;
     }
   };
 
@@ -677,7 +738,7 @@ export default function RecordsPage() {
 
   const handleDeleteContent = async () => {
     if (!selectedClass) return;
-    
+
     const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
     if (targetStudents.length === 0) return;
 
@@ -686,10 +747,10 @@ export default function RecordsPage() {
     if (showSetech) contentTypes.push('setech');
     if (contentTypes.length === 0) return;
 
-    const domainLabel = domainFilter === 'all' ? '전체 영역' : (domainFilter === '__SUBJECT_COMPREHENSIVE__' ? '종합 세특' : domainFilter);
-    const typeLabel = contentTypes.includes('scoring') && contentTypes.includes('setech') ? '채점 및 활동/세특' : (contentTypes.includes('scoring') ? '채점' : '활동/세특');
+    const domainLabel = domainFilter === 'all' ? '전체 영역' : (domainFilter === '__SUBJECT_COMPREHENSIVE__' ? '세특' : domainFilter);
+    const typeLabel = contentTypes.includes('scoring') && contentTypes.includes('setech') ? '채점 및 기록/세특' : (contentTypes.includes('scoring') ? '채점' : '기록/세특');
     const targetLabel = selectedStudents.length > 0 ? `선택한 ${targetStudents.length}명` : `${targetStudents.length}명 전체`;
-    
+
     if (!confirm(`${targetLabel}의 "${domainLabel}" ${typeLabel} 기록 데이터를 정말 삭제하시겠습니까?\n(학생 명단은 유지되며 생성된 기록 내용만 삭제됩니다)`)) return;
 
     setDeleting(true);
@@ -700,7 +761,7 @@ export default function RecordsPage() {
         domain: domainFilter !== 'all' ? domainFilter : undefined,
         contentTypes
       });
-      
+
       await loadDomainData(selectedClass);
       alert('삭제되었습니다.');
     } catch (e) {
@@ -732,9 +793,9 @@ export default function RecordsPage() {
 
     const domainLabel = domainsToProcess.length > 1
       ? `전체 ${domainsToProcess.length}개 영역`
-      : (domainsToProcess[0] === '__SUBJECT_COMPREHENSIVE__' ? '종합 세특' : domainsToProcess[0]);
+      : (domainsToProcess[0] === '__SUBJECT_COMPREHENSIVE__' ? '세특' : domainsToProcess[0]);
     const typeLabel = type === 'setech'
-      ? (explicitDomain === '__SUBJECT_COMPREHENSIVE__' ? '세특' : '활동')
+      ? (explicitDomain === '__SUBJECT_COMPREHENSIVE__' ? '세특' : '기록')
       : '채점';
     const targetLabel = selectedStudents.length > 0 ? `선택한 ${targetStudents.length}명` : `${targetStudents.length}명 전체`;
     if (!confirm(`${targetLabel} "${domainLabel}" ${typeLabel} 일괄 생성하시겠습니까?`)) return;
@@ -859,15 +920,15 @@ export default function RecordsPage() {
     const visibleDomains = domainFilter === 'all' ? allDomains : allDomains.filter((d: any) => d.name === domainFilter);
 
     let fi = 0;
-    const domainCols = new Map<string, Array<{ id: string; label: string; type: string; fi: number }>>();
+    const domainCols = new Map<string, Array<{ id: string; label: string; type: string; fi: number; itemTitle?: string }>>();
     for (const d of visibleDomains) {
       const isFixed = !!fixedDomains.find((fd: any) => fd.name === d.name);
       const evalList = (evalItemsMap[d.name] || []) as EvalItem[];
-      const cols: Array<{ id: string; label: string; type: string; fi: number }> = [];
+      const cols: Array<{ id: string; label: string; type: string; fi: number; itemTitle?: string }> = [];
       if (showScoring && isFixed) {
         cols.push({ id: 'artifact', label: '산출물', type: 'artifact', fi: -1 });
         evalList.filter(e => e.item_type === 'llm').forEach(e =>
-          cols.push({ id: e.name, label: `${e.name} (${e.excel_col})`, type: 'llm', fi: fi++ })
+          cols.push({ id: e.name, label: `${e.name} (${e.score})`, type: 'llm', fi: fi++ })
         );
         if (evalList.some(e => e.item_type === 'formula'))
           cols.push({ id: 'total', label: '합계', type: 'total', fi: -1 });
@@ -875,12 +936,19 @@ export default function RecordsPage() {
       if (showSetech) {
         if (!cols.find(c => c.id === 'artifact'))
           cols.push({ id: 'artifact', label: '산출물', type: 'artifact', fi: -1 });
-        cols.push({ id: 'setech', label: '활동', type: 'setech', fi: fi++ });
+        const sitems = setechItemsMap[d.name] || [];
+        if (sitems.length > 0) {
+          sitems.forEach((item, i) =>
+            cols.push({ id: `setech_${i}`, label: item.title, type: 'setech_item', fi: fi++, itemTitle: item.title })
+          );
+        } else {
+          cols.push({ id: 'setech', label: '기록', type: 'setech', fi: fi++ });
+        }
       }
       domainCols.set(d.name, cols);
     }
     return { visibleDomains, domainCols, compSetechColIdx: showSetech ? fi : -1 };
-  }, [selectedClass, subjects, domainFilter, evalItemsMap, showScoring, showSetech]);
+  }, [selectedClass, subjects, domainFilter, evalItemsMap, setechItemsMap, showScoring, showSetech]);
 
   // ── Frozen column widths & sticky left offsets ─────────────────────────────
   const cw = {
@@ -918,12 +986,12 @@ export default function RecordsPage() {
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
       <div className={`${treeCollapsed ? 'w-14' : 'w-72'} border-r border-gray-200 bg-white flex flex-col shrink-0 transition-[width] duration-200`}>
-        <div className={`${treeCollapsed ? 'p-2' : 'p-3'} border-b border-gray-200 shrink-0 space-y-2`}>
-          <div className={`flex items-center ${treeCollapsed ? 'justify-center' : 'justify-between gap-2'}`}>
-            {!treeCollapsed && <h2 className="text-sm font-semibold text-gray-700">기록 관리</h2>}
+        <div className="p-3 border-b border-gray-200 shrink-0 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            {!treeCollapsed && <h2 className="text-sm font-semibold text-gray-700">채점 기록 관리</h2>}
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+              className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 ${treeCollapsed ? 'mx-auto' : 'ml-auto'}`}
               onClick={toggleTreeCollapsed}
               title={treeCollapsed ? '트리 펼치기' : '트리 접기'}
             >
@@ -968,36 +1036,132 @@ export default function RecordsPage() {
         </div>
         <div className={`flex-1 overflow-auto ${treeCollapsed ? 'py-2 px-2' : 'py-2'}`}>
           {treeCollapsed ? (
-            <div className="space-y-2">
-              {[...new Map(sortClassesForCollapsedTree(classes).map(c => [c.grade, classes.filter(item => item.grade === c.grade)]))].map(([grade, gradeClasses]) => (
-                <div key={grade} className="flex flex-col items-center gap-1">
-                  <div
-                    className="flex h-7 w-7 items-center justify-center rounded bg-gray-900 text-xs font-bold text-white shadow-sm"
-                    title={`${grade}학년`}
-                  >
-                    {grade}
-                  </div>
-                  <div className="h-px w-7 bg-gray-200" />
-                  {sortClassesForCollapsedTree(gradeClasses).map(c => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className={`flex h-8 w-8 items-center justify-center rounded border text-xs font-semibold transition-colors ${
-                        selectedClass?.id === c.id
-                          ? 'border-blue-400 bg-blue-600 text-white shadow-sm'
-                          : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'
-                      }`}
-                      onClick={() => handleSelectClass(c)}
-                      title={formatClassLabel(c)}
-                    >
-                      {roomIconLabel(c.room)}
-                    </button>
-                  ))}
-                  <div className="mt-1 h-px w-7 bg-gray-200" />
-                </div>
-              ))}
+            <div className="flex flex-col items-center gap-0.5 py-1">
+              {(() => {
+                const sorted = sortClassesForCollapsedTree(classes);
+                type SubGroup = { grade: number; subject: string; items: ClassItem[] };
+                type GradeGroup = { grade: number; subs: SubGroup[] };
+                type YSGroup = { year: number; semester: number; gradeGroups: GradeGroup[] };
+                const groups: YSGroup[] = [];
+                for (const c of sorted) {
+                  let ysg = groups.find(g => g.year === c.year && g.semester === c.semester);
+                  if (!ysg) { ysg = { year: c.year, semester: c.semester, gradeGroups: [] }; groups.push(ysg); }
+                  let gg = ysg.gradeGroups.find(g => g.grade === c.grade);
+                  if (!gg) { gg = { grade: c.grade, subs: [] }; ysg.gradeGroups.push(gg); }
+                  let sg = gg.subs.find(s => s.subject === c.subject);
+                  if (!sg) { sg = { grade: c.grade, subject: c.subject, items: [] }; gg.subs.push(sg); }
+                  sg.items.push(c);
+                }
+
+                const box = 'relative flex h-8 w-8 items-center justify-center rounded text-xs font-bold shadow-sm select-none transition-opacity';
+
+                // Small dot indicator for collapsed state
+                const CollapsedDot = () => (
+                  <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-orange-400 border border-white z-10" />
+                );
+
+                return groups.map(ysg => {
+                  const ysKey = `y${ysg.year}s${ysg.semester}`;
+                  const yKey = `y${ysg.year}`;
+                  const ysOpen = getNodeOpen(ysKey);
+                  const yOpen = getNodeOpen(yKey);
+
+                  return (
+                    <div key={`${ysg.year}-${ysg.semester}`} className="flex flex-col items-center gap-0.5">
+                      {/* Year box */}
+                      <button
+                        type="button"
+                        className={`${box} bg-slate-600 text-white cursor-pointer hover:bg-slate-500 ${!yOpen ? 'opacity-50' : ''}`}
+                        onClick={() => toggleNodeOpen(yKey)}
+                        title={yOpen ? `${ysg.year}학년도 접기` : `${ysg.year}학년도 펼치기`}
+                      >
+                        {String(ysg.year).slice(-2)}
+                        {!yOpen && <CollapsedDot />}
+                      </button>
+                      {/* Semester box */}
+                      <button
+                        type="button"
+                        className={`${box} ${ysg.semester === 1 ? 'bg-sky-200 text-sky-800 hover:bg-sky-300' : 'bg-amber-200 text-amber-800 hover:bg-amber-300'} cursor-pointer ${!ysOpen ? 'opacity-50' : ''}`}
+                        onClick={() => toggleNodeOpen(ysKey)}
+                        title={ysOpen ? `${ysg.semester}학기 접기` : `${ysg.semester}학기 펼치기`}
+                      >
+                        {ysg.semester === 1 ? '전' : '후'}
+                        {!ysOpen && <CollapsedDot />}
+                      </button>
+
+                      {/* Grade/Subject/Room boxes (hidden if year or semester collapsed) */}
+                      {yOpen && ysOpen && (
+                        <>
+                          <div className="h-px w-8 bg-gray-300 my-0.5" />
+                          {ysg.gradeGroups.map((gg, gi) => {
+                            const gKey = `y${ysg.year}s${ysg.semester}g${gg.grade}`;
+                            const gOpen = getNodeOpen(gKey);
+                            return (
+                              <div key={gg.grade} className="flex flex-col items-center gap-0.5">
+                                {/* Grade box */}
+                                <button
+                                  type="button"
+                                  className={`${box} bg-gray-900 text-white cursor-pointer hover:bg-gray-700 ${!gOpen ? 'opacity-50' : ''}`}
+                                  onClick={() => toggleNodeOpen(gKey)}
+                                  title={gOpen ? `${gg.grade}학년 접기` : `${gg.grade}학년 펼치기`}
+                                >
+                                  {gg.grade}
+                                  {!gOpen && <CollapsedDot />}
+                                </button>
+
+                                {/* Subject boxes (hidden if grade collapsed) */}
+                                {gOpen && gg.subs.map((sg, si) => {
+                                  const subKey = `y${ysg.year}s${ysg.semester}g${sg.grade}_${sg.subject}`;
+                                  const subOpen = getNodeOpen(subKey);
+                                  return (
+                                    <div key={sg.subject} className="flex flex-col items-center gap-0.5">
+                                      {/* Subject box */}
+                                      <button
+                                        type="button"
+                                        className={`${box} bg-gray-500 text-white cursor-pointer hover:bg-gray-400 ${!subOpen ? 'opacity-50' : ''}`}
+                                        onClick={() => toggleNodeOpen(subKey)}
+                                        title={subOpen ? `${sg.subject} 접기` : `${sg.subject} 펼치기`}
+                                      >
+                                        {sg.subject.slice(0, 1)}
+                                        {!subOpen && <CollapsedDot />}
+                                      </button>
+
+                                      {/* Room buttons (hidden if subject collapsed) */}
+                                      {subOpen && sg.items.map(c => (
+                                        <button
+                                          key={c.id}
+                                          type="button"
+                                          className={`flex h-8 w-8 items-center justify-center rounded border text-xs font-bold transition-colors ${selectedClass?.id === c.id
+                                            ? 'border-blue-400 bg-blue-600 text-white shadow-sm'
+                                            : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'
+                                            }`}
+                                          onClick={() => handleSelectClass(c)}
+                                          title={formatClassLabel(c)}
+                                        >
+                                          {roomIconLabel(c.room)}
+                                        </button>
+                                      ))}
+                                      {si < gg.subs.length - 1 && subOpen && (
+                                        <div className="h-px w-8 bg-gray-100 my-0.5" />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                                {gi < ysg.gradeGroups.length - 1 && gOpen && (
+                                  <div className="h-px w-8 bg-gray-200 my-0.5" />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                      <div className="h-px w-8 bg-gray-300 my-1" />
+                    </div>
+                  );
+                });
+              })()}
               {classes.length === 0 && (
-                <div className="py-6 text-center text-xs text-gray-400" title="수업이 없습니다">없음</div>
+                <div className="py-6 text-center text-xs text-gray-400">없음</div>
               )}
             </div>
           ) : (
@@ -1012,6 +1176,8 @@ export default function RecordsPage() {
                   onDeleteClass={handleDeleteClass}
                   onDeleteScoring={handleDeleteScoring}
                   onDeleteSetech={handleDeleteSetech}
+                  openStates={treeOpenStates}
+                  onToggleOpen={toggleNodeOpen}
                 />
               ))}
               {tree.length === 0 && (
@@ -1076,9 +1242,9 @@ export default function RecordsPage() {
               </select>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               {domainFilter !== 'all' && (
-                <label className={`flex items-center gap-1 cursor-pointer text-xs py-1.5 px-3 rounded text-white font-medium ${uploadingZip ? 'bg-indigo-300' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                <label className={`flex items-center gap-1 cursor-pointer text-xs py-1.5 px-2.5 rounded text-white font-medium ${uploadingZip ? 'bg-indigo-300' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
                   {uploadingZip ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
                   업로드
                   <input type="file" accept=".zip" className="hidden" onChange={handleBulkZipUpload} disabled={uploadingZip} ref={fileInputRef} />
@@ -1086,51 +1252,50 @@ export default function RecordsPage() {
               )}
 
               {showScoring && (
-                <button className="btn-secondary text-xs py-1.5 ml-2" onClick={() => handleBatchGenerate('scoring')} disabled={batchGenerating}>
-                  <Bot size={12} /> 채점
+                <button className="btn-rainbow text-xs py-1.5 px-2.5" onClick={() => handleBatchGenerate('scoring')} disabled={batchGenerating}>
+                  ✨ 채점
                 </button>
               )}
 
               {showSetech && (
-                <button className="btn-secondary text-xs py-1.5 ml-2" onClick={() => handleBatchGenerate('setech')} disabled={batchGenerating}>
-                  <Bot size={12} /> 활동
+                <button className="btn-rainbow text-xs py-1.5 px-2.5" onClick={() => handleBatchGenerate('setech')} disabled={batchGenerating}>
+                  ✨ 기록
                 </button>
               )}
 
               {showSetech && (
-                <button className="btn-secondary text-xs py-1.5 ml-2" onClick={() => handleBatchGenerate('setech', '__SUBJECT_COMPREHENSIVE__')} disabled={batchGenerating}>
-                  <Bot size={12} /> 세특
+                <button className="btn-rainbow text-xs py-1.5 px-2.5" onClick={() => handleBatchGenerate('setech', '__SUBJECT_COMPREHENSIVE__')} disabled={batchGenerating}>
+                  ✨ 세특
                 </button>
               )}
 
               {showSetech && (
                 <button
-                  className="btn-secondary text-xs py-1.5 ml-2"
+                  className="btn-rainbow text-xs py-1.5 px-2.5"
                   onClick={handleBatchSpellcheck}
                   disabled={!!spellcheckProgress || spellcheckingIds.size > 0}
                   title={selectedStudentIds.size > 0 ? '선택한 행 맞춤법 검사' : '전체 행 맞춤법 검사'}
                 >
-                  {spellcheckProgress ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                  교정
+                  ✨ 교정
                 </button>
               )}
 
               {showScoring !== showSetech && (
-                <button className="btn-success text-xs py-1.5 ml-2" onClick={() => handleExport(showScoring ? 'scoring' : 'setech')}>
+                <button className="btn-success text-xs py-1.5 px-2.5" onClick={() => handleExport(showScoring ? 'scoring' : 'setech')}>
                   <Download size={12} /> 다운로드
                 </button>
               )}
 
-              <button className="btn-primary text-xs py-1.5 ml-2" onClick={handleSaveAll} disabled={saving}>
+              <button className="btn-primary text-xs py-1.5 px-2.5" onClick={handleSaveAll} disabled={saving}>
                 {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 저장
               </button>
 
-              <button className="btn-secondary text-xs py-1.5 ml-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-300 transition-colors" onClick={handleDeleteContent} disabled={deleting || saving || batchGenerating}>
+              <button className="btn-secondary text-xs py-1.5 px-2.5 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-300 transition-colors" onClick={handleDeleteContent} disabled={deleting || saving || batchGenerating}>
                 {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} 삭제
               </button>
 
               <label
-                className={`btn-secondary p-1.5 ml-2 cursor-pointer ${uploadingFullRecords ? 'opacity-60' : ''}`}
+                className={`btn-secondary p-1.5 cursor-pointer ${uploadingFullRecords ? 'opacity-60' : ''}`}
                 title="작업 내용 업로드"
                 aria-label="작업 내용 업로드"
               >
@@ -1156,20 +1321,36 @@ export default function RecordsPage() {
             </div>
           </div>
 
+          {/* 맞춤법 검사 팝업 오버레이 */}
           {spellcheckProgress && (
-            <div className="px-4 py-2 bg-green-50 border-b border-green-200 flex items-center gap-3 text-sm shrink-0">
-              <Loader2 size={14} className="animate-spin text-green-600 shrink-0" />
-              <div className="flex-1">
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-green-700">맞춤법 검사 중</span>
-                  <span className="text-gray-500">{spellcheckProgress.completed}/{spellcheckProgress.total}</span>
+            <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center">
+              <div className="bg-white rounded-2xl shadow-2xl w-96 p-6 flex flex-col gap-5">
+                <div className="text-center">
+                  <div className="flex items-center justify-center gap-2 mb-1">
+                    <Loader2 size={18} className="animate-spin text-green-600" />
+                    <span className="font-semibold text-gray-800">맞춤법 검사 중</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {spellcheckProgress.completed}/{spellcheckProgress.total}
+                  </p>
                 </div>
-                <div className="h-1.5 bg-green-200 rounded-full overflow-hidden">
+                <div className="h-2.5 bg-green-100 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-green-500 rounded-full transition-all"
+                    className="h-full bg-green-500 rounded-full transition-all duration-300"
                     style={{ width: `${(spellcheckProgress.completed / Math.max(spellcheckProgress.total, 1)) * 100}%` }}
                   />
                 </div>
+                <button
+                  className="btn-secondary text-sm flex items-center justify-center gap-1.5"
+                  disabled={spellcheckStopping}
+                  onClick={() => {
+                    spellcheckAbortRef.current?.abort();
+                    setSpellcheckStopping(true);
+                  }}
+                >
+                  {spellcheckStopping ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
+                  {spellcheckStopping ? '중단 중...' : '중단'}
+                </button>
               </div>
             </div>
           )}
@@ -1241,7 +1422,7 @@ export default function RecordsPage() {
                       <>
                         <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 select-none"
                           style={{ width: compWidth, minWidth: compWidth }}>
-                          종합 세특 (과목 공통)
+                          세특 (과목 공통)
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
                             onMouseDown={e => handleResizeStart(e, '_comp', 320)} />
                         </th>
@@ -1379,7 +1560,25 @@ export default function RecordsPage() {
                                     disabled={locked}
                                     data-row={rowIdx} data-col={c.fi}
                                     onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
-                                    title={locked ? 'AI 활동 생성 진행 중이라 수정할 수 없습니다.' : undefined}
+                                    title={locked ? 'AI 기록 생성 진행 중이라 수정할 수 없습니다.' : undefined}
+                                  />
+                                </td>
+                              );
+                            }
+                            if (c.type === 'setech_item') {
+                              const locked = selectedClass
+                                ? isAiCellLocked(selectedClass.id, s.id, 'setech', d.name)
+                                : false;
+                              return (
+                                <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
+                                  style={{ width: w, minWidth: w }}>
+                                  <textarea className="textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed" style={{ minHeight: 80 }}
+                                    value={setechData[c.itemTitle!] || ''}
+                                    onChange={ev => updateContent(s.id, 'setech', c.itemTitle!, ev.target.value, d.name)}
+                                    disabled={locked}
+                                    data-row={rowIdx} data-col={c.fi}
+                                    onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
+                                    title={locked ? 'AI 기록 생성 진행 중이라 수정할 수 없습니다.' : undefined}
                                   />
                                 </td>
                               );

@@ -27,6 +27,37 @@
   .btn-success {
     @apply btn bg-green-600 text-white hover:bg-green-700 focus:ring-green-500;
   }
+  .btn-rainbow {
+    @apply btn font-semibold relative overflow-hidden border-2 border-transparent bg-white text-gray-900;
+    background:
+      linear-gradient(#ffffff, #ffffff) padding-box,
+      linear-gradient(135deg,
+        #ff006e 0%,
+        #ff7a00 15%,
+        #ffe600 30%,
+        #00f06d 45%,
+        #00d8ff 60%,
+        #2457ff 75%,
+        #c400ff 88%,
+        #ff006e 100%
+      ) border-box;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.9) inset,
+      0 1px 2px rgba(15, 23, 42, 0.08),
+      0 0 12px rgba(0, 216, 255, 0.22);
+  }
+  .btn-rainbow:hover {
+    filter: saturate(1.22) brightness(1.02);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.95) inset,
+      0 2px 4px rgba(15, 23, 42, 0.12),
+      0 0 16px rgba(255, 0, 110, 0.28),
+      0 0 18px rgba(0, 216, 255, 0.24);
+  }
+  .btn-rainbow:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+  }
   .card {
     @apply bg-white rounded-lg border border-gray-200 shadow-sm;
   }

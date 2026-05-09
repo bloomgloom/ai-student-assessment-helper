@@ -344,18 +344,18 @@ router.get('/eval', async (req: Request, res: Response) => {
 router.put('/eval/bulk', async (req: Request, res: Response) => {
   const { year, semester, grade, subject, domainName, items } = req.body as {
     year: number; semester: number; grade: number; subject: string; domainName: string;
-    items: { name: string; excel_col: string; item_type: string; rubric: string; sort_order: number }[];
+    items: { name: string; score: string; item_type: string; rubric: string; sort_order: number }[];
   };
 
   await transaction(async () => {
     await execute(
-      'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', 
+      'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
       [year, semester, grade, subject, domainName]
     );
     for (const item of items) {
       await execute(
-        'INSERT INTO domain_eval(year, semester, grade, subject, domain_name, name, excel_col, item_type, rubric, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
-        [year, semester, grade, subject, domainName, item.name, item.excel_col, item.item_type, item.rubric, item.sort_order]
+        'INSERT INTO domain_eval(year, semester, grade, subject, domain_name, name, score, item_type, rubric, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+        [year, semester, grade, subject, domainName, item.name, item.score, item.item_type, item.rubric, item.sort_order]
       );
     }
   });
@@ -385,22 +385,22 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
     'SELECT type, title, prompt, extensions, sort_order FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
     [year, semester, grade, subject, domainName]
   );
-  const evalItems = await queryAll<{ name: string; excel_col: string; item_type: string; rubric: string; sort_order: number }>(
-    'SELECT name, excel_col, item_type, rubric, sort_order FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
+  const evalItems = await queryAll<{ name: string; score: string; item_type: string; rubric: string; sort_order: number }>(
+    'SELECT name, score, item_type, rubric, sort_order FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
     [year, semester, grade, subject, domainName]
   );
 
   const standards = wb.addWorksheet('성취평가기준');
-  standards.addRow(['sort_order', 'domain_name_ref', 'code', 'content', 'level']);
+  standards.addRow(['sort_order', 'domain_name_ref', 'code', 'content']);
   setechItems.filter(item => item.type === '성취기준').forEach((item, index) => {
-    let ref = { domain_name_ref: '', code: item.title, content: '', level: '' };
-    try { ref = { ...ref, ...JSON.parse(item.extensions || '{}') }; } catch { /* use fallback */ }
-    standards.addRow([item.sort_order ?? index, ref.domain_name_ref, ref.code, ref.content, ref.level]);
+    let ref = { domain_name_ref: '', code: item.title, content: '' };
+    try { const p = JSON.parse(item.extensions || '{}'); ref = { domain_name_ref: p.domain_name_ref || '', code: p.code || item.title, content: p.content || '' }; } catch { /* use fallback */ }
+    standards.addRow([item.sort_order ?? index, ref.domain_name_ref, ref.code, ref.content]);
   });
 
   const evalSheet = wb.addWorksheet('채점기준');
-  evalSheet.addRow(['sort_order', 'item_type', 'name', 'excel_col', 'rubric']);
-  evalItems.forEach((item, index) => evalSheet.addRow([item.sort_order ?? index, item.item_type, item.name, item.excel_col, item.rubric]));
+  evalSheet.addRow(['sort_order', 'item_type', 'name', 'score', 'rubric']);
+  evalItems.forEach((item, index) => evalSheet.addRow([item.sort_order ?? index, item.item_type, item.name, item.score, item.rubric]));
 
   const setechSheet = wb.addWorksheet('세특기준');
   setechSheet.addRow(['sort_order', 'type', 'title', 'prompt', 'extensions']);
@@ -411,7 +411,11 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
   for (const sheet of wb.worksheets) {
     sheet.getRow(1).font = { bold: true };
     sheet.columns.forEach(col => {
-      col.width = Math.max(14, Math.min(60, Math.max(...(col.values || []).map(v => String(v || '').length + 4))));
+      const vals = (col.values as (unknown)[]).filter(v => v !== undefined && v !== null);
+      const maxLen = vals.length > 0
+        ? Math.max(...vals.map(v => String(v).length + 4))
+        : 14;
+      col.width = Math.max(14, Math.min(60, maxLen));
       col.alignment = { vertical: 'top', wrapText: true };
     });
     sheet.views = [{ state: 'frozen', ySplit: 1 }];
@@ -436,7 +440,7 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(req.file.path);
 
-    const standardRows: { domain_name_ref: string; code: string; content: string; level: string; sort_order: number }[] = [];
+    const standardRows: { domain_name_ref: string; code: string; content: string; sort_order: number }[] = [];
     const standards = wb.getWorksheet('성취평가기준');
     if (standards) {
       const h = headerMap(standards.getRow(1));
@@ -449,12 +453,11 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
           domain_name_ref: cellText(row.getCell(h.domain_name_ref).value),
           code,
           content: cellText(row.getCell(h.content).value),
-          level: cellText(row.getCell(h.level).value),
         });
       });
     }
 
-    const evalRows: { name: string; excel_col: string; item_type: string; rubric: string; sort_order: number }[] = [];
+    const evalRows: { name: string; score: string; item_type: string; rubric: string; sort_order: number }[] = [];
     const evalSheet = wb.getWorksheet('채점기준');
     if (evalSheet) {
       const h = headerMap(evalSheet.getRow(1));
@@ -467,7 +470,7 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
           sort_order: Number(cellText(row.getCell(h.sort_order).value)) || evalRows.length,
           item_type: itemType,
           name: name || '합계',
-          excel_col: cellText(row.getCell(h.excel_col).value),
+          score: cellText(row.getCell(h.score ?? h.excel_col).value),
           rubric: cellText(row.getCell(h.rubric).value),
         });
       });
@@ -502,7 +505,6 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
           domain_name_ref: row.domain_name_ref,
           code: row.code,
           content: row.content,
-          level: row.level,
         });
         await execute(
           'INSERT INTO domain_setech(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
@@ -517,8 +519,8 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
       }
       for (const [index, row] of evalRows.entries()) {
         await execute(
-          'INSERT INTO domain_eval(year, semester, grade, subject, domain_name, name, excel_col, item_type, rubric, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
-          [year, semester, grade, subject, domainName, row.name, row.excel_col, row.item_type === 'formula' ? 'formula' : 'llm', row.rubric, row.sort_order ?? index]
+          'INSERT INTO domain_eval(year, semester, grade, subject, domain_name, name, score, item_type, rubric, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+          [year, semester, grade, subject, domainName, row.name, row.score, row.item_type === 'formula' ? 'formula' : 'llm', row.rubric, row.sort_order ?? index]
         );
       }
     });

@@ -152,6 +152,8 @@ export default function CriteriaPage() {
   const [error, setError] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem('hideCriteriaGuide') !== '1');
   const fileRef = useRef<HTMLInputElement>(null);
+  const criteriaRestoredRef = useRef(false);
+  const loadStandardsRef = useRef<((subject: SubjectItem) => void) | null>(null);
 
   const loadSubjects = async () => {
     const res = await criteriaApi.getStandardSubjects();
@@ -161,12 +163,33 @@ export default function CriteriaPage() {
 
   const loadStandards = async (subject: SubjectItem) => {
     setSelected(subject);
+    localStorage.setItem('criteriaPage_lastSelection', JSON.stringify({
+      year: subject.year, semester: subject.semester, grade: subject.grade,
+      subject: subject.subject, domain_name: subject.domain_name,
+    }));
     const res = await criteriaApi.getStandards(subject.year, subject.semester, subject.grade, subject.subject);
     const filtered = res.data.filter((r: StandardRow) => r.domain_name === subject.domain_name);
     setStandards(filtered);
   };
+  loadStandardsRef.current = loadStandards;
 
   useEffect(() => { loadSubjects(); }, []);
+
+  // 마지막 선택 복원
+  useEffect(() => {
+    if (criteriaRestoredRef.current || subjects.length === 0) return;
+    criteriaRestoredRef.current = true;
+    const saved = localStorage.getItem('criteriaPage_lastSelection');
+    if (!saved) return;
+    try {
+      const { year, semester, grade, subject, domain_name } = JSON.parse(saved);
+      const sub = subjects.find(s =>
+        s.year === year && s.semester === semester && s.grade === grade &&
+        s.subject === subject && s.domain_name === domain_name
+      );
+      if (sub && loadStandardsRef.current) loadStandardsRef.current(sub);
+    } catch { /* ignore */ }
+  }, [subjects]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -177,7 +200,7 @@ export default function CriteriaPage() {
     try {
       const res = await criteriaApi.uploadStandards(file);
       const data = res.data;
-      setMessage(`${data.year}학년도 ${data.semester}학기 ${data.grade}학년 ${data.subject}(${data.credit}): 성취/평가기준 ${data.standardsCount}개 업로드`);
+      setMessage(`${data.year}학년도 ${data.semester}학기 ${data.grade}학년 ${data.subject}(${data.credit}): 성취 기준 ${data.standardsCount}개 업로드`);
       await loadSubjects();
       setSelected(null);
     } catch (err: any) {
@@ -198,7 +221,7 @@ export default function CriteriaPage() {
   };
 
   const handleDeleteSubject = async (sub: SubjectItem) => {
-    if (!confirm(`${sub.subject} 성취/평가기준 파일과 데이터를 삭제하시겠습니까?`)) return;
+    if (!confirm(`${sub.subject} 성취 기준 파일과 데이터를 삭제하시겠습니까?`)) return;
     await criteriaApi.deleteSource('standards', sub.year, sub.semester, sub.grade, sub.subject);
     setSelected(null);
     setStandards([]);
@@ -238,10 +261,13 @@ export default function CriteriaPage() {
     <div className="flex h-screen overflow-hidden bg-gray-50">
       <div className="w-72 border-r border-gray-200 bg-white flex flex-col shrink-0">
         <div className="p-3 border-b border-gray-200 space-y-2">
-          <h2 className="text-sm font-semibold text-gray-700">기준 관리</h2>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-gray-700">성취 기준 관리</h2>
+            <div className="h-8 w-8 shrink-0" />
+          </div>
           <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploading ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
             {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-            {uploading ? '처리 중...' : '성취기준 파일 업로드'}
+            {uploading ? '처리 중...' : '성취 기준 파일 업로드'}
             <input ref={fileRef} type="file" className="hidden" accept=".xlsx,.xls" onChange={handleUpload} disabled={uploading} />
           </label>
           {showGuide && (
@@ -266,7 +292,7 @@ export default function CriteriaPage() {
           {tree.length === 0 ? (
             <div className="text-center py-10 text-gray-400">
               <BookOpen size={32} className="mx-auto mb-2 opacity-30" />
-              <p className="text-xs">성취/평가기준 파일을 업로드하세요</p>
+              <p className="text-xs">성취 기준 파일을 업로드하세요</p>
             </div>
           ) : tree.map((node, i) => (
             <TreeNodeView
@@ -286,7 +312,7 @@ export default function CriteriaPage() {
         ) : (
           <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200">
-              <h3 className="font-semibold text-gray-800">{selected.subject} - {selected.domain_name} 성취/평가기준</h3>
+              <h3 className="font-semibold text-gray-800">{selected.subject} - {selected.domain_name} 성취 기준</h3>
               <p className="text-xs text-gray-500 mt-1">
                 {selected.year}학년도 {selected.semester}학기 {selected.grade}학년 · {selected.credit}학점
               </p>

@@ -306,7 +306,7 @@ export async function parseAchievementStandardsExcel(filePath: string): Promise<
     }
   }
 
-  if (!headerRowIdx) throw new Error('성취/평가기준 헤더 행을 찾을 수 없습니다.');
+  if (!headerRowIdx) throw new Error('성취 기준 헤더 행을 찾을 수 없습니다.');
 
   const info = parseSubjectContext(contextText, '');
   const header = sheet.getRow(headerRowIdx);

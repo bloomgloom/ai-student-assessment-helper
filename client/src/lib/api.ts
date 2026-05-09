@@ -59,13 +59,13 @@ export const criteriaApi = {
   deleteCustomDomain: (id: number) => api.delete(`/criteria/custom-domains/${id}`),
 
   // 세특
-  getSetech: (year: number, semester: number, grade: number, subject: string, domainName: string) => 
+  getSetech: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
     api.get('/criteria/setech', { params: { year, semester, grade, subject, domainName } }),
   bulkSaveSetech: (year: number, semester: number, grade: number, subject: string, domainName: string, items: unknown[]) =>
     api.put('/criteria/setech/bulk', { year, semester, grade, subject, domainName, items }),
 
   // 평가
-  getEval: (year: number, semester: number, grade: number, subject: string, domainName: string) => 
+  getEval: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
     api.get('/criteria/eval', { params: { year, semester, grade, subject, domainName } }),
   bulkSaveEval: (year: number, semester: number, grade: number, subject: string, domainName: string, items: unknown[]) =>
     api.put('/criteria/eval/bulk', { year, semester, grade, subject, domainName, items }),
@@ -162,5 +162,7 @@ export const aiApi = {
     contentType: 'scoring' | 'setech';
     criteriaSetId: number;
   }) => api.post('/ai/generate', data),
-  spellcheck: (data: { text: string }) => api.post('/ai/spellcheck', data),
+  spellcheck: (data: { text: string }, signal?: AbortSignal) => api.post('/ai/spellcheck', data, { signal }),
+  generatePrompt: (data: { prompt: string; systemPrompt?: string }, signal?: AbortSignal) =>
+    api.post('/ai/generate-prompt', data, { signal }),
 };

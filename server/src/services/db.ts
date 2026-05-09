@@ -104,7 +104,7 @@ export async function initDb(): Promise<void> {
       subject     TEXT    NOT NULL,
       domain_name TEXT    NOT NULL,
       name        TEXT    NOT NULL,
-      excel_col   TEXT    NOT NULL DEFAULT '',
+      score       TEXT    NOT NULL DEFAULT '',
       item_type   TEXT    NOT NULL DEFAULT 'llm' CHECK(item_type IN ('llm', 'formula')),
       rubric      TEXT    NOT NULL DEFAULT '',
       sort_order  INTEGER NOT NULL DEFAULT 0
@@ -206,7 +206,10 @@ export async function initDb(): Promise<void> {
   await ensureColumn('classes', 'setech_filepath', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('subject_domains', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('achievement_standards', 'credit', "REAL NOT NULL DEFAULT 0");
-  await ensureColumn('class_students', 'personal_num', "TEXT NOT NULL DEFAULT ''")
+  await ensureColumn('class_students', 'personal_num', "TEXT NOT NULL DEFAULT ''");
+
+  // domain_eval.excel_col → score 마이그레이션
+  await ensureRenameColumn('domain_eval', 'excel_col', 'score');
 
   initialized = true;
 }
@@ -219,6 +222,17 @@ async function ensureColumn(table: string, column: string, definition: string): 
   });
   if (!exists) {
     await getClient().execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+async function ensureRenameColumn(table: string, oldName: string, newName: string): Promise<void> {
+  const rows = await getClient().execute(`PRAGMA table_info(${table})`);
+  const hasOld = rows.rows.some((row) => {
+    const obj = row as unknown as Record<string, unknown>;
+    return obj.name === oldName || (Array.isArray(row) && row[1] === oldName);
+  });
+  if (hasOld) {
+    await getClient().execute(`ALTER TABLE ${table} RENAME COLUMN ${oldName} TO ${newName}`);
   }
 }
 

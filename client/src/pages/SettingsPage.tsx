@@ -13,26 +13,26 @@ interface Settings {
 }
 
 const PROVIDERS = [
-  { value: 'gemini',            label: 'Google Gemini' },
-  { value: 'openai',            label: 'OpenAI' },
-  { value: 'anthropic',         label: 'Anthropic (Claude)' },
-  { value: 'omlx',              label: 'oMLX (로컬 · Apple Silicon)' },
-  { value: 'ollama',            label: 'Ollama (로컬)' },
+  { value: 'gemini', label: 'Google Gemini' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic (Claude)' },
+  { value: 'omlx', label: 'oMLX (로컬 · Apple Silicon)' },
+  { value: 'ollama', label: 'Ollama (로컬)' },
   { value: 'openai-compatible', label: 'OpenAI 호환 (커스텀)' },
 ];
 
 const DEFAULT_MODELS: Record<string, string> = {
-  gemini:            'gemini-2.5-flash',
-  openai:            'gpt-4o-mini',
-  anthropic:         'claude-sonnet-4-6',
-  omlx:              '',   // 서버에서 목록 조회
-  ollama:            'llama3',
+  gemini: 'gemini-2.5-flash',
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-sonnet-4-6',
+  omlx: '',   // 서버에서 목록 조회
+  ollama: 'llama3',
   'openai-compatible': '',
 };
 
 const DEFAULT_URLS: Record<string, string> = {
-  omlx:              'http://localhost:8000/v1',
-  ollama:            'http://localhost:11434',
+  omlx: 'http://localhost:8000/v1',
+  ollama: 'http://localhost:11434',
   'openai-compatible': '',
 };
 
@@ -146,10 +146,10 @@ export default function SettingsPage() {
     }
   };
 
-  const isOmlx    = settings.provider === 'omlx';
-  const isOllama  = settings.provider === 'ollama';
-  const needsKey  = settings.provider !== 'ollama';
-  const needsUrl  = isOmlx || isOllama || settings.provider === 'openai-compatible';
+  const isOmlx = settings.provider === 'omlx';
+  const isOllama = settings.provider === 'ollama';
+  const needsKey = settings.provider !== 'ollama';
+  const needsUrl = isOmlx || isOllama || settings.provider === 'openai-compatible';
 
   return (
     <div className="p-6 max-w-2xl">
@@ -198,10 +198,10 @@ export default function SettingsPage() {
               className="input font-mono text-xs"
               placeholder={isOmlx ? 'oMLX 설정에서 발급한 API 키' : 'API 키를 입력하세요'}
               value={settings.apiKeys?.[settings.provider] || ''}
-              onChange={(e) => setSettings((s) => ({ 
-                ...s, 
+              onChange={(e) => setSettings((s) => ({
+                ...s,
                 apiKey: e.target.value,
-                apiKeys: { ...s.apiKeys, [s.provider]: e.target.value } 
+                apiKeys: { ...s.apiKeys, [s.provider]: e.target.value }
               }))}
             />
           </div>
@@ -353,16 +353,15 @@ export default function SettingsPage() {
       {/* 테스트 결과 */}
       {testResult && (
         <div
-          className={`mt-4 p-4 rounded-lg border text-sm ${
-            testResult.ok
+          className={`mt-4 p-4 rounded-lg border text-sm ${testResult.ok
               ? 'bg-green-50 border-green-200 text-green-800'
               : 'bg-red-50 border-red-200 text-red-800'
-          }`}
+            }`}
         >
           <div className="flex items-start gap-2">
             {testResult.ok
               ? <CheckCircle size={16} className="mt-0.5 shrink-0" />
-              : <XCircle    size={16} className="mt-0.5 shrink-0" />}
+              : <XCircle size={16} className="mt-0.5 shrink-0" />}
             <div>
               <p className="font-medium">{testResult.ok ? '연결 성공' : '연결 실패'}</p>
               <p className="mt-1 text-xs whitespace-pre-wrap">{testResult.message}</p>
@@ -408,7 +407,7 @@ export default function SettingsPage() {
               <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-500" />
               <div>
                 <p className="font-semibold">정말 초기화하시겠습니까?</p>
-                <p className="mt-0.5">기준 관리, 영역 관리, 기록 관리의 모든 데이터와 업로드 파일이 영구 삭제됩니다. 이 작업은 되돌릴 수 없습니다.</p>
+                <p className="mt-0.5">성취 기준 관리, 평가 영역 관리, 채점 기록 관리의 모든 데이터와 업로드 파일이 영구 삭제됩니다. 이 작업은 되돌릴 수 없습니다.</p>
               </div>
             </div>
             <div className="flex gap-2">
