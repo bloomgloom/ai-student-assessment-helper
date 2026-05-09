@@ -6,6 +6,7 @@ import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { decodeUploadFilename } from '../services/filename';
 import { parseAreaManagementExcel, parseAchievementStandardsExcel } from '../services/excel';
+import informationCurriculumStandards from '../data/informationCurriculumStandards.json';
 
 const router = Router();
 const UPLOAD_DIR = path.join(__dirname, '../../uploads/criteria');
@@ -36,11 +37,29 @@ function headerMap(row: ExcelJS.Row): Record<string, number> {
 
 function findUploadedCriteriaFile(originalName: string): string | null {
   const normalized = originalName.normalize('NFC');
-  const files = fs.readdirSync(UPLOAD_DIR)
-    .filter((file) => file.normalize('NFC').endsWith(`_${normalized}`))
-    .sort()
-    .reverse();
-  const found = files.find((file) => fs.existsSync(path.join(UPLOAD_DIR, file)));
+  const basename = path.basename(normalized);
+  const candidates = new Set([
+    normalized,
+    basename,
+    normalized.replace(/\//g, ':'),
+    basename.replace(/\//g, ':'),
+    normalized.replace(/:/g, '/'),
+    basename.replace(/:/g, '/'),
+  ]);
+
+  for (const candidate of candidates) {
+    const direct = path.isAbsolute(candidate) ? candidate : path.join(UPLOAD_DIR, candidate);
+    if (fs.existsSync(direct)) return direct;
+  }
+
+  const files = fs.readdirSync(UPLOAD_DIR).sort().reverse();
+  const found = files.find((file) => {
+    const normalizedFile = file.normalize('NFC');
+    return [...candidates].some((candidate) => (
+      normalizedFile.endsWith(`_${candidate}`) ||
+      normalizedFile.endsWith(`_${candidate.replace(/\//g, ':')}`)
+    ));
+  });
   return found ? path.join(UPLOAD_DIR, found) : null;
 }
 
@@ -48,6 +67,7 @@ async function getStandardsSource(year: number, semester: number, grade: number,
   return queryOne<{ source_filename: string }>(
     `SELECT source_filename FROM achievement_standards
      WHERE year=? AND semester=? AND grade=? AND subject=?
+       AND source_filename != ''
      ORDER BY id DESC LIMIT 1`,
     [year, semester, grade, subject]
   );
@@ -56,7 +76,8 @@ async function getStandardsSource(year: number, semester: number, grade: number,
 async function getDomainsSource(year: number, semester: number, grade: number, subject: string) {
   return queryOne<{ source_filename: string }>(
     `SELECT source_filename FROM subject_domains
-     WHERE year=? AND semester=? AND grade=? AND subject=?
+     WHERE year=? AND semester=? AND grade=? AND subject=? AND sort_order >= 0
+       AND source_filename != ''
      ORDER BY id DESC LIMIT 1`,
     [year, semester, grade, subject]
   );
@@ -69,7 +90,7 @@ router.get('/sets', async (_req: Request, res: Response) => {
 });
 
 // --- 과목 목록 및 고정 영역 조회 ---
-router.get('/subjects', async (_req: Request, res: Response) => {
+router.get('/subjects', async (req: Request, res: Response) => {
   const subjects = await queryAll<{
     year: number; semester: number; grade: number; subject: string; class_id: number;
   }>(`
@@ -80,7 +101,7 @@ router.get('/subjects', async (_req: Request, res: Response) => {
       SELECT year, semester, grade, subject, 0 as class_id FROM custom_domains
     )
     GROUP BY year, semester, grade, subject
-    ORDER BY year DESC, semester, grade, subject
+    ORDER BY year ASC, semester, grade, subject
   `);
 
   const result = [];
@@ -94,14 +115,25 @@ router.get('/subjects', async (_req: Request, res: Response) => {
     );
 
     const customDomains = await queryAll<{ id: number; name: string }>(
-      'SELECT id, name FROM custom_domains WHERE year=? AND semester=? AND grade=? AND subject=? ORDER BY id',
+      `SELECT id, name FROM custom_domains WHERE year=? AND semester=? AND grade=? AND subject=?
+       UNION ALL
+       SELECT id, name FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=? AND eval_type='기록'
+       ORDER BY id`,
+      [sub.year, sub.semester, sub.grade, sub.subject, sub.year, sub.semester, sub.grade, sub.subject]
+    );
+
+    // 파일 업로드 여부: source_filename이 설정된 행이 있으면 업로드된 과목
+    const hasSourceRow = await queryOne<{ has_source: number }>(
+      `SELECT MAX(CASE WHEN source_filename != '' THEN 1 ELSE 0 END) as has_source
+       FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=? AND sort_order >= 0`,
       [sub.year, sub.semester, sub.grade, sub.subject]
     );
 
     result.push({
       ...sub,
       fixedDomains,
-      customDomains
+      customDomains,
+      has_source: Number(hasSourceRow?.has_source ?? 0),
     });
   }
   res.json(result);
@@ -109,13 +141,87 @@ router.get('/subjects', async (_req: Request, res: Response) => {
 
 router.get('/subject-domains', async (req: Request, res: Response) => {
   const { year, semester, grade, subject } = req.query;
+  // Exclude anchor rows (sort_order=-1). Returns all real rows including file-sourced ones.
   const rows = await queryAll(
-    `SELECT * FROM subject_domains
-     WHERE year=? AND semester=? AND grade=? AND subject=?
+    `SELECT id, year, semester, grade, subject, credit, eval_type, name, reflected, ratio, max_score, sort_order, source_filename
+     FROM subject_domains
+     WHERE year=? AND semester=? AND grade=? AND subject=? AND sort_order >= 0
      ORDER BY sort_order`,
     [Number(year), Number(semester), Number(grade), String(subject)]
   );
   res.json(rows);
+});
+
+router.put('/subject-domains/bulk', async (req: Request, res: Response) => {
+  const { year, semester, grade, subject, rows } = req.body;
+  await transaction(async () => {
+    const inputRows = Array.isArray(rows) ? rows as any[] : [];
+    // 파일에서 업로드된 행(source_filename!='')은 보존하고,
+    // 사용자가 추가한 기록 행(eval_type='기록', source_filename='')만 교체한다.
+    const hasFileRows = await queryOne<{ found: number }>(
+      `SELECT 1 as found FROM subject_domains
+       WHERE year=? AND semester=? AND grade=? AND subject=?
+         AND sort_order >= 0
+         AND source_filename != ''
+       LIMIT 1`,
+      [year, semester, grade, subject]
+    );
+
+    if (hasFileRows) {
+      // 업로드 과목: 사용자 추가 기록 행만 삭제 후 재삽입
+      await execute(
+        `DELETE FROM subject_domains
+         WHERE year=? AND semester=? AND grade=? AND subject=?
+           AND eval_type='기록' AND source_filename=''`,
+        [year, semester, grade, subject]
+      );
+      const editableRows = inputRows.filter(row => !row.source_filename);
+      for (let i = 0; i < editableRows.length; i++) {
+        const row = editableRows[i];
+        await execute(
+          `INSERT INTO subject_domains(year, semester, grade, subject, credit, eval_type, name, reflected, ratio, max_score, sort_order, source_filename)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [year, semester, grade, subject, 0, '기록', row.name || '', 'X', Number(row.ratio) || 0, Number(row.max_score) || 0, 1000 + i, '']
+        );
+      }
+    } else {
+      // 수동 추가 과목: 기존 사용자 행 전체 교체 (anchor 행 제외)
+      await execute(
+        `DELETE FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=? AND source_filename=''`,
+        [year, semester, grade, subject]
+      );
+      if (inputRows.length === 0) {
+        // 행이 없으면 anchor 행 삽입 (다른 테이블에 없을 경우에만)
+        const existsElsewhere = await queryOne(
+          `SELECT 1 as found FROM achievement_standards
+           WHERE year=? AND semester=? AND grade=? AND subject=?
+           UNION ALL
+           SELECT 1 FROM custom_domains
+           WHERE year=? AND semester=? AND grade=? AND subject=?
+           LIMIT 1`,
+          [year, semester, grade, subject, year, semester, grade, subject]
+        );
+        if (!existsElsewhere) {
+          await execute(
+            `INSERT INTO subject_domains(year, semester, grade, subject, credit, eval_type, name, reflected, ratio, max_score, sort_order, source_filename)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [year, semester, grade, subject, 0, '', '', 'X', 0, 0, -1, '']
+          );
+        }
+      } else {
+        for (let i = 0; i < inputRows.length; i++) {
+          const row = inputRows[i];
+          const evalType = ['지필', '수행', '기록'].includes(row.eval_type) ? row.eval_type : '수행';
+          await execute(
+            `INSERT INTO subject_domains(year, semester, grade, subject, credit, eval_type, name, reflected, ratio, max_score, sort_order, source_filename)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [year, semester, grade, subject, 0, evalType, row.name || '', evalType === '기록' ? 'X' : 'O', evalType === '기록' ? 0 : (Number(row.ratio) || 0), evalType === '기록' ? 0 : (Number(row.max_score) || 0), i, '']
+          );
+        }
+      }
+    }
+  });
+  res.json({ ok: true });
 });
 
 router.get('/domain-subjects', async (_req: Request, res: Response) => {
@@ -123,17 +229,18 @@ router.get('/domain-subjects', async (_req: Request, res: Response) => {
     SELECT year, semester, grade, subject, MAX(credit) as credit, COUNT(*) as domain_count
     FROM subject_domains
     GROUP BY year, semester, grade, subject
-    ORDER BY year DESC, semester, grade, subject
+    ORDER BY year ASC, semester, grade, subject
   `);
   res.json(subjects);
 });
 
 router.get('/standard-subjects', async (_req: Request, res: Response) => {
   const subjects = await queryAll(`
-    SELECT year, semester, grade, subject, domain_name, MAX(credit) as credit, COUNT(*) as standards_count
+    SELECT year, semester, grade, subject, domain_name, MAX(credit) as credit, COUNT(*) as standards_count,
+           MAX(CASE WHEN source_filename != '' THEN 1 ELSE 0 END) as has_source
     FROM achievement_standards
     GROUP BY year, semester, grade, subject, domain_name
-    ORDER BY year DESC, semester, grade, subject, domain_name
+    ORDER BY year ASC, semester, grade, subject, domain_name
   `);
   res.json(subjects);
 });
@@ -161,11 +268,153 @@ router.delete('/standards/source-file', async (req: Request, res: Response) => {
     const filepath = findUploadedCriteriaFile(source.source_filename);
     if (filepath) try { fs.unlinkSync(filepath); } catch {}
   }
-  await execute(
-    'DELETE FROM achievement_standards WHERE year=? AND semester=? AND grade=? AND subject=?',
-    [year, semester, grade, subject]
-  );
+  await transaction(async () => {
+    await execute(
+      'DELETE FROM achievement_standards WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
+    await execute(
+      'DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
+    await execute(
+      'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
+  });
   res.json({ ok: true });
+});
+
+router.post('/standards/manual-domain', async (req: Request, res: Response) => {
+  const year = Number(req.body?.year);
+  const semester = Number(req.body?.semester);
+  const grade = Number(req.body?.grade);
+  const subject = String(req.body?.subject || '').trim();
+  const credit = Number(req.body?.credit || 0);
+  const domainName = String(req.body?.domainName || '').trim();
+  if (!year || !semester || !grade || !subject || !domainName) {
+    return res.status(400).json({ error: '학년도, 학기, 학년, 과목, 카테고리를 입력하세요.' });
+  }
+
+  const existing = await queryOne<{ id: number }>(
+    `SELECT id FROM achievement_standards
+     WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?
+     LIMIT 1`,
+    [year, semester, grade, subject, domainName]
+  );
+  if (existing) return res.json({ id: existing.id, existed: true });
+
+  const r = await execute(
+    `INSERT INTO achievement_standards(year, semester, grade, subject, credit, domain_name, code, content, level, description, sort_order, source_filename)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [year, semester, grade, subject, credit, domainName, '', '', '', '', 0, '']
+  );
+  res.json({ id: Number(r.lastInsertRowid), existed: false });
+});
+
+type CurriculumStandard = {
+  domainName: string;
+  code: string;
+  content: string;
+  levels: Array<{ level: string; description: string }>;
+};
+
+router.post('/standards/from-curriculum', async (req: Request, res: Response) => {
+  const year = Number(req.body?.year);
+  const semester = Number(req.body?.semester);
+  const grade = Number(req.body?.grade);
+  const subject = String(req.body?.subject || '').trim();
+  const credit = Number(req.body?.credit || 0);
+  if (!year || !semester || !grade || !subject) {
+    return res.status(400).json({ error: '학년도, 학기, 학년, 과목을 입력하세요.' });
+  }
+
+  const subjects = (informationCurriculumStandards as {
+    subjects: Record<string, CurriculumStandard[]>;
+  }).subjects;
+  const standards = subjects[subject];
+  if (!standards) {
+    return res.status(404).json({
+      error: '내장 성취 기준과 일치하는 과목이 없습니다. 현재 지원 과목: 정보, 인공지능 기초, 데이터 과학, 소프트웨어와 생활',
+    });
+  }
+
+  await transaction(async () => {
+    await execute(
+      'DELETE FROM achievement_standards WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
+    let sortOrder = 0;
+    for (const standard of standards) {
+      for (const level of standard.levels) {
+        await execute(
+          `INSERT INTO achievement_standards(year, semester, grade, subject, credit, domain_name, code, content, level, description, sort_order, source_filename)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            year,
+            semester,
+            grade,
+            subject,
+            credit,
+            standard.domainName,
+            standard.code.startsWith('[') ? standard.code : `[${standard.code}]`,
+            standard.content,
+            level.level,
+            level.description,
+            sortOrder++,
+            '',
+          ]
+        );
+      }
+    }
+  });
+  res.json({ year, semester, grade, subject, credit, standardsCount: standards.length });
+});
+
+router.delete('/standards/scope', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = req.query.semester !== undefined ? Number(req.query.semester) : undefined;
+  const grade = req.query.grade !== undefined ? Number(req.query.grade) : undefined;
+  const subject = req.query.subject !== undefined ? String(req.query.subject) : undefined;
+  const domainName = req.query.domainName !== undefined ? String(req.query.domainName) : undefined;
+  if (!year) return res.status(400).json({ error: '학년도가 필요합니다.' });
+
+  const conditions = ['year=?'];
+  const args: Array<string | number> = [year];
+  if (semester !== undefined) { conditions.push('semester=?'); args.push(semester); }
+  if (grade !== undefined) { conditions.push('grade=?'); args.push(grade); }
+  if (subject !== undefined) { conditions.push('subject=?'); args.push(subject); }
+  if (domainName !== undefined) { conditions.push('domain_name=?'); args.push(domainName); }
+  const r = await execute(`DELETE FROM achievement_standards WHERE ${conditions.join(' AND ')}`, args);
+  res.json({ ok: true, deleted: r.rowsAffected });
+});
+
+router.put('/standards/scope', async (req: Request, res: Response) => {
+  const { from, to } = req.body || {};
+  const year = Number(from?.year);
+  if (!year || !to) return res.status(400).json({ error: '변경할 범위와 값이 필요합니다.' });
+
+  const conditions = ['year=?'];
+  const args: Array<string | number> = [year];
+  if (from.semester !== undefined) { conditions.push('semester=?'); args.push(Number(from.semester)); }
+  if (from.grade !== undefined) { conditions.push('grade=?'); args.push(Number(from.grade)); }
+  if (from.subject !== undefined) { conditions.push('subject=?'); args.push(String(from.subject)); }
+  if (from.domainName !== undefined) { conditions.push('domain_name=?'); args.push(String(from.domainName)); }
+
+  const assignments: string[] = [];
+  const values: Array<string | number> = [];
+  if (to.year !== undefined) { assignments.push('year=?'); values.push(Number(to.year)); }
+  if (to.semester !== undefined) { assignments.push('semester=?'); values.push(Number(to.semester)); }
+  if (to.grade !== undefined) { assignments.push('grade=?'); values.push(Number(to.grade)); }
+  if (to.subject !== undefined) { assignments.push('subject=?'); values.push(String(to.subject)); }
+  if (to.domainName !== undefined) { assignments.push('domain_name=?'); values.push(String(to.domainName)); }
+  if (!assignments.length) return res.status(400).json({ error: '변경할 값이 없습니다.' });
+
+  const r = await execute(
+    `UPDATE achievement_standards SET ${assignments.join(', ')} WHERE ${conditions.join(' AND ')}`,
+    [...values, ...args]
+  );
+  res.json({ ok: true, updated: r.rowsAffected });
 });
 
 router.get('/domains/source-file', async (req: Request, res: Response) => {
@@ -197,9 +446,87 @@ router.delete('/domains/source-file', async (req: Request, res: Response) => {
       [year, semester, grade, subject]
     );
     await execute(
+      'DELETE FROM custom_domains WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
+    await execute(
+      'DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
+    await execute(
       'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=?',
       [year, semester, grade, subject]
     );
+  });
+  res.json({ ok: true });
+});
+
+router.delete('/domains/scope', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = req.query.semester !== undefined ? Number(req.query.semester) : undefined;
+  const grade = req.query.grade !== undefined ? Number(req.query.grade) : undefined;
+  const subject = req.query.subject !== undefined ? String(req.query.subject) : undefined;
+  const domainName = req.query.domainName !== undefined ? String(req.query.domainName) : undefined;
+  if (!year) return res.status(400).json({ error: '학년도가 필요합니다.' });
+
+  const conditions = ['year=?'];
+  const args: Array<string | number> = [year];
+  if (semester !== undefined) { conditions.push('semester=?'); args.push(semester); }
+  if (grade !== undefined) { conditions.push('grade=?'); args.push(grade); }
+  if (subject !== undefined) { conditions.push('subject=?'); args.push(subject); }
+  const where = conditions.join(' AND ');
+
+  await transaction(async () => {
+    if (domainName !== undefined) {
+      await execute(`DELETE FROM subject_domains WHERE ${where} AND name=?`, [...args, domainName]);
+      await execute(`DELETE FROM custom_domains WHERE ${where} AND name=?`, [...args, domainName]);
+      await execute(`DELETE FROM domain_setech WHERE ${where} AND domain_name=?`, [...args, domainName]);
+      await execute(`DELETE FROM domain_eval WHERE ${where} AND domain_name=?`, [...args, domainName]);
+    } else {
+      await execute(`DELETE FROM subject_domains WHERE ${where}`, args);
+      await execute(`DELETE FROM custom_domains WHERE ${where}`, args);
+      await execute(`DELETE FROM domain_setech WHERE ${where}`, args);
+      await execute(`DELETE FROM domain_eval WHERE ${where}`, args);
+    }
+  });
+  res.json({ ok: true });
+});
+
+router.put('/domains/scope', async (req: Request, res: Response) => {
+  const { from, to } = req.body || {};
+  const year = Number(from?.year);
+  if (!year || !to) return res.status(400).json({ error: '변경할 범위와 값이 필요합니다.' });
+
+  const conditions = ['year=?'];
+  const args: Array<string | number> = [year];
+  if (from.semester !== undefined) { conditions.push('semester=?'); args.push(Number(from.semester)); }
+  if (from.grade !== undefined) { conditions.push('grade=?'); args.push(Number(from.grade)); }
+  if (from.subject !== undefined) { conditions.push('subject=?'); args.push(String(from.subject)); }
+  const domainName = from.domainName !== undefined ? String(from.domainName) : undefined;
+  const where = conditions.join(' AND ');
+
+  const assignments: string[] = [];
+  const values: Array<string | number> = [];
+  if (to.year !== undefined) { assignments.push('year=?'); values.push(Number(to.year)); }
+  if (to.semester !== undefined) { assignments.push('semester=?'); values.push(Number(to.semester)); }
+  if (to.grade !== undefined) { assignments.push('grade=?'); values.push(Number(to.grade)); }
+  if (to.subject !== undefined) { assignments.push('subject=?'); values.push(String(to.subject)); }
+  const toDomainName = to.domainName !== undefined ? String(to.domainName) : undefined;
+  if (!assignments.length && toDomainName === undefined) return res.status(400).json({ error: '변경할 값이 없습니다.' });
+
+  await transaction(async () => {
+    if (assignments.length) {
+      await execute(`UPDATE subject_domains SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
+      await execute(`UPDATE custom_domains SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
+      await execute(`UPDATE domain_setech SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND domain_name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
+      await execute(`UPDATE domain_eval SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND domain_name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
+    }
+    if (toDomainName !== undefined && domainName !== undefined) {
+      await execute(`UPDATE subject_domains SET name=? WHERE ${where} AND name=?`, [toDomainName, ...args, domainName]);
+      await execute(`UPDATE custom_domains SET name=? WHERE ${where} AND name=?`, [toDomainName, ...args, domainName]);
+      await execute(`UPDATE domain_setech SET domain_name=? WHERE ${where} AND domain_name=?`, [toDomainName, ...args, domainName]);
+      await execute(`UPDATE domain_eval SET domain_name=? WHERE ${where} AND domain_name=?`, [toDomainName, ...args, domainName]);
+    }
   });
   res.json({ ok: true });
 });
@@ -215,11 +542,45 @@ router.get('/domains', async (req: Request, res: Response) => {
   res.json(rows);
 });
 
+router.post('/domains/anchor', async (req: Request, res: Response) => {
+  const { year, semester, grade, subject } = req.body;
+  const existing = await queryOne(
+    `SELECT 1 FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=? LIMIT 1`,
+    [year, semester, grade, subject]
+  );
+  if (!existing) {
+    await execute(
+      `INSERT INTO subject_domains(year, semester, grade, subject, credit, eval_type, name, reflected, ratio, max_score, sort_order, source_filename)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [year, semester, grade, subject, 0, '', '', 'X', 0, 0, -1, '']
+    );
+  }
+  res.json({ ok: true });
+});
+
 router.post('/domains/upload', upload.single('file'), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
   const originalName = decodeUploadFilename(req.file.originalname);
   try {
     const parsed = await parseAreaManagementExcel(req.file.path);
+    // Check if subject already exists in either table (unless overwrite is requested)
+    if (!req.query.overwrite) {
+      const existing = await queryOne(
+        `SELECT 1 as found FROM (
+          SELECT year, semester, grade, subject FROM subject_domains
+          UNION ALL
+          SELECT year, semester, grade, subject FROM achievement_standards
+        ) WHERE year=? AND semester=? AND grade=? AND subject=? LIMIT 1`,
+        [parsed.info.year, parsed.info.semester, parsed.info.grade, parsed.info.subject]
+      );
+      if (existing) {
+        return res.status(409).json({
+          conflict: true,
+          year: parsed.info.year, semester: parsed.info.semester,
+          grade: parsed.info.grade, subject: parsed.info.subject,
+        });
+      }
+    }
     await transaction(async () => {
       await execute(
         'DELETE FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=?',
@@ -258,11 +619,44 @@ router.get('/standards', async (req: Request, res: Response) => {
   res.json(rows);
 });
 
+router.post('/standards/anchor', async (req: Request, res: Response) => {
+  const { year, semester, grade, subject } = req.body;
+  const existing = await queryOne(
+    `SELECT 1 FROM achievement_standards WHERE year=? AND semester=? AND grade=? AND subject=? LIMIT 1`,
+    [year, semester, grade, subject]
+  );
+  if (!existing) {
+    await execute(
+      `INSERT INTO achievement_standards(year, semester, grade, subject, credit, domain_name, code, content, level, description, sort_order, source_filename)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [year, semester, grade, subject, 0, '', '', '', '', '', -1, '']
+    );
+  }
+  res.json({ ok: true });
+});
+
 router.post('/standards/upload', upload.single('file'), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
   const originalName = decodeUploadFilename(req.file.originalname);
   try {
     const parsed = await parseAchievementStandardsExcel(req.file.path);
+    if (!req.query.overwrite) {
+      const existing = await queryOne(
+        `SELECT 1 as found FROM (
+          SELECT year, semester, grade, subject FROM achievement_standards
+          UNION ALL
+          SELECT year, semester, grade, subject FROM subject_domains
+        ) WHERE year=? AND semester=? AND grade=? AND subject=? LIMIT 1`,
+        [parsed.info.year, parsed.info.semester, parsed.info.grade, parsed.info.subject]
+      );
+      if (existing) {
+        return res.status(409).json({
+          conflict: true,
+          year: parsed.info.year, semester: parsed.info.semester,
+          grade: parsed.info.grade, subject: parsed.info.subject,
+        });
+      }
+    }
     await transaction(async () => {
       await execute(
         'DELETE FROM achievement_standards WHERE year=? AND semester=? AND grade=? AND subject=?',
@@ -296,7 +690,46 @@ router.post('/custom-domains', async (req: Request, res: Response) => {
 });
 
 router.delete('/custom-domains/:id', async (req: Request, res: Response) => {
-  await execute('DELETE FROM custom_domains WHERE id=?', [req.params.id]);
+  const existing = await queryOne<{ year: number; semester: number; grade: number; subject: string; name: string }>(
+    'SELECT year, semester, grade, subject, name FROM custom_domains WHERE id=?',
+    [req.params.id]
+  );
+  if (existing) {
+    await transaction(async () => {
+      await execute('DELETE FROM custom_domains WHERE id=?', [req.params.id]);
+      await execute(
+        'DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+        [existing.year, existing.semester, existing.grade, existing.subject, existing.name]
+      );
+      await execute(
+        'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+        [existing.year, existing.semester, existing.grade, existing.subject, existing.name]
+      );
+    });
+  }
+  res.json({ ok: true });
+});
+
+router.put('/custom-domains/:id', async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const name = String(req.body?.name || '').trim();
+  if (!id || !name) return res.status(400).json({ error: '영역 이름이 필요합니다.' });
+  const existing = await queryOne<{ year: number; semester: number; grade: number; subject: string; name: string }>(
+    'SELECT year, semester, grade, subject, name FROM custom_domains WHERE id=?',
+    [id]
+  );
+  if (!existing) return res.status(404).json({ error: '영역을 찾을 수 없습니다.' });
+  await transaction(async () => {
+    await execute('UPDATE custom_domains SET name=? WHERE id=?', [name, id]);
+    await execute(
+      'UPDATE domain_setech SET domain_name=? WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+      [name, existing.year, existing.semester, existing.grade, existing.subject, existing.name]
+    );
+    await execute(
+      'UPDATE domain_eval SET domain_name=? WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+      [name, existing.year, existing.semester, existing.grade, existing.subject, existing.name]
+    );
+  });
   res.json({ ok: true });
 });
 

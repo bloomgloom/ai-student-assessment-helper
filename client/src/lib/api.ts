@@ -17,16 +17,16 @@ export const settingsApi = {
 
 // Criteria (Domain Based)
 export const criteriaApi = {
-  getSets: () => api.get('/criteria/sets'), // legacy
-  getSubjects: () => api.get('/criteria/subjects'),
-  getDomainSubjects: () => api.get('/criteria/domain-subjects'),
-  getStandardSubjects: () => api.get('/criteria/standard-subjects'),
+  getSets: () => api.get('/criteria/sets', { params: { t: Date.now() } }), // legacy
+  getSubjects: (type?: 'standards' | 'domains') => api.get('/criteria/subjects', { params: { type, t: Date.now() } }),
+  getDomainSubjects: () => api.get('/criteria/domain-subjects', { params: { t: Date.now() } }),
+  getStandardSubjects: () => api.get('/criteria/standard-subjects', { params: { t: Date.now() } }),
   getDomains: (year: number, semester: number, grade: number, subject: string) =>
-    api.get('/criteria/domains', { params: { year, semester, grade, subject } }),
-  uploadDomains: (file: File) => {
+    api.get('/criteria/domains', { params: { year, semester, grade, subject, t: Date.now() } }),
+  uploadDomains: (file: File, overwrite?: boolean) => {
     const form = new FormData();
     form.append('file', file);
-    return api.post('/criteria/domains/upload', form);
+    return api.post(`/criteria/domains/upload${overwrite ? '?overwrite=true' : ''}`, form);
   },
   exportDomainConfig: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
     api.get('/criteria/domain-config/export', {
@@ -48,25 +48,71 @@ export const criteriaApi = {
   deleteSource: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
     api.delete(`/criteria/${kind}/source-file`, { params: { year, semester, grade, subject } }),
   getStandards: (year: number, semester: number, grade: number, subject: string) =>
-    api.get('/criteria/standards', { params: { year, semester, grade, subject } }),
-  uploadStandards: (file: File) => {
+    api.get('/criteria/standards', { params: { year, semester, grade, subject, t: Date.now() } }),
+  uploadStandards: (file: File, overwrite?: boolean) => {
     const form = new FormData();
     form.append('file', file);
-    return api.post('/criteria/standards/upload', form);
+    return api.post(`/criteria/standards/upload${overwrite ? '?overwrite=true' : ''}`, form);
   },
+  addManualStandardDomain: (data: {
+    year: number;
+    semester: number;
+    grade: number;
+    subject: string;
+    credit?: number;
+    domainName: string;
+  }) => api.post('/criteria/standards/manual-domain', data),
+  seedStandardsFromCurriculum: (data: {
+    year: number;
+    semester: number;
+    grade: number;
+    subject: string;
+    credit?: number;
+  }) => api.post('/criteria/standards/from-curriculum', data),
+  createStandardsAnchor: (year: number, semester: number, grade: number, subject: string) =>
+    api.post('/criteria/standards/anchor', { year, semester, grade, subject }),
+  createDomainsAnchor: (year: number, semester: number, grade: number, subject: string) =>
+    api.post('/criteria/domains/anchor', { year, semester, grade, subject }),
+  deleteStandardsScope: (params: {
+    year: number;
+    semester?: number;
+    grade?: number;
+    subject?: string;
+    domainName?: string;
+  }) => api.delete('/criteria/standards/scope', { params }),
+  updateStandardsScope: (data: {
+    from: { year: number; semester?: number; grade?: number; subject?: string; domainName?: string };
+    to: { year?: number; semester?: number; grade?: number; subject?: string; domainName?: string };
+  }) => api.put('/criteria/standards/scope', data),
+  deleteDomainsScope: (params: {
+    year: number;
+    semester?: number;
+    grade?: number;
+    subject?: string;
+    domainName?: string;
+  }) => api.delete('/criteria/domains/scope', { params }),
+  updateDomainsScope: (data: {
+    from: { year: number; semester?: number; grade?: number; subject?: string; domainName?: string };
+    to: { year?: number; semester?: number; grade?: number; subject?: string; domainName?: string };
+  }) => api.put('/criteria/domains/scope', data),
+  getSubjectDomains: (year: number, semester: number, grade: number, subject: string) =>
+    api.get('/criteria/subject-domains', { params: { year, semester, grade, subject, t: Date.now() } }),
+  bulkSaveSubjectDomains: (year: number, semester: number, grade: number, subject: string, rows: unknown[]) =>
+    api.put('/criteria/subject-domains/bulk', { year, semester, grade, subject, rows }),
   addCustomDomain: (data: { year: number, semester: number, grade: number, subject: string, name: string }) =>
     api.post('/criteria/custom-domains', data),
+  updateCustomDomain: (id: number, data: { name: string }) => api.put(`/criteria/custom-domains/${id}`, data),
   deleteCustomDomain: (id: number) => api.delete(`/criteria/custom-domains/${id}`),
 
   // 세특
   getSetech: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
-    api.get('/criteria/setech', { params: { year, semester, grade, subject, domainName } }),
+    api.get('/criteria/setech', { params: { year, semester, grade, subject, domainName, t: Date.now() } }),
   bulkSaveSetech: (year: number, semester: number, grade: number, subject: string, domainName: string, items: unknown[]) =>
     api.put('/criteria/setech/bulk', { year, semester, grade, subject, domainName, items }),
 
   // 평가
   getEval: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
-    api.get('/criteria/eval', { params: { year, semester, grade, subject, domainName } }),
+    api.get('/criteria/eval', { params: { year, semester, grade, subject, domainName, t: Date.now() } }),
   bulkSaveEval: (year: number, semester: number, grade: number, subject: string, domainName: string, items: unknown[]) =>
     api.put('/criteria/eval/bulk', { year, semester, grade, subject, domainName, items }),
 };

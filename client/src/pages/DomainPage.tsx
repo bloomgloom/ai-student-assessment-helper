@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { criteriaApi, aiApi } from '../lib/api';
 import { useAiOverlayStore } from '../stores/aiOverlayStore';
 import {
@@ -15,6 +15,23 @@ interface SubjectItem {
   class_id: number;
   fixedDomains: { name: string; max_score: number; sort_order: number }[];
   customDomains: { id: number; name: string }[];
+  has_source?: number;
+}
+
+interface SubjectDomainRow {
+  id?: number | string;
+  year?: number;
+  semester?: number;
+  grade?: number;
+  subject?: string;
+  credit?: number;
+  eval_type: '지필' | '수행' | '기록' | string;
+  name: string;
+  reflected: 'O' | 'X' | string;
+  ratio: number | string;
+  max_score: number | string;
+  sort_order?: number;
+  source_filename?: string;
 }
 
 interface SetechItem {
@@ -43,11 +60,57 @@ interface StandardRef {
 
 
 interface TreeNode {
+  key: string;
   label: string;
+  kind: 'year' | 'semester' | 'grade' | 'subject' | 'domain';
+  year?: number;
+  semester?: number;
+  grade?: number;
+  subjectName?: string;
   children?: TreeNode[];
   subject?: SubjectItem;
   domainName?: string;
   isCustom?: boolean;
+  isDraft?: boolean;
+  parentKey?: string | null;
+}
+
+type EditingTreeItem = { key: string; mode: 'add'; value: string };
+
+function nodeKey(parts: Array<string | number | undefined>) {
+  return parts.filter(v => v !== undefined && v !== '').join('|');
+}
+
+function nextChildKind(kind?: TreeNode['kind']): TreeNode['kind'] {
+  if (!kind) return 'year';
+  if (kind === 'year') return 'semester';
+  if (kind === 'semester') return 'grade';
+  if (kind === 'grade') return 'subject';
+  return 'domain';
+}
+
+function mergeDraftNodes(nodes: TreeNode[], drafts: TreeNode[], parentKey: string | null = null): TreeNode[] {
+  const existingKeys = new Set(nodes.map(node => node.key));
+  const directDrafts = drafts
+    .filter(node => node.parentKey === parentKey && !existingKeys.has(node.key))
+    .map(node => ({ ...node, children: mergeDraftNodes([], drafts, node.key) }));
+  return [
+    ...nodes.map(node => ({
+      ...node,
+      children: mergeDraftNodes(node.children || [], drafts, node.key),
+    })),
+    ...directDrafts,
+  ];
+}
+
+function domainSelectionPayload(sub: SubjectItem, domain: string | null) {
+  return {
+    year: sub.year,
+    semester: sub.semester,
+    grade: sub.grade,
+    subject: sub.subject,
+    domain,
+  };
 }
 
 function buildTree(subjects: SubjectItem[]): TreeNode[] {
@@ -63,20 +126,55 @@ function buildTree(subjects: SubjectItem[]): TreeNode[] {
   }
 
   const result: TreeNode[] = [];
-  for (const [year, semMap] of [...yearMap.entries()].sort((a, b) => b[0] - a[0])) {
-    const yearNode: TreeNode = { label: `${year}학년도`, children: [] };
+  for (const [year, semMap] of [...yearMap.entries()].sort((a, b) => a[0] - b[0])) {
+    const yearNode: TreeNode = { key: nodeKey(['dy', year]), label: `${year}학년도`, kind: 'year', year, children: [] };
     for (const [semester, gradeMap] of [...semMap.entries()].sort((a, b) => a[0] - b[0])) {
-      const semNode: TreeNode = { label: `${semester}학기`, children: [] };
+      if (semester === 0) continue;
+      const semNode: TreeNode = { key: nodeKey(['ds', year, semester]), label: `${semester}학기`, kind: 'semester', year, semester, children: [] };
       for (const [grade, subjects] of [...gradeMap.entries()].sort((a, b) => a[0] - b[0])) {
-        const gradeNode: TreeNode = { label: `${grade}학년`, children: [] };
+        if (grade === 0) continue;
+        const gradeNode: TreeNode = { key: nodeKey(['dg', year, semester, grade]), label: `${grade}학년`, kind: 'grade', year, semester, grade, children: [] };
         for (const sub of subjects.sort((a, b) => a.subject.localeCompare(b.subject))) {
-          const subjectNode: TreeNode = { label: sub.subject, children: [], subject: sub };
+          if (!sub.subject) continue;
+          const subjectNode: TreeNode = {
+            key: nodeKey(['dsub', sub.year, sub.semester, sub.grade, sub.subject]),
+            label: sub.subject,
+            kind: 'subject',
+            year: sub.year,
+            semester: sub.semester,
+            grade: sub.grade,
+            subjectName: sub.subject,
+            children: [],
+            subject: sub,
+          };
 
           for (const fd of sub.fixedDomains) {
-            subjectNode.children!.push({ label: fd.name, subject: sub, domainName: fd.name, isCustom: false });
+            subjectNode.children!.push({
+              key: nodeKey(['ddom', sub.year, sub.semester, sub.grade, sub.subject, fd.name]),
+              label: fd.name,
+              kind: 'domain',
+              year: sub.year,
+              semester: sub.semester,
+              grade: sub.grade,
+              subjectName: sub.subject,
+              subject: sub,
+              domainName: fd.name,
+              isCustom: false,
+            });
           }
           for (const cd of sub.customDomains) {
-            subjectNode.children!.push({ label: cd.name, subject: sub, domainName: cd.name, isCustom: true });
+            subjectNode.children!.push({
+              key: nodeKey(['ddom', sub.year, sub.semester, sub.grade, sub.subject, cd.name]),
+              label: cd.name,
+              kind: 'domain',
+              year: sub.year,
+              semester: sub.semester,
+              grade: sub.grade,
+              subjectName: sub.subject,
+              subject: sub,
+              domainName: cd.name,
+              isCustom: true,
+            });
           }
           gradeNode.children!.push(subjectNode);
         }
@@ -90,8 +188,8 @@ function buildTree(subjects: SubjectItem[]): TreeNode[] {
 }
 
 function TreeNodeView({
-  node, depth, selectedDomainKey, selectedSubjectKey, onSelectDomain, onSelectSubject, onAddCustomDomain, onDeleteCustomDomain,
-  onDownloadSubject, onDeleteSubject
+  node, depth, selectedDomainKey, selectedSubjectKey, onSelectDomain, onSelectSubject,
+  onDownloadSubject, onDeleteSubject, onAddNode, onDeleteNode, editing, onEditChange, onEditCommit, onEditCancel
 }: {
   node: TreeNode;
   depth: number;
@@ -99,40 +197,60 @@ function TreeNodeView({
   selectedSubjectKey: string | null;
   onSelectDomain: (sub: SubjectItem, domain: string, isCustom: boolean) => void;
   onSelectSubject: (sub: SubjectItem) => void;
-  onAddCustomDomain: (sub: SubjectItem) => void;
-  onDeleteCustomDomain: (sub: SubjectItem, domain: string) => void;
   onDownloadSubject: (sub: SubjectItem) => void;
   onDeleteSubject: (sub: SubjectItem) => void;
+  onAddNode: (node?: TreeNode) => void;
+  onDeleteNode: (node: TreeNode) => void;
+  editing: EditingTreeItem | null;
+  onEditChange: (value: string) => void;
+  onEditCommit: () => void;
+  onEditCancel: () => void;
 }) {
-  const isLeaf = !!node.domainName;
+  const isLeaf = node.kind === 'domain';
   const isSubject = !!node.subject && !node.domainName;
   const [open, setOpen] = useState(true);
   const pl = `${8 + depth * 14}px`;
+  const isEditing = editing?.key === node.key;
+  const labelNode = isEditing ? (
+    <input
+      className="input h-6 flex-1 px-1.5 py-0 text-xs"
+      value={editing.value}
+      autoFocus
+      onChange={(e) => onEditChange(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          onEditCommit();
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onEditCancel();
+        }
+      }}
+      onBlur={onEditCommit}
+    />
+  ) : (
+    <span className="flex-1 truncate">{node.label}</span>
+  );
 
   if (isLeaf) {
-    const key = `${node.subject!.year}-${node.subject!.semester}-${node.subject!.grade}-${node.subject!.subject}-${node.domainName}`;
-    const isSelected = selectedDomainKey === key;
+    const sub = node.subject;
+    const key = sub ? `${sub.year}-${sub.semester}-${sub.grade}-${sub.subject}-${node.domainName}` : '';
+    const isSelected = !!sub && selectedDomainKey === key;
     return (
       <div
-        className={`group flex items-center gap-1.5 py-1.5 pr-2 cursor-pointer rounded text-sm transition-colors ${isSelected ? 'bg-blue-100 text-blue-700 font-medium' : 'hover:bg-gray-100 text-gray-700'
+        className={`group flex items-center gap-1.5 py-1.5 pr-5 cursor-pointer rounded text-sm transition-colors ${isSelected ? 'bg-blue-100 text-blue-700 font-medium' : 'hover:bg-gray-100 text-gray-700'
           }`}
         style={{ paddingLeft: pl }}
-        onClick={() => onSelectDomain(node.subject!, node.domainName!, node.isCustom!)}
+        onClick={() => { if (!isEditing && sub) onSelectDomain(sub, node.domainName!, node.isCustom!); }}
       >
         {node.isCustom ? (
           <BookOpen size={13} className="shrink-0 text-purple-500" />
         ) : (
           <ClipboardCheck size={13} className="shrink-0 text-green-500" />
         )}
-        <span className="flex-1 truncate">{node.label}</span>
-        {node.isCustom && (
-          <button
-            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400"
-            onClick={(e) => { e.stopPropagation(); onDeleteCustomDomain(node.subject!, node.domainName!); }}
-          >
-            <Trash2 size={12} />
-          </button>
-        )}
+        {labelNode}
       </div>
     );
   }
@@ -143,7 +261,7 @@ function TreeNodeView({
   return (
     <div>
       <div
-        className={`group flex items-center gap-1 py-1 pr-2 cursor-pointer hover:bg-gray-50 rounded text-sm text-gray-600 font-medium ${isSubjectSelected ? 'bg-blue-100 text-blue-800' : isSubject ? 'text-blue-800' : ''}`}
+        className={`group flex items-center gap-1 py-1 pr-5 cursor-pointer hover:bg-gray-50 rounded text-sm text-gray-600 font-medium ${isSubjectSelected ? 'bg-blue-100 text-blue-800' : isSubject ? 'text-blue-800' : ''}`}
         style={{ paddingLeft: pl }}
         onClick={() => {
           if (isSubject) onSelectSubject(node.subject!);
@@ -156,23 +274,20 @@ function TreeNodeView({
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </div>
         {isSubject && <Folder size={13} className="text-blue-400 mr-0.5" />}
-        <span className="flex-1">{node.label}</span>
-        {isSubject && (
+        {isSubject && !isEditing ? <span className="flex-1 truncate">{node.label}</span> : labelNode}
+        {isSubject ? (
           <>
-            <button
-              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-500"
-              onClick={(e) => { e.stopPropagation(); setOpen(true); onAddCustomDomain(node.subject!); }}
-              title="임의 영역 추가"
-            >
-              <Plus size={13} />
-            </button>
-            <button
-              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-500"
-              onClick={(e) => { e.stopPropagation(); onDownloadSubject(node.subject!); }}
-              title="원본 파일 다운로드"
-            >
-              <Download size={13} />
-            </button>
+            {node.subject?.has_source ? (
+              <button
+                className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-500"
+                onClick={(e) => { e.stopPropagation(); onDownloadSubject(node.subject!); }}
+                title="원본 파일 다운로드"
+              >
+                <Download size={13} />
+              </button>
+            ) : (
+              <span className="w-[21px]" />
+            )}
             <button
               className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400"
               onClick={(e) => { e.stopPropagation(); onDeleteSubject(node.subject!); }}
@@ -181,6 +296,23 @@ function TreeNodeView({
               <Trash2 size={13} />
             </button>
           </>
+        ) : (
+          <div className="flex items-center gap-0.5">
+            <button
+              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 rounded text-blue-500"
+              onClick={(e) => { e.stopPropagation(); setOpen(true); onAddNode(node); }}
+              title="하위 항목 추가"
+            >
+              <Plus size={13} />
+            </button>
+            <button
+              className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 rounded text-red-400"
+              onClick={(e) => { e.stopPropagation(); onDeleteNode(node); }}
+              title="삭제"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
         )}
       </div>
       {open && node.children?.map((child, i) => (
@@ -190,10 +322,14 @@ function TreeNodeView({
           selectedSubjectKey={selectedSubjectKey}
           onSelectDomain={onSelectDomain}
           onSelectSubject={onSelectSubject}
-          onAddCustomDomain={onAddCustomDomain}
-          onDeleteCustomDomain={onDeleteCustomDomain}
           onDownloadSubject={onDownloadSubject}
           onDeleteSubject={onDeleteSubject}
+          onAddNode={onAddNode}
+          onDeleteNode={onDeleteNode}
+          editing={editing}
+          onEditChange={onEditChange}
+          onEditCommit={onEditCommit}
+          onEditCancel={onEditCancel}
         />
       ))}
     </div>
@@ -203,6 +339,8 @@ function TreeNodeView({
 export default function DomainPage() {
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [tree, setTree] = useState<TreeNode[]>([]);
+  const [draftNodes, setDraftNodes] = useState<TreeNode[]>([]);
+  const [editing, setEditing] = useState<EditingTreeItem | null>(null);
 
   const [selectedSubject, setSelectedSubject] = useState<SubjectItem | null>(null);
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
@@ -211,7 +349,7 @@ export default function DomainPage() {
   const [setechItems, setSetechItems] = useState<SetechItem[]>([]);
   const [evalItems, setEvalItems] = useState<EvalItem[]>([]);
 
-  const [allSubjectDomains, setAllSubjectDomains] = useState<any[]>([]);
+  const [allSubjectDomains, setAllSubjectDomains] = useState<SubjectDomainRow[]>([]);
   const [standardRefs, setStandardRefs] = useState<StandardRef[]>([]);
   const [achievementStandards, setAchievementStandards] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
@@ -228,11 +366,13 @@ export default function DomainPage() {
   const [evalChecked, setEvalChecked] = useState<Set<number>>(new Set());
   const [setechChecked, setSetechChecked] = useState<Set<number>>(new Set());
   const [standardsMetaPrompt, setStandardsMetaPrompt] = useState<string>('');
+  const [subjectDomainsMetaPrompt, setSubjectDomainsMetaPrompt] = useState<string>('');
   const [subjectCommonPrompt, setSubjectCommonPrompt] = useState<string>('');
   const [generatingStandards, setGeneratingStandards] = useState(false);
+  const [generatingSubjectDomains, setGeneratingSubjectDomains] = useState(false);
   const [generatingEval, setGeneratingEval] = useState(false);
   const [generatingSetech, setGeneratingSetech] = useState(false);
-  const [activeTab, setActiveTab] = useState<'standards' | 'scoring' | 'activity'>('standards');
+  const [activeTab, setActiveTab] = useState<'standards' | 'scoring' | 'activity' | 'ratio'>('standards');
   const [isDirty, setIsDirty] = useState(false);
   const overlayStore = useAiOverlayStore();
   const domainRestoredRef = useRef(false);
@@ -255,6 +395,8 @@ export default function DomainPage() {
     setTree(buildTree(subjects));
   }, [subjects]);
 
+  const visibleTree = useMemo(() => mergeDraftNodes(tree, draftNodes), [tree, draftNodes]);
+
   const loadCriteria = useCallback(async (sub: SubjectItem, domainName: string, isCustom: boolean) => {
     setIsDirty(false);
     const sr = await criteriaApi.getSetech(sub.year, sub.semester, sub.grade, sub.subject, domainName);
@@ -267,15 +409,11 @@ export default function DomainPage() {
     setStandardRefs(refs);
     setSetechItems(allItems.filter(i => i.type !== '성취기준' && i.type !== '활동공통'));
 
-    // 성취기준 관리 데이터 로드 (영역 세특은 고정/세특 전용 모두 성취기준을 참조)
-    if (domainName !== '__SUBJECT_COMPREHENSIVE__') {
-      try {
-        const stdRes = await criteriaApi.getStandards(sub.year, sub.semester, sub.grade, sub.subject);
-        setAchievementStandards(stdRes.data);
-      } catch { setAchievementStandards([]); }
-    } else {
-      setAchievementStandards([]);
-    }
+    // 성취기준 관리 데이터 로드 (과목/영역 자동 생성 모두 성취기준을 참조)
+    try {
+      const stdRes = await criteriaApi.getStandards(sub.year, sub.semester, sub.grade, sub.subject);
+      setAchievementStandards(stdRes.data);
+    } catch { setAchievementStandards([]); }
 
     if (!isCustom && domainName !== '__SUBJECT_COMPREHENSIVE__') {
       const er = await criteriaApi.getEval(sub.year, sub.semester, sub.grade, sub.subject, domainName);
@@ -310,7 +448,7 @@ export default function DomainPage() {
     setSetechChecked(new Set());
     setActiveTab('standards');
     loadCriteria(sub, domain, isCustom);
-    localStorage.setItem('domainPage_lastSelection', JSON.stringify({ classId: sub.class_id, domain }));
+    localStorage.setItem('domainPage_lastSelection', JSON.stringify(domainSelectionPayload(sub, domain)));
   }, [isDirty, loadCriteria]);
 
   const handleSelectSubject = useCallback(async (sub: SubjectItem) => {
@@ -320,12 +458,25 @@ export default function DomainPage() {
     setIsCustomDomain(true);
     setSetechMetaPrompts({});
     setSetechChecked(new Set());
-    setActiveTab('activity');
+    setActiveTab('ratio');
     loadCriteria(sub, '__SUBJECT_COMPREHENSIVE__', true);
-    const dr = await criteriaApi.getDomains(sub.year, sub.semester, sub.grade, sub.subject);
+    const dr = await criteriaApi.getSubjectDomains(sub.year, sub.semester, sub.grade, sub.subject);
     setAllSubjectDomains(dr.data);
-    localStorage.setItem('domainPage_lastSelection', JSON.stringify({ classId: sub.class_id, domain: null }));
+    localStorage.setItem('domainPage_lastSelection', JSON.stringify(domainSelectionPayload(sub, null)));
   }, [isDirty, loadCriteria]);
+
+  useEffect(() => {
+    if (!selectedSubject || subjects.length === 0) return;
+    const fresh = subjects.find(s =>
+      s.year === selectedSubject.year &&
+      s.semester === selectedSubject.semester &&
+      s.grade === selectedSubject.grade &&
+      s.subject === selectedSubject.subject
+    );
+    if (!fresh) return;
+    if (fresh === selectedSubject) return;
+    setSelectedSubject(fresh);
+  }, [subjects, selectedSubject]);
 
   // 마지막 선택 복원
   useEffect(() => {
@@ -334,8 +485,12 @@ export default function DomainPage() {
     const saved = localStorage.getItem('domainPage_lastSelection');
     if (!saved) return;
     try {
-      const { classId, domain } = JSON.parse(saved);
-      const sub = subjects.find(s => s.class_id === classId);
+      const { classId, year, semester, grade, subject, domain } = JSON.parse(saved);
+      const sub = subjects.find(s =>
+        year !== undefined
+          ? s.year === year && s.semester === semester && s.grade === grade && s.subject === subject
+          : s.class_id === classId
+      );
       if (!sub) return;
       if (domain) {
         const isCustom = sub.customDomains.some((d: any) => d.name === domain);
@@ -346,41 +501,26 @@ export default function DomainPage() {
     } catch { /* ignore */ }
   }, [subjects, handleSelectDomain, handleSelectSubject]);
 
-  const handleAddCustomDomain = async (sub: SubjectItem) => {
-    const name = prompt(`${sub.subject} 과목에 추가할 세특 전용 임의 영역 이름을 입력하세요:`);
-    const trimmedName = name?.trim();
-    if (!trimmedName) return;
-    try {
-      const res = await criteriaApi.addCustomDomain({
-        year: sub.year, semester: sub.semester, grade: sub.grade, subject: sub.subject, name: trimmedName
-      });
-      await loadSubjects();
-      const nextSub = {
-        ...sub,
-        customDomains: [...sub.customDomains, { id: res.data.id, name: trimmedName }],
-      };
-      handleSelectDomain(nextSub, trimmedName, true);
-    } catch (e: any) {
-      alert('추가 실패: ' + (e.response?.data?.error || e.message));
-    }
-  };
-
-  const handleDeleteCustomDomain = async (sub: SubjectItem, domain: string) => {
-    if (!confirm(`'${domain}' 임의 영역을 삭제하시겠습니까? 관련된 세특 기준도 모두 삭제됩니다.`)) return;
-    const cd = sub.customDomains.find(d => d.name === domain);
-    if (!cd) return;
-    await criteriaApi.deleteCustomDomain(cd.id);
-    if (selectedSubject?.subject === sub.subject && selectedDomain === domain) {
-      setSelectedDomain(null);
-    }
-    await loadSubjects();
-  };
-
   const handleSave = async (): Promise<boolean> => {
     if (!selectedSubject) return false;
+    if (!selectedDomain && subjectAssessmentRatioError) {
+      alert(subjectAssessmentRatioError);
+      return false;
+    }
     const domainToSave = selectedDomain || '__SUBJECT_COMPREHENSIVE__';
     setSaving(true);
     try {
+      if (!selectedDomain) {
+        await criteriaApi.bulkSaveSubjectDomains(
+          selectedSubject.year,
+          selectedSubject.semester,
+          selectedSubject.grade,
+          selectedSubject.subject,
+          allSubjectDomains
+        );
+        await loadSubjects();
+      }
+
       // standardRefs를 '성취기준' 타입 아이템으로 변환 후 앞에 붙임
       const refItems: SetechItem[] = standardRefs.map((r, i) => ({
         type: '성취기준',
@@ -436,6 +576,204 @@ export default function DomainPage() {
 
   const handleDownloadSubjectFile = (sub: SubjectItem) => {
     window.location.href = criteriaApi.sourceUrl('domains', sub.year, sub.semester, sub.grade, sub.subject);
+  };
+
+  const isSameSubject = (a: SubjectItem | null, b: Pick<SubjectItem, 'year' | 'semester' | 'grade' | 'subject'>) =>
+    !!a && a.year === b.year && a.semester === b.semester && a.grade === b.grade && a.subject === b.subject;
+
+  const isSelectedInScope = (node: TreeNode) => {
+    if (!selectedSubject || selectedSubject.year !== node.year) return false;
+    if (node.semester !== undefined && selectedSubject.semester !== node.semester) return false;
+    if (node.grade !== undefined && selectedSubject.grade !== node.grade) return false;
+    if (node.subjectName !== undefined && selectedSubject.subject !== node.subjectName) return false;
+    if (node.domainName !== undefined && selectedDomain !== node.domainName) return false;
+    return true;
+  };
+  const clearDomainSelection = () => {
+    setSelectedSubject(null);
+    setSelectedDomain(null);
+    setAllSubjectDomains([]);
+    setStandardRefs([]);
+    setSetechItems([]);
+    setEvalItems([]);
+    setAchievementStandards([]);
+    localStorage.removeItem('domainPage_lastSelection');
+  };
+
+  const removeDraftSubtree = (nodes: TreeNode[], rootKey: string) => {
+    const childrenByParent = new Map<string | null | undefined, TreeNode[]>();
+    for (const draft of nodes) {
+      const children = childrenByParent.get(draft.parentKey) || [];
+      children.push(draft);
+      childrenByParent.set(draft.parentKey, children);
+    }
+    const keysToRemove = new Set<string>();
+    const visit = (key: string) => {
+      keysToRemove.add(key);
+      for (const child of childrenByParent.get(key) || []) visit(child.key);
+    };
+    visit(rootKey);
+    return nodes.filter(item => !keysToRemove.has(item.key));
+  };
+
+  const preserveParentPath = (sub: Pick<SubjectItem, 'year' | 'semester' | 'grade'>) => {
+    const yearNode: TreeNode = {
+      key: nodeKey(['dy', sub.year]),
+      label: `${sub.year}학년도`,
+      kind: 'year',
+      year: sub.year,
+      children: [],
+      isDraft: true,
+      parentKey: null,
+    };
+    const semesterNode: TreeNode = {
+      key: nodeKey(['ds', sub.year, sub.semester]),
+      label: `${sub.semester}학기`,
+      kind: 'semester',
+      year: sub.year,
+      semester: sub.semester,
+      children: [],
+      isDraft: true,
+      parentKey: yearNode.key,
+    };
+    const gradeNode: TreeNode = {
+      key: nodeKey(['dg', sub.year, sub.semester, sub.grade]),
+      label: `${sub.grade}학년`,
+      kind: 'grade',
+      year: sub.year,
+      semester: sub.semester,
+      grade: sub.grade,
+      children: [],
+      isDraft: true,
+      parentKey: semesterNode.key,
+    };
+    const parents = [yearNode, semesterNode, gradeNode];
+    setDraftNodes(prev => {
+      const keys = new Set(prev.map(node => node.key));
+      return [...prev, ...parents.filter(node => !keys.has(node.key))];
+    });
+  };
+
+  const handleAddNode = (node?: TreeNode) => {
+    const kind = nextChildKind(node?.kind);
+    const draftKey = `domain-draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const draft: TreeNode = {
+      key: draftKey,
+      parentKey: node?.key ?? null,
+      isDraft: true,
+      kind,
+      label: '',
+      year: node?.year,
+      semester: node?.semester,
+      grade: node?.grade,
+      subjectName: node?.subjectName,
+      subject: node?.subject,
+      children: kind === 'domain' ? undefined : [],
+    };
+    setDraftNodes(prev => [...prev, draft]);
+    setEditing({ key: draftKey, mode: 'add', value: '' });
+  };
+
+  const findNodeByKey = (nodes: TreeNode[], key: string): TreeNode | null => {
+    for (const node of nodes) {
+      if (node.key === key) return node;
+      const child = findNodeByKey(node.children || [], key);
+      if (child) return child;
+    }
+    return null;
+  };
+
+  const commitAddNode = async (node: TreeNode, value: string): Promise<boolean> => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setDraftNodes(prev => removeDraftSubtree(prev, node.key));
+      return true;
+    }
+
+    if (node.kind === 'year') {
+      const year = Number(trimmed);
+      if (!year) {
+        alert('학년도는 숫자로 입력하세요.');
+        return false;
+      }
+      await criteriaApi.createDomainsAnchor(year, 0, 0, '');
+    } else if (node.kind === 'semester') {
+      const semester = Number(trimmed);
+      if (!semester || !node.year) {
+        alert('학기는 숫자로 입력하세요.');
+        return false;
+      }
+      await criteriaApi.createDomainsAnchor(node.year, semester, 0, '');
+    } else if (node.kind === 'grade') {
+      const grade = Number(trimmed);
+      if (!grade || !node.year || !node.semester) {
+        alert('학년은 숫자로 입력하세요.');
+        return false;
+      }
+      await criteriaApi.createDomainsAnchor(node.year, node.semester, grade, '');
+    } else if (node.kind === 'subject') {
+      if (!node.year || !node.semester || !node.grade) {
+        alert('상위 항목을 먼저 입력하세요.');
+        return false;
+      }
+      await criteriaApi.createDomainsAnchor(node.year, node.semester, node.grade, trimmed);
+    } else if (node.subject) {
+      await criteriaApi.addCustomDomain({
+        year: node.subject.year,
+        semester: node.subject.semester,
+        grade: node.subject.grade,
+        subject: node.subject.subject,
+        name: trimmed,
+      });
+    }
+
+    setDraftNodes(prev => removeDraftSubtree(prev, node.key));
+    await loadSubjects();
+    return true;
+  };
+
+  const commitEditing = async () => {
+    if (!editing) return;
+    const current = editing;
+    const node = findNodeByKey(visibleTree, current.key);
+    if (!node) {
+      setEditing(null);
+      return;
+    }
+    try {
+      const ok = await commitAddNode(node, current.value);
+      if (ok) setEditing(null);
+      else setEditing(current);
+    } catch (e: any) {
+      alert(e?.response?.data?.error || '저장에 실패했습니다.');
+      setEditing(current);
+    }
+  };
+
+  const cancelEditing = () => {
+    if (editing) setDraftNodes(prev => removeDraftSubtree(prev, editing.key));
+    setEditing(null);
+  };
+
+  const handleDeleteNode = async (node: TreeNode) => {
+    if (node.isDraft) {
+      setDraftNodes(prev => removeDraftSubtree(prev, node.key));
+      return;
+    }
+    if (!node.year) return;
+    if (!confirm(`${node.label} 아래 평가 영역 데이터를 모두 삭제하시겠습니까?`)) return;
+    await criteriaApi.deleteDomainsScope({
+      year: node.year,
+      semester: node.semester,
+      grade: node.grade,
+      subject: node.subjectName,
+      domainName: node.domainName,
+    });
+    setDraftNodes(prev => removeDraftSubtree(prev, node.key));
+    if (isSelectedInScope(node)) {
+      clearDomainSelection();
+    }
+    await loadSubjects();
   };
 
   const getDownloadFilename = (disposition: string, fallback: string) => {
@@ -500,8 +838,10 @@ export default function DomainPage() {
   const handleDeleteSubjectFile = async (sub: SubjectItem) => {
     if (!confirm(`${sub.subject} 영역 관리 파일과 데이터를 삭제하시겠습니까?`)) return;
     await criteriaApi.deleteSource('domains', sub.year, sub.semester, sub.grade, sub.subject);
-    setSelectedSubject(null);
-    setSelectedDomain(null);
+    preserveParentPath(sub);
+    if (isSameSubject(selectedSubject, sub)) {
+      clearDomainSelection();
+    }
     await loadSubjects();
   };
 
@@ -512,6 +852,47 @@ export default function DomainPage() {
   const selectedSubjectKey = selectedSubject
     ? `${selectedSubject.year}-${selectedSubject.semester}-${selectedSubject.grade}-${selectedSubject.subject}`
     : null;
+
+  const subjectHasUploadedFile = !!selectedSubject?.has_source;
+  const subjectAssessmentRows = allSubjectDomains.filter(row => row.eval_type === '지필' || row.eval_type === '수행');
+  const subjectAssessmentRatioTotal = subjectAssessmentRows.reduce((sum, row) => sum + (Number(row.ratio) || 0), 0);
+  const subjectAssessmentRatioInvalid = !subjectHasUploadedFile && subjectAssessmentRows.length > 0 && subjectAssessmentRatioTotal !== 100;
+  const subjectAssessmentRatioError = subjectAssessmentRatioInvalid
+    ? `지필/수행 반영비율 합계가 ${subjectAssessmentRatioTotal}%입니다. 합계가 100%가 되도록 수정하세요.`
+    : null;
+  const isLockedSubjectDomainRow = (row: SubjectDomainRow) => !!row.source_filename;
+  const normalizeSubjectDomainRow = (row: SubjectDomainRow): SubjectDomainRow => ({
+    ...row,
+    eval_type: subjectHasUploadedFile ? '기록' : row.eval_type,
+    reflected: subjectHasUploadedFile || row.eval_type === '기록' ? 'X' : 'O',
+    ratio: subjectHasUploadedFile || row.eval_type === '기록' ? 0 : (row.ratio === '' ? '' : Number(row.ratio)),
+    max_score: subjectHasUploadedFile || row.eval_type === '기록' ? 0 : (row.max_score === '' ? '' : Number(row.max_score)),
+  });
+  const updateSubjectDomainRow = (idx: number, patch: Partial<SubjectDomainRow>) => {
+    setAllSubjectDomains(prev => prev.map((row, i) => {
+      if (i !== idx || isLockedSubjectDomainRow(row)) return row;
+      const next = normalizeSubjectDomainRow({ ...row, ...patch });
+      return next;
+    }));
+    setIsDirty(true);
+  };
+  const addSubjectDomainRow = () => {
+    const next: SubjectDomainRow = normalizeSubjectDomainRow({
+      id: `new-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      eval_type: subjectHasUploadedFile ? '기록' : '수행',
+      name: '',
+      reflected: subjectHasUploadedFile ? 'X' : 'O',
+      ratio: 0,
+      max_score: 0,
+      source_filename: '',
+    });
+    setAllSubjectDomains(prev => [...prev, next]);
+    setIsDirty(true);
+  };
+  const removeSubjectDomainRow = (idx: number) => {
+    setAllSubjectDomains(prev => prev.filter((row, i) => i !== idx || isLockedSubjectDomainRow(row)));
+    setIsDirty(true);
+  };
 
   const updateSetechItem = (idx: number, field: keyof SetechItem, value: string) => {
     setSetechItems(p => p.map((item, i) => i === idx ? { ...item, [field]: value } : item));
@@ -525,6 +906,65 @@ export default function DomainPage() {
   const addDomainSetechItem = () => {
     setSetechItems(p => [...p, { type: '항목', title: '', prompt: '', extensions: '', sort_order: p.length }]);
     setIsDirty(true);
+  };
+
+  const handleGenerateSubjectDomains = async () => {
+    if (!selectedSubject) return;
+    const controller = overlayStore.start('반영비율/만점관리 생성 중');
+    setGeneratingSubjectDomains(true);
+    try {
+      const existingRows = allSubjectDomains.map(row => ({
+        eval_type: row.eval_type,
+        name: row.name,
+        reflected: row.reflected,
+        ratio: row.ratio,
+        max_score: row.max_score,
+        locked: !!row.source_filename,
+      }));
+      const standardsContext = achievementStandards.length > 0
+        ? Array.from(
+          new Map(achievementStandards.map((s: any) => [s.code, s])).values()
+        ).map((s: any) => `${s.domain_name ? `[${s.domain_name}] ` : ''}${s.code} ${String(s.content || '').replace(s.code, '').trim()}`)
+          .join('\n')
+        : '';
+      const systemPrompt = subjectHasUploadedFile
+        ? '당신은 평가 영역 구성 AI입니다. 업로드 원본 행은 수정할 수 없으므로 세특 전용 기록 영역만 JSON 배열로 생성하세요. 각 행은 {"eval_type":"기록","name":"영역명","reflected":"X","ratio":0,"max_score":0} 형식입니다. 반드시 JSON 배열만 반환하세요.'
+        : '당신은 평가 영역 구성 AI입니다. 과목 성취기준을 참고해 지필/수행/기록 영역을 JSON 배열로 생성하세요. 각 행은 {"eval_type":"지필|수행|기록","name":"영역명","reflected":"O|X","ratio":숫자,"max_score":숫자} 형식입니다. 지필/수행 행의 ratio 합계는 반드시 100이 되게 하고 reflected는 O로 하세요. 기록 행은 reflected를 X로 하세요. 반드시 JSON 배열만 반환하세요.';
+      const prompt = [
+        `과목: ${selectedSubject.subject}`,
+        subjectHasUploadedFile ? '조건: 파일 업로드 과목이므로 새 행은 기록 영역만 가능' : '조건: 지필/수행 반영비율 합계는 100',
+        standardsContext ? `과목 성취기준:\n${standardsContext}` : '',
+        subjectDomainsMetaPrompt.trim() ? `추가 요청: ${subjectDomainsMetaPrompt.trim()}` : '',
+        `현재 행: ${JSON.stringify(existingRows)}`,
+      ].filter(Boolean).join('\n');
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, controller.signal);
+      const parsed = JSON.parse(res.data.result.replace(/```json/g, '').replace(/```/g, '').trim());
+      if (!Array.isArray(parsed)) throw new Error('AI 응답이 배열이 아닙니다.');
+      const generated = parsed
+        .filter((row: any) => row && row.name)
+        .map((row: any, idx: number) => normalizeSubjectDomainRow({
+          id: `ai-${Date.now()}-${idx}`,
+          eval_type: subjectHasUploadedFile ? '기록' : (['지필', '수행', '기록'].includes(row.eval_type) ? row.eval_type : '수행'),
+          name: String(row.name || ''),
+          reflected: row.eval_type === '기록' || subjectHasUploadedFile ? 'X' : 'O',
+          ratio: Number(row.ratio) || 0,
+          max_score: Number(row.max_score) || 0,
+          source_filename: '',
+        }));
+      if (generated.length === 0) return alert('생성된 행이 없습니다.');
+      setAllSubjectDomains(prev => [
+        ...prev.filter(row => isLockedSubjectDomainRow(row)),
+        ...generated,
+      ]);
+      setIsDirty(true);
+    } catch (e: any) {
+      if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
+        alert('반영비율/만점관리 생성에 실패했습니다.');
+      }
+    } finally {
+      overlayStore.finish();
+      setGeneratingSubjectDomains(false);
+    }
   };
 
   // 성취기준 참조 헬퍼
@@ -856,26 +1296,48 @@ export default function DomainPage() {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2">
-          {tree.length === 0 ? (
+        <div className="flex-1 overflow-y-auto p-2 group/tree">
+          {visibleTree.length === 0 ? (
             <div className="text-center py-10 text-gray-400">
               <School size={32} className="mx-auto mb-2 opacity-30" />
               <p className="text-xs">영역 관리 파일을 업로드하면<br />과목과 수행평가 영역이 표시됩니다</p>
+              <button
+                className="mt-4 flex w-full items-center justify-center rounded border border-dashed border-blue-200 py-1.5 text-blue-500 hover:bg-blue-50"
+                onClick={() => handleAddNode()}
+                title="학년도 추가"
+              >
+                <Plus size={14} />
+              </button>
             </div>
           ) : (
-            tree.map((node, i) => (
-              <TreeNodeView
-                key={i} node={node} depth={0}
-                selectedDomainKey={selectedDomainKey}
-                selectedSubjectKey={selectedSubjectKey}
-                onSelectDomain={handleSelectDomain}
-                onSelectSubject={handleSelectSubject}
-                onAddCustomDomain={handleAddCustomDomain}
-                onDeleteCustomDomain={handleDeleteCustomDomain}
-                onDownloadSubject={handleDownloadSubjectFile}
-                onDeleteSubject={handleDeleteSubjectFile}
-              />
-            ))
+            <>
+              {visibleTree.map((node, i) => (
+                <TreeNodeView
+                  key={node.key || i} node={node} depth={0}
+                  selectedDomainKey={selectedDomainKey}
+                  selectedSubjectKey={selectedSubjectKey}
+                  onSelectDomain={handleSelectDomain}
+                  onSelectSubject={handleSelectSubject}
+                  onDownloadSubject={handleDownloadSubjectFile}
+                  onDeleteSubject={handleDeleteSubjectFile}
+                  onAddNode={handleAddNode}
+                  onDeleteNode={handleDeleteNode}
+                  editing={editing}
+                  onEditChange={(value) => setEditing(prev => prev ? { ...prev, value } : prev)}
+                  onEditCommit={commitEditing}
+                  onEditCancel={cancelEditing}
+                />
+              ))}
+              <div className="mt-1">
+                <button
+                  className="flex w-full items-center justify-center rounded border border-dashed border-transparent py-1 text-blue-500 opacity-0 transition hover:border-blue-200 hover:bg-blue-50 hover:opacity-100 group-hover/tree:opacity-100"
+                  onClick={() => handleAddNode()}
+                  title="학년도 추가"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -899,7 +1361,6 @@ export default function DomainPage() {
                 </div>
                 <h2 className="text-lg font-bold flex items-center gap-2">
                   {selectedDomain ? selectedDomain : '종합 세특 기준 (과목 공통)'}
-                  {isCustomDomain && selectedDomain && <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">임의 영역</span>}
                 </h2>
               </div>
               <div className="flex gap-2">
@@ -932,8 +1393,8 @@ export default function DomainPage() {
               </div>
             </div>
 
-            {/* 탭 바 (영역 선택 시) */}
-            {selectedDomain && (
+            {/* 탭 바 */}
+            {selectedDomain ? (
               <div className="flex border-b border-gray-200 bg-white shrink-0 px-5">
                 <button
                   className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'standards' ? 'border-amber-500 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
@@ -959,9 +1420,187 @@ export default function DomainPage() {
                   기록 기준
                 </button>
               </div>
+            ) : (
+              <div className="flex border-b border-gray-200 bg-white shrink-0 px-5">
+                <button
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'ratio' ? 'border-green-500 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  onClick={() => setActiveTab('ratio')}
+                >
+                  <ClipboardCheck size={14} />
+                  반영비율/만점관리
+                </button>
+                <button
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${activeTab === 'activity' ? 'border-blue-500 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  onClick={() => setActiveTab('activity')}
+                >
+                  <BookOpen size={14} />
+                  세특 기준 관리
+                </button>
+              </div>
             )}
 
             <div className="flex-1 overflow-y-auto p-6 space-y-8">
+
+              {/* 과목 반영비율/만점관리 */}
+              {!selectedDomain && activeTab === 'ratio' && (
+                <section>
+                  <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
+                    <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+                      <ClipboardCheck size={16} className="text-green-500" />
+                      반영비율/만점관리
+                    </h3>
+                  </div>
+                  <div className="space-y-2 mb-4">
+                    <div className="flex items-center py-1">
+                      <span className="text-sm font-medium text-gray-600">평가 영역 자동 생성</span>
+                    </div>
+                    <div className="flex gap-3">
+                      <textarea
+                        className="textarea flex-1 text-sm resize-y"
+                        style={{ minHeight: '72px' }}
+                        placeholder="반영비율/만점관리 생성을 위한 지시사항을 입력하세요. (예: 수행평가 2개와 기록 영역 1개로 구성)"
+                        value={subjectDomainsMetaPrompt}
+                        onChange={e => setSubjectDomainsMetaPrompt(e.target.value)}
+                      />
+                      <button
+                        className="btn-rainbow text-xs px-5 py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch"
+                        onClick={handleGenerateSubjectDomains}
+                        disabled={generatingSubjectDomains}
+                      >
+                        {generatingSubjectDomains ? <><Loader2 size={12} className="animate-spin" /> 생성 중…</> : <>✨ 생성</>}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                    <div className={`flex h-8 items-center gap-1.5 border-b px-3 text-xs transition-colors ${subjectAssessmentRatioError ? 'border-red-200 bg-red-50 text-red-700' : 'border-gray-100 bg-gray-50 text-transparent'}`}>
+                      {subjectAssessmentRatioError && <AlertCircle size={12} className="shrink-0" />}
+                      <span>{subjectAssessmentRatioError || '반영비율 합계 정상'}</span>
+                    </div>
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50/50">
+                        <tr className="border-b border-gray-100">
+                          <th className="px-3 py-2 text-left font-medium text-gray-500 w-28">평가종류</th>
+                          <th className="px-3 py-2 text-left font-medium text-gray-500">영역명</th>
+                          <th className="px-3 py-2 text-center font-medium text-gray-500 w-28">학기말반영</th>
+                          <th className={`px-3 py-2 text-center font-medium w-28 ${subjectAssessmentRatioInvalid ? 'bg-red-50 text-red-700' : 'text-gray-500'}`}>반영비율</th>
+                          <th className="px-3 py-2 text-center font-medium text-gray-500 w-28">만점</th>
+                          <th className="px-3 py-2 w-10" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allSubjectDomains.map((row, i) => {
+                          const locked = isLockedSubjectDomainRow(row);
+                          const recordType = row.eval_type === '기록';
+                          const ratioInvalid = subjectAssessmentRatioInvalid && (row.eval_type === '지필' || row.eval_type === '수행');
+                          const inputClass = `input h-8 px-2 py-0 text-xs ${locked ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''}`;
+                          return (
+                            <tr key={row.id ?? i} className={`border-b border-gray-100 last:border-0 ${locked ? 'text-gray-400' : ''}`}>
+                              <td className="px-2 py-1.5">
+                                <select
+                                  className={inputClass}
+                                  value={row.eval_type || (subjectHasUploadedFile ? '기록' : '수행')}
+                                  onChange={(e) => updateSubjectDomainRow(i, {
+                                    eval_type: e.target.value,
+                                    reflected: e.target.value === '기록' ? 'X' : 'O',
+                                  })}
+                                  disabled={locked}
+                                >
+                                  {locked ? (
+                                    <option value={row.eval_type}>{row.eval_type}</option>
+                                  ) : subjectHasUploadedFile ? (
+                                    <option value="기록">기록</option>
+                                  ) : (
+                                    <>
+                                      <option value="지필">지필</option>
+                                      <option value="수행">수행</option>
+                                      <option value="기록">기록</option>
+                                    </>
+                                  )}
+                                </select>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input
+                                  className={`${inputClass} w-full`}
+                                  value={row.name || ''}
+                                  onChange={(e) => updateSubjectDomainRow(i, { name: e.target.value })}
+                                  disabled={locked}
+                                />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                {recordType ? (
+                                  <div className="flex h-8 items-center justify-center rounded border border-gray-200 bg-gray-100 px-2 text-xs font-medium text-gray-400">
+                                    X
+                                  </div>
+                                ) : (
+                                  <div className={`flex h-8 items-center justify-center rounded border px-2 text-xs font-medium ${locked ? 'border-gray-200 bg-gray-100 text-gray-400' : 'border-gray-200 bg-gray-50 text-gray-600'}`}>
+                                    O
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-2 py-1.5">
+                                {recordType ? (
+                                  <div className="flex h-8 items-center justify-center rounded border border-gray-200 bg-gray-100 px-2 text-xs font-medium text-gray-400">
+                                    -
+                                  </div>
+                                ) : (
+                                  <input
+                                    className={`${inputClass} text-center ${ratioInvalid ? 'border-red-300 bg-red-50 text-red-700 focus:ring-red-200' : ''}`}
+                                    type="number"
+                                    min="0"
+                                    value={row.ratio ?? 0}
+                                    onChange={(e) => updateSubjectDomainRow(i, { ratio: e.target.value })}
+                                    disabled={locked}
+                                  />
+                                )}
+                              </td>
+                              <td className="px-2 py-1.5">
+                                {recordType ? (
+                                  <div className="flex h-8 items-center justify-center rounded border border-gray-200 bg-gray-100 px-2 text-xs font-medium text-gray-400">
+                                    -
+                                  </div>
+                                ) : (
+                                  <input
+                                    className={`${inputClass} text-center`}
+                                    type="number"
+                                    min="0"
+                                    value={row.max_score ?? 0}
+                                    onChange={(e) => updateSubjectDomainRow(i, { max_score: e.target.value })}
+                                    disabled={locked}
+                                  />
+                                )}
+                              </td>
+                              <td className="px-2 py-1.5 text-center">
+                                {!locked && (
+                                  <button
+                                    className="p-1 hover:bg-red-50 text-red-400 rounded"
+                                    onClick={() => removeSubjectDomainRow(i)}
+                                    title="행 삭제"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {allSubjectDomains.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+                              반영비율/만점관리 데이터가 없습니다.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                    <button
+                      className="flex w-full items-center justify-center gap-1.5 border-t border-dashed border-gray-200 py-2 text-xs text-blue-600 hover:bg-blue-50"
+                      onClick={addSubjectDomainRow}
+                    >
+                      <Plus size={13} /> 행 추가
+                    </button>
+                  </div>
+                </section>
+              )}
 
               {/* 성취 기준 설정 (고정 영역, 도메인 선택 시) */}
               {selectedDomain && activeTab === 'standards' && (
@@ -1055,7 +1694,7 @@ export default function DomainPage() {
               )}
 
               {/* 채점 항목 설정 (고정 영역일 때만 표시) */}
-              {!isCustomDomain && (!selectedDomain || activeTab === 'scoring') && (
+              {selectedDomain && !isCustomDomain && activeTab === 'scoring' && (
                 <section>
                   <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
                     <h3 className="font-semibold text-gray-800 flex items-center gap-2">
@@ -1206,11 +1845,11 @@ export default function DomainPage() {
               )}
 
               {/* 활동 기록 기준 설정 / 세특 기준 설정 */}
-              {(!selectedDomain || activeTab === 'activity') && <section>
+              {activeTab === 'activity' && <section>
                 <div className="flex items-center mb-3 border-b border-gray-100 pb-2">
                   <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                     <BookOpen size={16} className={isCustomDomain ? 'text-purple-500' : 'text-blue-500'} />
-                    {selectedDomain ? '기록 기준 관리' : '기록 기준 관리'}
+                    {selectedDomain ? '기록 기준 관리' : '세특 기준 관리'}
                   </h3>
                 </div>
 
@@ -1322,59 +1961,6 @@ export default function DomainPage() {
                 ) : (
                   // 과목 레벨 (종합 세특) 설정
                   <div className="space-y-6">
-                    {/* 파싱된 영역 정보 테이블 */}
-                    {allSubjectDomains.length > 0 && (
-                      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                        <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
-                          <span className="text-xs font-semibold text-gray-600">파일에서 파싱된 영역 정보</span>
-                        </div>
-                        <table className="w-full text-xs">
-                          <thead className="bg-gray-50/50">
-                            <tr className="border-b border-gray-100">
-                              <th className="px-3 py-2 text-left font-medium text-gray-500">평가종류</th>
-                              <th className="px-3 py-2 text-left font-medium text-gray-500">영역명</th>
-                              <th className="px-3 py-2 text-center font-medium text-gray-500">학기말반영</th>
-                              <th className="px-3 py-2 text-center font-medium text-gray-500">반영비율</th>
-                              <th className="px-3 py-2 text-center font-medium text-gray-500">만점</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(() => {
-                              // 평가종류 span 계산
-                              const spans: number[] = allSubjectDomains.map(() => 0);
-                              allSubjectDomains.forEach((d: any, i: number) => {
-                                if (i === 0 || d.eval_type !== allSubjectDomains[i - 1].eval_type) {
-                                  let count = 1;
-                                  for (let j = i + 1; j < allSubjectDomains.length; j++) {
-                                    if (allSubjectDomains[j].eval_type === d.eval_type) count++;
-                                    else break;
-                                  }
-                                  spans[i] = count;
-                                }
-                              });
-                              return allSubjectDomains.map((d: any, i: number) => (
-                                <tr key={i} className={`border-b border-gray-100 last:border-0 ${d.reflected === 'O' ? '' : 'text-gray-400'}`}>
-                                  {spans[i] > 0 && (
-                                    <td rowSpan={spans[i]} className="px-3 py-2 border-r border-gray-100 align-middle text-center font-medium text-gray-600">
-                                      {d.eval_type}
-                                    </td>
-                                  )}
-                                  <td className="px-3 py-2 font-medium">{d.name}</td>
-                                  <td className="px-3 py-2 text-center">
-                                    {d.reflected === 'O'
-                                      ? <span className="text-green-600 font-semibold">O</span>
-                                      : <span className="text-gray-300">-</span>}
-                                  </td>
-                                  <td className="px-3 py-2 text-center">{d.ratio != null ? `${d.ratio}%` : '-'}</td>
-                                  <td className="px-3 py-2 text-center">{d.max_score != null ? `${d.max_score}점` : '-'}</td>
-                                </tr>
-                              ));
-                            })()}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-
                     {/* 세특 공통/종합 기준 */}
                     <div className="space-y-4">
                       {['공통', '종합'].map((type) => {
