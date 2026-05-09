@@ -975,13 +975,13 @@ export default function DomainPage() {
                   ) : (
                     <div className="space-y-2 mb-3">
                       <div className="flex items-center py-1">
-                        <span className="text-sm font-medium text-gray-600">항목 자동 생성</span>
+                        <span className="text-sm font-medium text-gray-600">성취 기준 항목 자동 생성</span>
                       </div>
                       <div className="flex gap-3">
                         <textarea
                           className="textarea flex-1 text-sm resize-y"
                           style={{ minHeight: '56px' }}
-                          placeholder="AI가 성취기준을 선택할 기준을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)"
+                          placeholder="성취 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)"
                           value={standardsMetaPrompt}
                           onChange={e => setStandardsMetaPrompt(e.target.value)}
                         />
@@ -1089,13 +1089,13 @@ export default function DomainPage() {
                     {/* 항목 자동 생성 */}
                     <div className="space-y-2">
                       <div className="flex items-center py-1">
-                        <span className="text-sm font-medium text-gray-600">항목 자동 생성</span>
+                        <span className="text-sm font-medium text-gray-600">채점 기준 항목 자동 생성</span>
                       </div>
                       <div className="flex gap-3">
                         <textarea
                           className="textarea flex-1 text-sm leading-relaxed resize-y"
                           style={{ minHeight: '72px' }}
-                          placeholder="채점 항목을 AI로 생성할 내용을 입력하세요. (예: 코드 기반 수행평가, 4단계 루브릭으로)"
+                          placeholder="채점 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 코드 기반 수행평가, 4단계 루브릭으로)"
                           value={evalMetaPrompts[-1] || ''}
                           onChange={e => setEvalMetaPrompts(p => ({ ...p, [-1]: e.target.value }))}
                         />
@@ -1178,13 +1178,13 @@ export default function DomainPage() {
                               <textarea
                                 className="textarea w-full text-sm leading-relaxed resize-y"
                                 style={{ minHeight: '80px' }}
-                                placeholder="루브릭을 AI로 생성할 내용을 입력하세요. (예: 코드 완성도 기준으로 4단계로 나눠줘)"
+                                placeholder="채점 기준 내용 생성을 위한 지시사항을 입력하세요. (예: 코드 완성도 기준으로 4단계로 나눠줘)"
                                 value={evalMetaPrompts[idx] || ''}
                                 onChange={e => setEvalMetaPrompts(p => ({ ...p, [idx]: e.target.value }))}
                               />
                             </div>
                             <div className="flex-1 flex flex-col gap-1">
-                              <span className="text-xs text-gray-500 font-medium">루브릭 (채점 기준)</span>
+                              <span className="text-xs text-gray-500 font-medium">채점 기준 내용</span>
                               <textarea
                                 className="textarea w-full text-sm leading-relaxed resize-y"
                                 style={{ minHeight: '80px' }}
@@ -1216,13 +1216,13 @@ export default function DomainPage() {
                     {/* 항목 자동 생성 */}
                     <div className="space-y-2">
                       <div className="flex items-center py-1">
-                        <span className="text-sm font-medium text-gray-600">항목 자동 생성</span>
+                        <span className="text-sm font-medium text-gray-600">기록 기준 항목 자동 생성</span>
                       </div>
                       <div className="flex gap-3">
                         <textarea
                           className="textarea flex-1 text-sm leading-relaxed resize-y"
                           style={{ minHeight: '72px' }}
-                          placeholder="기록 기준 항목을 AI로 생성할 내용을 입력하세요. (예: 보고서와 코드를 각각 기록하는 항목으로 구성)"
+                          placeholder="기록 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 보고서와 코드를 각각 기록하는 항목으로 구성)"
                           value={setechMetaPrompts[-1] || ''}
                           onChange={e => setSetechMetaPrompts(p => ({ ...p, [-1]: e.target.value }))}
                         />
@@ -1295,13 +1295,13 @@ export default function DomainPage() {
                               <textarea
                                 className="textarea w-full text-sm leading-relaxed resize-y"
                                 style={{ minHeight: '90px' }}
-                                placeholder="이 항목의 기준을 AI로 생성할 내용을 입력하세요. (예: 학생의 탐구 과정 중심으로 작성 기준 생성)"
+                                placeholder="기록 기준 내용 생성을 위한 지시사항을 입력하세요. (예: 학생의 탐구 과정 중심으로 작성 기준 생성)"
                                 value={setechMetaPrompts[idx] || ''}
                                 onChange={e => setSetechMetaPrompts(p => ({ ...p, [idx]: e.target.value }))}
                               />
                             </div>
                             <div className="flex-1 flex flex-col gap-1">
-                              <span className="text-xs text-gray-500 font-medium">기록 작성 기준</span>
+                              <span className="text-xs text-gray-500 font-medium">기록 기준 내용</span>
                               <textarea
                                 className="textarea w-full text-sm leading-relaxed resize-y"
                                 style={{ minHeight: '90px' }}
@@ -1396,7 +1396,7 @@ export default function DomainPage() {
                               <textarea
                                 className="textarea w-full text-sm leading-relaxed resize-y"
                                 style={{ minHeight: '100px' }}
-                                placeholder={`${label}을 AI로 생성할 내용을 입력하세요.`}
+                                placeholder={`${label} 위한 지시사항을 입력하세요.`}
                                 value={metaPrompt}
                                 onChange={(e) => {
                                   const val = e.target.value;
