@@ -953,7 +953,7 @@ export default function RecordsPage() {
           )}
         </div>
         {treeCollapsed ? (
-          <div className="flex-1 overflow-auto py-2 px-2">
+          <div className="flex-1 overflow-auto scrollbar-stable py-2 px-2">
             <div className="flex flex-col items-center gap-0.5 py-1">
               {(() => {
                 const sorted = sortClassesForCollapsedTree(classes);
@@ -1280,7 +1280,7 @@ export default function RecordsPage() {
           )}
 
           {/* 테이블 뷰 */}
-          <div className="flex-1 overflow-auto bg-white">
+          <div className="flex-1 overflow-auto scrollbar-stable bg-white">
             {students.length === 0 ? (
               <div className="py-20 text-center text-gray-400">학생 명단이 없습니다.</div>
             ) : (

@@ -637,7 +637,7 @@ export default function CriteriaPage() {
               title={selected.domain_name}
             />
 
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto scrollbar-stable p-6">
               <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-xs text-gray-500">

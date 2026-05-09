@@ -10,7 +10,7 @@ interface TreeViewProps<T> {
 
 export function TreeView<T>({ nodes, empty, children, addYearButton, className = 'p-1.5' }: TreeViewProps<T>) {
   return (
-    <div className={`flex-1 overflow-y-auto group/tree ${className}`}>
+    <div className={`flex-1 overflow-y-auto scrollbar-stable group/tree ${className}`}>
       {nodes.length === 0 ? (
         empty
       ) : (

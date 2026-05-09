@@ -73,4 +73,7 @@
   .select {
     @apply input bg-white;
   }
+  .scrollbar-stable {
+    scrollbar-gutter: stable;
+  }
 }
