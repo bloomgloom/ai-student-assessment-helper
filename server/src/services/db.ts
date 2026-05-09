@@ -110,6 +110,19 @@ export async function initDb(): Promise<void> {
       sort_order  INTEGER NOT NULL DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS domain_ai_prompts (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      year        INTEGER NOT NULL,
+      semester    INTEGER NOT NULL,
+      grade       INTEGER NOT NULL,
+      subject     TEXT    NOT NULL,
+      domain_name TEXT    NOT NULL,
+      prompt_key  TEXT    NOT NULL,
+      prompt      TEXT    NOT NULL DEFAULT '',
+      updated_at  TEXT    DEFAULT (datetime('now')),
+      UNIQUE(year, semester, grade, subject, domain_name, prompt_key)
+    );
+
     -- 수업 관리: 채점 파일 업로드 단위
     CREATE TABLE IF NOT EXISTS classes (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,

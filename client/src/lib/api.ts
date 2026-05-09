@@ -115,6 +115,10 @@ export const criteriaApi = {
     api.get('/criteria/eval', { params: { year, semester, grade, subject, domainName, t: Date.now() } }),
   bulkSaveEval: (year: number, semester: number, grade: number, subject: string, domainName: string, items: unknown[]) =>
     api.put('/criteria/eval/bulk', { year, semester, grade, subject, domainName, items }),
+  getAiPrompts: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
+    api.get('/criteria/ai-prompts', { params: { year, semester, grade, subject, domainName, t: Date.now() } }),
+  bulkSaveAiPrompts: (year: number, semester: number, grade: number, subject: string, domainName: string, prompts: unknown[]) =>
+    api.put('/criteria/ai-prompts/bulk', { year, semester, grade, subject, domainName, prompts }),
 };
 
 // Records / Sessions

@@ -1,15 +1,13 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import {
-  Settings, BookOpen, ClipboardList, ListChecks, Loader2, Square,
-  AlertCircle, CheckCircle2, Menu
+  Settings, BookOpen, ClipboardList, ListChecks, Loader2, Menu
 } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 import SettingsPage from './pages/SettingsPage';
 import CriteriaPage from './pages/CriteriaPage';
 import DomainPage from './pages/DomainPage';
 import RecordsPage from './pages/RecordsPage';
-import { useAiBatchStore } from './stores/aiBatchStore';
-import { useAiOverlayStore } from './stores/aiOverlayStore';
+import { AiGlobalOverlay } from './components/common/AiGlobalOverlay';
 
 const ArtifactStandalonePage = lazy(() =>
   import('./components/ArtifactViewer').then((module) => ({ default: module.ArtifactStandalonePage }))
@@ -75,102 +73,6 @@ function Sidebar() {
   );
 }
 
-function AiOverlay() {
-  const overlay = useAiOverlayStore();
-  const batchJob = useAiBatchStore(state => state.currentJob);
-  const stopBatch = useAiBatchStore(state => state.stopBatch);
-
-  const batchRunning = batchJob?.status === 'running' || batchJob?.status === 'stopping';
-  const batchFinished = batchJob && !batchRunning;
-
-  const showOverlay = overlay.active || batchRunning || !!batchFinished;
-  if (!showOverlay) return null;
-
-  // Single-call overlay (DomainPage AI handlers)
-  if (overlay.active) {
-    const isIndeterminate = overlay.progress < 0;
-    return (
-      <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center">
-        <div className="bg-white rounded-2xl shadow-2xl w-96 p-6 flex flex-col gap-5">
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-2 mb-1">
-              <Loader2 size={18} className="animate-spin text-blue-600" />
-              <span className="font-semibold text-gray-800">{overlay.title}</span>
-            </div>
-            <p className="text-sm text-gray-500 mt-1">{overlay.message}</p>
-          </div>
-          <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
-            {isIndeterminate ? (
-              <div className="h-full bg-blue-400 rounded-full animate-pulse w-full" />
-            ) : (
-              <div
-                className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                style={{ width: `${overlay.progress}%` }}
-              />
-            )}
-          </div>
-          <button
-            className="btn-secondary text-sm flex items-center justify-center gap-1.5"
-            onClick={overlay.stop}
-            disabled={overlay.stopping}
-          >
-            {overlay.stopping ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
-            {overlay.stopping ? '중단 중...' : '중단'}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Batch job overlay (RecordsPage)
-  const job = batchJob!;
-  const running = batchRunning;
-  const failed = job.status === 'error';
-  const completed = job.status === 'completed';
-  const percent = (job.completed / Math.max(job.total, 1)) * 100;
-
-  return (
-    <div className={`fixed inset-0 z-[100] ${running ? 'bg-black/50' : 'bg-black/30'} flex items-center justify-center`}>
-      <div className="bg-white rounded-2xl shadow-2xl w-96 p-6 flex flex-col gap-5">
-        <div className="text-center">
-          <div className="flex items-center justify-center gap-2 mb-1">
-            {running ? (
-              <Loader2 size={18} className="animate-spin text-blue-600" />
-            ) : failed ? (
-              <AlertCircle size={18} className="text-red-500" />
-            ) : (
-              <CheckCircle2 size={18} className="text-green-500" />
-            )}
-            <span className={`font-semibold ${failed ? 'text-red-700' : completed ? 'text-green-700' : 'text-gray-800'}`}>
-              {job.classLabel}
-            </span>
-          </div>
-          <p className={`text-sm mt-1 ${failed ? 'text-red-500' : completed ? 'text-green-600' : 'text-gray-500'}`}>
-            {job.message}
-          </p>
-          <p className="text-xs text-gray-400 mt-0.5">{job.completed}/{job.total}</p>
-        </div>
-        <div className={`h-2.5 rounded-full overflow-hidden ${failed ? 'bg-red-100' : completed ? 'bg-green-100' : 'bg-gray-100'}`}>
-          <div
-            className={`h-full rounded-full transition-all duration-300 ${failed ? 'bg-red-400' : completed ? 'bg-green-500' : 'bg-blue-500'}`}
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-        {running && (
-          <button
-            className="btn-secondary text-sm flex items-center justify-center gap-1.5"
-            onClick={stopBatch}
-            disabled={job.status === 'stopping'}
-          >
-            {job.status === 'stopping' ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
-            {job.status === 'stopping' ? '중단 중...' : '중단'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   return (
     <BrowserRouter>
@@ -185,7 +87,7 @@ export default function App() {
             <>
               <Sidebar />
               <main className="flex-1 min-w-0 flex flex-col">
-                <AiOverlay />
+                <AiGlobalOverlay />
                 <div className="flex-1 overflow-auto">
                   <Routes>
                     <Route path="/" element={<CriteriaPage />} />

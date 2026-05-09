@@ -3,10 +3,11 @@ import { recordsApi, criteriaApi, classesApi, aiApi } from '../lib/api';
 import { useAiBatchStore } from '../stores/aiBatchStore';
 import {
   Download, Loader2, Users,
-  Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen, Square
+  Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { TreeView } from '../components/common/TreeView';
 import { TreeIconButton, TreeNodeView, TreeNodeKind } from '../components/common/TreeNodeView';
+import { AiProgressOverlay } from '../components/common/AiProgressOverlay';
 
 const ArtifactViewer = lazy(() => import('../components/ArtifactViewer'));
 
@@ -1265,36 +1266,17 @@ export default function RecordsPage() {
 
           {/* 맞춤법 검사 팝업 오버레이 */}
           {spellcheckProgress && (
-            <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center">
-              <div className="bg-white rounded-2xl shadow-2xl w-96 p-6 flex flex-col gap-5">
-                <div className="text-center">
-                  <div className="flex items-center justify-center gap-2 mb-1">
-                    <Loader2 size={18} className="animate-spin text-green-600" />
-                    <span className="font-semibold text-gray-800">맞춤법 검사 중</span>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {spellcheckProgress.completed}/{spellcheckProgress.total}
-                  </p>
-                </div>
-                <div className="h-2.5 bg-green-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-green-500 rounded-full transition-all duration-300"
-                    style={{ width: `${(spellcheckProgress.completed / Math.max(spellcheckProgress.total, 1)) * 100}%` }}
-                  />
-                </div>
-                <button
-                  className="btn-secondary text-sm flex items-center justify-center gap-1.5"
-                  disabled={spellcheckStopping}
-                  onClick={() => {
-                    spellcheckAbortRef.current?.abort();
-                    setSpellcheckStopping(true);
-                  }}
-                >
-                  {spellcheckStopping ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
-                  {spellcheckStopping ? '중단 중...' : '중단'}
-                </button>
-              </div>
-            </div>
+            <AiProgressOverlay
+              title="맞춤법 검사 중"
+              detail={`${spellcheckProgress.completed}/${spellcheckProgress.total}`}
+              progress={(spellcheckProgress.completed / Math.max(spellcheckProgress.total, 1)) * 100}
+              stopping={spellcheckStopping}
+              onStop={() => {
+                spellcheckAbortRef.current?.abort();
+                setSpellcheckStopping(true);
+              }}
+              tone="green"
+            />
           )}
 
           {/* 테이블 뷰 */}

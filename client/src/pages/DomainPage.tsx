@@ -67,6 +67,11 @@ interface StandardRef {
   content: string;
 }
 
+interface AiPromptRow {
+  prompt_key: string;
+  prompt: string;
+}
+
 
 interface TreeNode {
   key: string;
@@ -120,6 +125,14 @@ function domainSelectionPayload(sub: SubjectItem, domain: string | null) {
     subject: sub.subject,
     domain,
   };
+}
+
+function promptsToRecord(items: AiPromptRow[]) {
+  return Object.fromEntries(items.map(item => [item.prompt_key, item.prompt])) as Record<string, string>;
+}
+
+function compactPromptRows(rows: AiPromptRow[]) {
+  return rows.filter(item => item.prompt_key && item.prompt.trim());
 }
 
 function buildTree(subjects: SubjectItem[]): TreeNode[] {
@@ -294,6 +307,28 @@ export default function DomainPage() {
       setEvalItems([]);
       setSubjectCommonPrompt('');
     }
+
+    try {
+      const promptRes = await criteriaApi.getAiPrompts(sub.year, sub.semester, sub.grade, sub.subject, domainName);
+      const savedPrompts = promptsToRecord(promptRes.data as AiPromptRow[]);
+      setSubjectDomainsMetaPrompt(savedPrompts.subject_domains || '');
+      setStandardsMetaPrompt(savedPrompts.standards || '');
+      setEvalMetaPrompts(Object.fromEntries(
+        Object.entries(savedPrompts)
+          .filter(([key]) => key === 'eval_items' || key.startsWith('eval_item:'))
+          .map(([key, value]) => [key === 'eval_items' ? -1 : Number(key.slice('eval_item:'.length)), value])
+      ));
+      setSetechMetaPrompts(Object.fromEntries(
+        Object.entries(savedPrompts)
+          .filter(([key]) => key === 'setech_items' || key.startsWith('setech_item:'))
+          .map(([key, value]) => [key === 'setech_items' ? -1 : Number(key.slice('setech_item:'.length)), value])
+      ));
+    } catch {
+      setSubjectDomainsMetaPrompt('');
+      setStandardsMetaPrompt('');
+      setEvalMetaPrompts({});
+      setSetechMetaPrompts({});
+    }
   }, []);
 
   const handleSelectDomain = useCallback((sub: SubjectItem, domain: string, isCustom: boolean) => {
@@ -302,8 +337,6 @@ export default function DomainPage() {
     setSelectedDomain(domain);
     setIsCustomDomain(isCustom);
     setAllSubjectDomains([]);
-    setEvalMetaPrompts({});
-    setSetechMetaPrompts({});
     setEvalChecked(new Set());
     setSetechChecked(new Set());
     setActiveTab('standards');
@@ -316,7 +349,6 @@ export default function DomainPage() {
     setSelectedSubject(sub);
     setSelectedDomain(null);
     setIsCustomDomain(true);
-    setSetechMetaPrompts({});
     setSetechChecked(new Set());
     setActiveTab('ratio');
     loadCriteria(sub, '__SUBJECT_COMPREHENSIVE__', true);
@@ -394,6 +426,27 @@ export default function DomainPage() {
         ...setechItems.map((item, i) => ({ ...item, sort_order: refItems.length + i })),
       ];
       await criteriaApi.bulkSaveSetech(selectedSubject.year, selectedSubject.semester, selectedSubject.grade, selectedSubject.subject, domainToSave, sItems);
+
+      const aiPromptRows = compactPromptRows([
+        ...(!selectedDomain ? [{ prompt_key: 'subject_domains', prompt: subjectDomainsMetaPrompt }] : []),
+        ...(selectedDomain ? [{ prompt_key: 'standards', prompt: standardsMetaPrompt }] : []),
+        ...(selectedDomain ? Object.entries(evalMetaPrompts).map(([key, prompt]) => ({
+          prompt_key: Number(key) === -1 ? 'eval_items' : `eval_item:${key}`,
+          prompt,
+        })) : []),
+        ...(selectedDomain ? Object.entries(setechMetaPrompts).map(([key, prompt]) => ({
+          prompt_key: Number(key) === -1 ? 'setech_items' : `setech_item:${key}`,
+          prompt,
+        })) : []),
+      ]);
+      await criteriaApi.bulkSaveAiPrompts(
+        selectedSubject.year,
+        selectedSubject.semester,
+        selectedSubject.grade,
+        selectedSubject.subject,
+        domainToSave,
+        aiPromptRows
+      );
 
       if (selectedDomain && !isCustomDomain) {
         const eItems = evalItems.map((item, j) => ({ ...item, sort_order: item.item_type === 'formula' ? -1 : j }));
@@ -686,7 +739,7 @@ export default function DomainPage() {
         file
       );
       await loadCriteria(selectedSubject, domainName, isCustomDomain || !selectedDomain);
-      alert(`업로드 완료: 성취 기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 기록 기준 ${r.data.setech}개`);
+      alert(`업로드 완료: 성취 기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 기록 기준 ${r.data.setech}개, AI 요청 ${r.data.prompts ?? 0}개`);
     } catch (err: any) {
       alert(`기준 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
     } finally {
@@ -1275,7 +1328,10 @@ export default function DomainPage() {
                       label="평가 영역 자동 생성"
                       placeholder="반영비율/만점관리 생성을 위한 지시사항을 입력하세요. (예: 수행평가 2개와 기록 영역 1개로 구성)"
                       value={subjectDomainsMetaPrompt}
-                      onChange={setSubjectDomainsMetaPrompt}
+                      onChange={(value) => {
+                        setSubjectDomainsMetaPrompt(value);
+                        setIsDirty(true);
+                      }}
                       onGenerate={handleGenerateSubjectDomains}
                       generating={generatingSubjectDomains}
                       buttonClassName="px-5"
@@ -1428,7 +1484,10 @@ export default function DomainPage() {
                         label="성취 기준 항목 자동 생성"
                         placeholder="성취 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)"
                         value={standardsMetaPrompt}
-                        onChange={setStandardsMetaPrompt}
+                        onChange={(value) => {
+                          setStandardsMetaPrompt(value);
+                          setIsDirty(true);
+                        }}
                         onGenerate={handleGenerateStandards}
                         generating={generatingStandards}
                       />
@@ -1536,7 +1595,10 @@ export default function DomainPage() {
                           style={{ minHeight: '72px' }}
                           placeholder="채점 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 코드 기반 수행평가, 4단계 루브릭으로)"
                           value={evalMetaPrompts[-1] || ''}
-                          onChange={e => setEvalMetaPrompts(p => ({ ...p, [-1]: e.target.value }))}
+                          onChange={e => {
+                            setEvalMetaPrompts(p => ({ ...p, [-1]: e.target.value }));
+                            setIsDirty(true);
+                          }}
                         />
                         <button
                           className="btn-rainbow text-xs px-3 py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch"
@@ -1619,7 +1681,10 @@ export default function DomainPage() {
                                 style={{ minHeight: '80px' }}
                                 placeholder="채점 기준 내용 생성을 위한 지시사항을 입력하세요. (예: 코드 완성도 기준으로 4단계로 나눠줘)"
                                 value={evalMetaPrompts[idx] || ''}
-                                onChange={e => setEvalMetaPrompts(p => ({ ...p, [idx]: e.target.value }))}
+                                onChange={e => {
+                                  setEvalMetaPrompts(p => ({ ...p, [idx]: e.target.value }));
+                                  setIsDirty(true);
+                                }}
                               />
                             </div>
                             <div className="flex-1 flex flex-col gap-1">
@@ -1663,7 +1728,10 @@ export default function DomainPage() {
                           style={{ minHeight: '72px' }}
                           placeholder="기록 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 보고서와 코드를 각각 기록하는 항목으로 구성)"
                           value={setechMetaPrompts[-1] || ''}
-                          onChange={e => setSetechMetaPrompts(p => ({ ...p, [-1]: e.target.value }))}
+                          onChange={e => {
+                            setSetechMetaPrompts(p => ({ ...p, [-1]: e.target.value }));
+                            setIsDirty(true);
+                          }}
                         />
                         <button
                           className="btn-rainbow text-xs px-3 py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch"
@@ -1736,7 +1804,10 @@ export default function DomainPage() {
                                 style={{ minHeight: '90px' }}
                                 placeholder="기록 기준 내용 생성을 위한 지시사항을 입력하세요. (예: 학생의 탐구 과정 중심으로 작성 기준 생성)"
                                 value={setechMetaPrompts[idx] || ''}
-                                onChange={e => setSetechMetaPrompts(p => ({ ...p, [idx]: e.target.value }))}
+                                onChange={e => {
+                                  setSetechMetaPrompts(p => ({ ...p, [idx]: e.target.value }));
+                                  setIsDirty(true);
+                                }}
                               />
                             </div>
                             <div className="flex-1 flex flex-col gap-1">

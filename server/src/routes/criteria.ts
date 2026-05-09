@@ -281,6 +281,10 @@ router.delete('/standards/source-file', async (req: Request, res: Response) => {
       'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=?',
       [year, semester, grade, subject]
     );
+    await execute(
+      'DELETE FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
   });
   res.json({ ok: true });
 });
@@ -457,6 +461,10 @@ router.delete('/domains/source-file', async (req: Request, res: Response) => {
       'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=?',
       [year, semester, grade, subject]
     );
+    await execute(
+      'DELETE FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=?',
+      [year, semester, grade, subject]
+    );
   });
   res.json({ ok: true });
 });
@@ -482,11 +490,13 @@ router.delete('/domains/scope', async (req: Request, res: Response) => {
       await execute(`DELETE FROM custom_domains WHERE ${where} AND name=?`, [...args, domainName]);
       await execute(`DELETE FROM domain_setech WHERE ${where} AND domain_name=?`, [...args, domainName]);
       await execute(`DELETE FROM domain_eval WHERE ${where} AND domain_name=?`, [...args, domainName]);
+      await execute(`DELETE FROM domain_ai_prompts WHERE ${where} AND domain_name=?`, [...args, domainName]);
     } else {
       await execute(`DELETE FROM subject_domains WHERE ${where}`, args);
       await execute(`DELETE FROM custom_domains WHERE ${where}`, args);
       await execute(`DELETE FROM domain_setech WHERE ${where}`, args);
       await execute(`DELETE FROM domain_eval WHERE ${where}`, args);
+      await execute(`DELETE FROM domain_ai_prompts WHERE ${where}`, args);
     }
   });
   res.json({ ok: true });
@@ -705,6 +715,10 @@ router.delete('/custom-domains/:id', async (req: Request, res: Response) => {
         'DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
         [existing.year, existing.semester, existing.grade, existing.subject, existing.name]
       );
+      await execute(
+        'DELETE FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+        [existing.year, existing.semester, existing.grade, existing.subject, existing.name]
+      );
     });
   }
   res.json({ ok: true });
@@ -727,6 +741,10 @@ router.put('/custom-domains/:id', async (req: Request, res: Response) => {
     );
     await execute(
       'UPDATE domain_eval SET domain_name=? WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+      [name, existing.year, existing.semester, existing.grade, existing.subject, existing.name]
+    );
+    await execute(
+      'UPDATE domain_ai_prompts SET domain_name=? WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
       [name, existing.year, existing.semester, existing.grade, existing.subject, existing.name]
     );
   });
@@ -795,6 +813,43 @@ router.put('/eval/bulk', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+router.get('/ai-prompts', async (req: Request, res: Response) => {
+  const { year, semester, grade, subject, domainName } = req.query;
+  const items = await queryAll<{ prompt_key: string; prompt: string }>(
+    'SELECT prompt_key, prompt FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY prompt_key',
+    [Number(year), Number(semester), Number(grade), String(subject), String(domainName || '__SUBJECT_COMPREHENSIVE__')]
+  );
+  res.json(items);
+});
+
+router.put('/ai-prompts/bulk', async (req: Request, res: Response) => {
+  const { year, semester, grade, subject, domainName, prompts } = req.body as {
+    year: number;
+    semester: number;
+    grade: number;
+    subject: string;
+    domainName: string;
+    prompts: { prompt_key: string; prompt: string }[];
+  };
+  const scopedDomainName = domainName || '__SUBJECT_COMPREHENSIVE__';
+  await transaction(async () => {
+    await execute(
+      'DELETE FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+      [year, semester, grade, subject, scopedDomainName]
+    );
+    for (const item of prompts || []) {
+      const key = String(item.prompt_key || '').trim();
+      const prompt = String(item.prompt || '');
+      if (!key && !prompt.trim()) continue;
+      await execute(
+        'INSERT OR REPLACE INTO domain_ai_prompts(year, semester, grade, subject, domain_name, prompt_key, prompt, updated_at) VALUES(?,?,?,?,?,?,?,datetime(\'now\'))',
+        [year, semester, grade, subject, scopedDomainName, key, prompt]
+      );
+    }
+  });
+  res.json({ ok: true });
+});
+
 router.get('/domain-config/export', async (req: Request, res: Response) => {
   const year = Number(req.query.year);
   const semester = Number(req.query.semester);
@@ -822,6 +877,10 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
     'SELECT name, score, item_type, rubric, sort_order FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
     [year, semester, grade, subject, domainName]
   );
+  const aiPrompts = await queryAll<{ prompt_key: string; prompt: string }>(
+    'SELECT prompt_key, prompt FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY prompt_key',
+    [year, semester, grade, subject, domainName]
+  );
 
   const standards = wb.addWorksheet('성취평가기준');
   standards.addRow(['sort_order', 'domain_name_ref', 'code', 'content']);
@@ -839,6 +898,12 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
   setechSheet.addRow(['sort_order', 'type', 'title', 'prompt', 'extensions']);
   setechItems.filter(item => item.type !== '성취기준').forEach((item, index) => {
     setechSheet.addRow([item.sort_order ?? index, item.type, item.title, item.prompt, item.extensions]);
+  });
+
+  const promptSheet = wb.addWorksheet('AI요청');
+  promptSheet.addRow(['prompt_key', 'prompt']);
+  aiPrompts.forEach(item => {
+    promptSheet.addRow([item.prompt_key, item.prompt]);
   });
 
   for (const sheet of wb.worksheets) {
@@ -929,9 +994,23 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
       });
     }
 
+    const aiPromptRows: { prompt_key: string; prompt: string }[] = [];
+    const aiPromptSheet = wb.getWorksheet('AI요청');
+    if (aiPromptSheet) {
+      const h = headerMap(aiPromptSheet.getRow(1));
+      aiPromptSheet.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+        const promptKey = cellText(row.getCell(h.prompt_key).value);
+        const prompt = cellText(row.getCell(h.prompt).value);
+        if (!promptKey && !prompt) return;
+        aiPromptRows.push({ prompt_key: promptKey, prompt });
+      });
+    }
+
     await transaction(async () => {
       await execute('DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
       await execute('DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
+      await execute('DELETE FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
 
       for (const [index, row] of standardRows.entries()) {
         const extensions = JSON.stringify({
@@ -956,9 +1035,15 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
           [year, semester, grade, subject, domainName, row.name, row.score, row.item_type === 'formula' ? 'formula' : 'llm', row.rubric, row.sort_order ?? index]
         );
       }
+      for (const row of aiPromptRows) {
+        await execute(
+          'INSERT OR REPLACE INTO domain_ai_prompts(year, semester, grade, subject, domain_name, prompt_key, prompt, updated_at) VALUES(?,?,?,?,?,?,?,datetime(\'now\'))',
+          [year, semester, grade, subject, domainName, row.prompt_key, row.prompt]
+        );
+      }
     });
 
-    res.json({ ok: true, standards: standardRows.length, setech: setechRows.length, eval: evalRows.length });
+    res.json({ ok: true, standards: standardRows.length, setech: setechRows.length, eval: evalRows.length, prompts: aiPromptRows.length });
   } catch (e: unknown) {
     res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
   } finally {
