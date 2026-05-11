@@ -1,0 +1,18 @@
+import { Brain, Database } from 'lucide-react';
+import { PageTab } from '../../components/common/PageTabs';
+import { useSettingsController } from './useSettingsController';
+import { SettingsTab } from './types';
+
+export function useSettingsPage() {
+  const controller = useSettingsController();
+  const tabs: PageTab<SettingsTab>[] = [
+    { value: 'ai', label: 'AI', icon: <Brain size={14} />, color: 'blue' },
+    { value: 'data', label: '데이터', icon: <Database size={14} />, color: 'green' },
+  ];
+
+  return {
+    header: { title: '환경 설정' },
+    tabs,
+    controller,
+  };
+}

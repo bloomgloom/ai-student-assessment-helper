@@ -148,7 +148,8 @@ export function DomainContent({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto scrollbar-stable p-6 space-y-8">
+    <div className="flex-1 min-h-0 overflow-auto scrollbar-stable p-6">
+      <div className="min-w-[1120px] space-y-8">
       {!selectedDomain && activeTab === 'ratio' && (
         <Section>
           <SectionTitle icon={<ClipboardCheck size={16} className="text-green-500" />}>
@@ -581,6 +582,7 @@ export function DomainContent({
           )}
         </Section>
       )}
+      </div>
     </div>
   );
 }

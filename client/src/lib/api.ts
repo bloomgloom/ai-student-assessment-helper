@@ -10,9 +10,9 @@ export const settingsApi = {
   update: (data: Record<string, unknown>) => api.put('/settings', data),
   test: () => api.post('/settings/test'),
   reset: () => api.post('/settings/reset'),
-  // omlx 서버에서 로드된 모델 목록 조회
-  getOmlxModels: (baseUrl: string, apiKey: string) =>
-    api.get('/settings/omlx-models', { params: { baseUrl, apiKey } }),
+  browseStoragePath: () => api.post('/settings/storage/browse'),
+  getCompatibleModels: (baseUrl: string, apiKey: string) =>
+    api.get('/settings/compatible-models', { params: { baseUrl, apiKey } }),
 };
 
 // Criteria (Domain Based)

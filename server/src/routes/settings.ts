@@ -1,21 +1,53 @@
 import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { queryAll, execute } from '../services/db';
-import { UPLOADS_DIR } from '../services/storage';
-import { callLLM, getLLMSettings, fetchOmlxModels } from '../services/llm';
+import { getStorageSettings, saveStorageSettings, UPLOADS_DIR } from '../services/storage';
+import { callLLM, getLLMSettings, fetchOpenAICompatibleModels } from '../services/llm';
 
 const UPLOADS_ROOT = UPLOADS_DIR;
+const execFileAsync = promisify(execFile);
 
 const router = Router();
 
+async function browseDirectory(): Promise<string> {
+  const platform = os.platform();
+  if (platform === 'darwin') {
+    const { stdout } = await execFileAsync('osascript', [
+      '-e',
+      'POSIX path of (choose folder with prompt "데이터 저장 경로를 선택하세요")',
+    ]);
+    return stdout.trim();
+  }
+  if (platform === 'win32') {
+    const script = [
+      'Add-Type -AssemblyName System.Windows.Forms',
+      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+      '$dialog.Description = "데이터 저장 경로를 선택하세요"',
+      'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.SelectedPath }',
+    ].join('; ');
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script]);
+    return stdout.trim();
+  }
+  try {
+    const { stdout } = await execFileAsync('zenity', ['--file-selection', '--directory', '--title=데이터 저장 경로를 선택하세요']);
+    return stdout.trim();
+  } catch {
+    const { stdout } = await execFileAsync('kdialog', ['--getexistingdirectory', process.cwd()]);
+    return stdout.trim();
+  }
+}
+
 router.get('/', async (_req: Request, res: Response) => {
   const settings = await getLLMSettings();
-  res.json(settings);
+  res.json({ ...settings, storage: getStorageSettings() });
 });
 
 router.put('/', async (req: Request, res: Response) => {
-  const { provider, apiKeys, model, baseUrl, maxConcurrency, loggingEnabled } = req.body;
+  const { provider, apiKeys, model, baseUrl, maxConcurrency, loggingEnabled, storageRoot } = req.body;
   const concurrency = maxConcurrency != null ? Math.max(1, parseInt(String(maxConcurrency), 10) || 1) : undefined;
   
   const pairs: [string, string][] = [
@@ -46,19 +78,38 @@ router.put('/', async (req: Request, res: Response) => {
   for (const [key, value] of validPairs) {
     await execute('INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)', [key, value]);
   }
-  res.json({ ok: true });
+
+  let storage = getStorageSettings();
+  if (typeof storageRoot === 'string' && !storage.envLocked) {
+    storage = saveStorageSettings(storageRoot);
+  }
+
+  res.json({ ok: true, storage });
 });
 
-// omlx 서버에서 로드된 모델 목록 조회
-router.get('/omlx-models', async (req: Request, res: Response) => {
+router.get('/compatible-models', async (req: Request, res: Response) => {
   const baseUrl = (req.query.baseUrl as string) || 'http://localhost:8000/v1';
   const apiKey = (req.query.apiKey as string) || '';
   try {
-    const models = await fetchOmlxModels(baseUrl, apiKey);
+    const models = await fetchOpenAICompatibleModels(baseUrl, apiKey);
     res.json({ models });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: msg });
+  }
+});
+
+router.post('/storage/browse', async (_req: Request, res: Response) => {
+  try {
+    const selectedPath = await browseDirectory();
+    if (!selectedPath) return res.json({ cancelled: true });
+    res.json({ path: selectedPath });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes('사용자가 취소') || msg.includes('User canceled') || msg.includes('cancelled') || msg.includes('canceled') || msg.includes('-128')) {
+      return res.json({ cancelled: true });
+    }
+    res.status(500).json({ error: `폴더 선택 창을 열 수 없습니다. 경로를 직접 입력하세요. (${msg})` });
   }
 });
 

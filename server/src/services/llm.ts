@@ -4,7 +4,7 @@ import { queryAll } from './db';
 import { LOG_DIR } from './storage';
 
 export interface LLMSettings {
-  provider: 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'openai-compatible' | 'omlx';
+  provider: 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'openai-compatible';
   apiKey: string;
   apiKeys: Record<string, string>;
   model: string;
@@ -33,14 +33,14 @@ export async function getLLMSettings(): Promise<LLMSettings> {
   for (const row of rows) map[row.key] = row.value;
 
   const maxConcurrency = parseInt(map['llm_max_concurrency'] || '5', 10);
-  const provider = (map['llm_provider'] as LLMSettings['provider']) || 'gemini';
+  const savedProvider = map['llm_provider'] || 'gemini';
+  const provider = (savedProvider === 'omlx' ? 'openai-compatible' : savedProvider) as LLMSettings['provider'];
   
   const apiKeys: Record<string, string> = {
     gemini: map['llm_api_key_gemini'] || map['llm_api_key'] || '', // Fallback to old key for backward compatibility
     openai: map['llm_api_key_openai'] || '',
     anthropic: map['llm_api_key_anthropic'] || '',
-    omlx: map['llm_api_key_omlx'] || '',
-    'openai-compatible': map['llm_api_key_openai-compatible'] || '',
+    'openai-compatible': map['llm_api_key_openai-compatible'] || map['llm_api_key_omlx'] || '',
   };
 
   return {
@@ -55,8 +55,7 @@ export async function getLLMSettings(): Promise<LLMSettings> {
   };
 }
 
-// omlx 서버에서 로드된 모델 목록을 가져옵니다.
-export async function fetchOmlxModels(baseUrl: string, apiKey: string): Promise<string[]> {
+export async function fetchOpenAICompatibleModels(baseUrl: string, apiKey: string): Promise<string[]> {
   const url = `${baseUrl.replace(/\/$/, '')}/models`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -67,8 +66,7 @@ export async function fetchOmlxModels(baseUrl: string, apiKey: string): Promise<
   return data.data.map((m) => m.id);
 }
 
-// omlx 순차 처리용 뮤텍스
-let omlxLock: Promise<void> = Promise.resolve();
+let compatibleLock: Promise<void> = Promise.resolve();
 let logSequence = 0;
 const logSessionQueues = new Map<string, Promise<void>>();
 
@@ -185,7 +183,7 @@ export async function callLLM(prompt: string, settings?: LLMSettings, signal?: A
 
   try {
     let output: string;
-    if (cfg.provider === 'omlx') output = await callOmlx(prompt, cfg, signal);
+    if (cfg.provider === 'openai-compatible') output = await callOpenAICompatible(prompt, cfg, signal);
     else if (cfg.provider === 'ollama') output = await callOllama(prompt, cfg, signal);
     else if (cfg.provider === 'anthropic') output = await callAnthropic(prompt, cfg, signal);
     else if (cfg.provider === 'gemini') output = await callGemini(prompt, cfg, signal);
@@ -256,14 +254,10 @@ async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal
   return data.candidates[0]?.content?.parts[0]?.text || '';
 }
 
-// omlx: OpenAI 호환이지만 로컬 Apple Silicon 서버 전용
-// - 기본 URL: http://localhost:8000/v1
-// - API 키 필수 (Bearer 인증)
-// - maxConcurrency <= 1 시 한 번에 한 요청만 처리 (로컬 자원 보호)
-async function callOmlx(prompt: string, cfg: LLMSettings, signal?: AbortSignal): Promise<string> {
+async function callOpenAICompatible(prompt: string, cfg: LLMSettings, signal?: AbortSignal): Promise<string> {
   const baseUrl = cfg.baseUrl || 'http://localhost:8000/v1';
   const model = cfg.model;
-  if (!model) throw new Error('omlx: 모델명을 설정해주세요. 서버에서 모델 가져오기를 사용하세요.');
+  if (!model) throw new Error('OpenAI 호환: 모델명을 설정해주세요. 모델 가져오기를 사용하거나 직접 입력하세요.');
 
   const doRequest = async (): Promise<string> => {
     const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
@@ -284,7 +278,7 @@ async function callOmlx(prompt: string, cfg: LLMSettings, signal?: AbortSignal):
       // 로컬 LLM은 응답이 느릴 수 있으므로 5분 타임아웃
       signal: mergeSignals(signal, AbortSignal.timeout(300_000)),
     });
-    if (!res.ok) throw new Error(`omlx API error ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new Error(`OpenAI 호환 API error ${res.status}: ${await res.text()}`);
     const data = (await res.json()) as { choices: { message: { content: string } }[] };
     return data.choices[0]?.message?.content || '';
   };
@@ -293,8 +287,8 @@ async function callOmlx(prompt: string, cfg: LLMSettings, signal?: AbortSignal):
     // 순차 처리: 이전 요청이 끝날 때까지 대기
     let resolve!: () => void;
     const next = new Promise<void>((r) => { resolve = r; });
-    const prev = omlxLock;
-    omlxLock = next;
+    const prev = compatibleLock;
+    compatibleLock = next;
     try {
       await prev;
       return await doRequest();
