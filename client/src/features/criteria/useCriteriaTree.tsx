@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { BookOpen } from 'lucide-react';
 import { criteriaApi } from '../../lib/api';
 import {
   AcademicTreeNode,
@@ -164,21 +163,10 @@ export function useCriteriaTree() {
     selected,
     standards,
     reloadSubjects: loadSubjects,
-    clearSelection: () => setSelected(null),
-    header: selected ? {
-      eyebrow: `${selected.year}학년도 ${selected.semester}학기 ${selected.grade}학년 > ${selected.subject}`,
-      title: selected.domain_name,
-    } : undefined,
+    clearSelection,
     tree: {
       nodes: criteriaTree.visibleTree,
-      empty: {
-        icon: <BookOpen size={32} />,
-        message: '성취 기준 파일을 업로드하세요',
-        addYear: true,
-        onAddYear: () => criteriaTree.addNode(),
-      },
-      addYear: true,
-      onAddYear: () => criteriaTree.addNode(),
+      addNode: criteriaTree.addNode,
       node: criteriaTree.nodeConfig,
     },
   };

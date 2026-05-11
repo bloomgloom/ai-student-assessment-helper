@@ -1,10 +1,17 @@
 import { ReactNode } from 'react';
+import { PageHeaderAction, PageHeaderActions } from './PageHeaderActions';
 
 interface PageHeaderProps {
   eyebrow?: ReactNode;
   title?: ReactNode;
-  actions?: ReactNode;
+  actions?: ReactNode | PageHeaderAction[];
   hideTitle?: boolean;
+}
+
+function renderActions(actions: ReactNode | PageHeaderAction[] | undefined) {
+  if (!actions) return null;
+  if (Array.isArray(actions)) return <PageHeaderActions actions={actions} />;
+  return <div className="flex gap-2">{actions}</div>;
 }
 
 export function PageHeader({ eyebrow, title, actions, hideTitle }: PageHeaderProps) {
@@ -14,8 +21,7 @@ export function PageHeader({ eyebrow, title, actions, hideTitle }: PageHeaderPro
         {eyebrow && <div className="text-xs text-gray-500 mb-0.5">{eyebrow}</div>}
         {!hideTitle && title && <h2 className="text-lg font-bold text-gray-900">{title}</h2>}
       </div>
-      {actions && <div className="flex gap-2">{actions}</div>}
+      {renderActions(actions)}
     </div>
   );
 }
-

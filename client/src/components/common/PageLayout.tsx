@@ -1,4 +1,5 @@
 import { isValidElement, ReactNode } from 'react';
+import { PageHeaderAction } from './PageHeaderActions';
 import { PageHeader } from './PageHeader';
 import { PageTreeSidebar, PageTreeSidebarConfig } from './PageTreeSidebar';
 import { TreeNodeLike } from './TreeNodeView';
@@ -6,7 +7,7 @@ import { TreeNodeLike } from './TreeNodeView';
 interface PageLayoutHeader {
   eyebrow?: ReactNode;
   title?: ReactNode;
-  actions?: ReactNode;
+  actions?: ReactNode | PageHeaderAction[];
   hideTitle?: boolean;
 }
 
