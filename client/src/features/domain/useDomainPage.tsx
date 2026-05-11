@@ -1,6 +1,6 @@
 import { Award, BookOpen, ClipboardCheck, Download, Save, School, Upload } from 'lucide-react';
 import { PageHeaderAction } from '../../components/common/PageHeaderActions';
-import { PageTabs, PageTab } from '../../components/common/PageTabs';
+import { PageTab } from '../../components/common/PageTabs';
 import { useDomainController } from './useDomainController';
 
 type DomainTab = 'standards' | 'scoring' | 'activity' | 'ratio';
@@ -92,17 +92,17 @@ export function useDomainPage() {
       },
     },
     header: domain.selectedSubject ? {
-      eyebrow: `${domain.selectedSubject.year}학년도 ${domain.selectedSubject.semester}학기 ${domain.selectedSubject.grade}학년 > ${domain.selectedSubject.subject}`,
-      title: domain.selectedDomain ? domain.selectedDomain : '종합 세특 기준 (과목 공통)',
+      eyebrow: domain.selectedDomain
+        ? `${domain.selectedSubject.year}학년도 ${domain.selectedSubject.semester}학기 ${domain.selectedSubject.grade}학년 > ${domain.selectedSubject.subject}`
+        : `${domain.selectedSubject.year}학년도 ${domain.selectedSubject.semester}학기 ${domain.selectedSubject.grade}학년`,
+      title: domain.selectedDomain ? domain.selectedDomain : domain.selectedSubject.subject,
       actions: headerActions,
     } : undefined,
-    tabs: domain.selectedSubject ? (
-      <PageTabs
-        value={domain.activeTab}
-        tabs={domain.selectedDomain ? domainTabs : subjectTabs}
-        onChange={domain.setActiveTab}
-      />
-    ) : undefined,
+    tabs: domain.selectedSubject ? {
+      value: domain.activeTab,
+      tabs: domain.selectedDomain ? domainTabs : subjectTabs,
+      onChange: domain.setActiveTab,
+    } : undefined,
     contentProps: {
       selectedSubject: domain.selectedSubject,
       selectedDomain: domain.selectedDomain,

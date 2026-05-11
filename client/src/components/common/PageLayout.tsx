@@ -1,6 +1,7 @@
 import { isValidElement, ReactNode } from 'react';
 import { PageHeaderAction } from './PageHeaderActions';
 import { PageHeader } from './PageHeader';
+import { PageTabs, PageTabsConfig } from './PageTabs';
 import { PageTreeSidebar, PageTreeSidebarConfig } from './PageTreeSidebar';
 import { TreeNodeLike } from './TreeNodeView';
 
@@ -16,7 +17,7 @@ type PageLayoutSidebar<T extends TreeNodeLike<T>> = ReactNode | PageTreeSidebarC
 interface PageLayoutProps<T extends TreeNodeLike<T>> {
   sidebar: PageLayoutSidebar<T>;
   header?: PageLayoutHeader | null;
-  tabs?: ReactNode;
+  tabs?: ReactNode | PageTabsConfig<any> | null;
   children: ReactNode;
   className?: string;
   mainClassName?: string;
@@ -30,6 +31,16 @@ function renderSidebar<T extends TreeNodeLike<T>>(sidebar: PageLayoutSidebar<T>)
   if (!isSidebarConfig(sidebar)) return sidebar;
 
   return <PageTreeSidebar config={sidebar} />;
+}
+
+function isTabsConfig(tabs: ReactNode | PageTabsConfig<any> | null | undefined): tabs is PageTabsConfig<any> {
+  return !!tabs && typeof tabs === 'object' && !isValidElement(tabs) && 'value' in tabs && 'tabs' in tabs && 'onChange' in tabs;
+}
+
+function renderTabs(tabs: ReactNode | PageTabsConfig<any> | null | undefined) {
+  if (!tabs) return null;
+  if (isTabsConfig(tabs)) return <PageTabs value={tabs.value} tabs={tabs.tabs} onChange={tabs.onChange} />;
+  return tabs;
 }
 
 export function PageLayout<T extends TreeNodeLike<T>>({
@@ -52,7 +63,7 @@ export function PageLayout<T extends TreeNodeLike<T>>({
             hideTitle={header.hideTitle}
           />
         )}
-        {tabs}
+        {renderTabs(tabs)}
         {children}
       </div>
     </div>

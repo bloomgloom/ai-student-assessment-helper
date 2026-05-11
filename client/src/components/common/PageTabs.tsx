@@ -14,13 +14,13 @@ const activeClass = {
   purple: 'border-purple-500 text-purple-700',
 };
 
-interface PageTabsProps<T extends string> {
+export interface PageTabsConfig<T extends string = string> {
   value: T;
   tabs: PageTab<T>[];
   onChange: (value: T) => void;
 }
 
-export function PageTabs<T extends string>({ value, tabs, onChange }: PageTabsProps<T>) {
+export function PageTabs<T extends string>({ value, tabs, onChange }: PageTabsConfig<T>) {
   return (
     <div className="flex border-b border-gray-200 bg-white shrink-0 px-5">
       {tabs.map(tab => {
@@ -40,4 +40,3 @@ export function PageTabs<T extends string>({ value, tabs, onChange }: PageTabsPr
     </div>
   );
 }
-
