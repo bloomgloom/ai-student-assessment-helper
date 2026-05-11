@@ -69,6 +69,17 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
 
   useEffect(() => { loadArtifacts(); }, [studentId, domain]);
 
+  useEffect(() => {
+    if (!viewing) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setViewing(null);
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [viewing]);
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
     setUploading(true);

@@ -1,29 +1,52 @@
+import { useEffect, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
-import { javascript } from '@codemirror/lang-javascript';
-import { python } from '@codemirror/lang-python';
-import { cpp } from '@codemirror/lang-cpp';
-import { java } from '@codemirror/lang-java';
-import { html } from '@codemirror/lang-html';
-import { css } from '@codemirror/lang-css';
-import { sql } from '@codemirror/lang-sql';
-import { json } from '@codemirror/lang-json';
+import { Extension } from '@codemirror/state';
 import { Loader2 } from 'lucide-react';
 
 function getExt(filename: string): string {
   return filename.split('.').pop()?.toLowerCase() || '';
 }
 
-function getLanguageExtension(filename: string) {
+async function loadLanguageExtension(filename: string): Promise<Extension | null> {
   switch (getExt(filename)) {
-    case 'js': case 'jsx': case 'ts': case 'tsx': return javascript({ jsx: true, typescript: true });
-    case 'py': return python();
-    case 'c': case 'cpp': case 'h': return cpp();
-    case 'java': return java();
-    case 'html': return html();
-    case 'css': return css();
-    case 'sql': return sql();
-    case 'json': return json();
+    case 'js':
+    case 'jsx':
+    case 'ts':
+    case 'tsx': {
+      const { javascript } = await import('@codemirror/lang-javascript');
+      return javascript({ jsx: true, typescript: true });
+    }
+    case 'py': {
+      const { python } = await import('@codemirror/lang-python');
+      return python();
+    }
+    case 'c':
+    case 'cpp':
+    case 'h': {
+      const { cpp } = await import('@codemirror/lang-cpp');
+      return cpp();
+    }
+    case 'java': {
+      const { java } = await import('@codemirror/lang-java');
+      return java();
+    }
+    case 'html': {
+      const { html } = await import('@codemirror/lang-html');
+      return html();
+    }
+    case 'css': {
+      const { css } = await import('@codemirror/lang-css');
+      return css();
+    }
+    case 'sql': {
+      const { sql } = await import('@codemirror/lang-sql');
+      return sql();
+    }
+    case 'json': {
+      const { json } = await import('@codemirror/lang-json');
+      return json();
+    }
     default: return null;
   }
 }
@@ -37,6 +60,21 @@ export default function CodeArtifactPreview({
   codeContent: string;
   loadingCode: boolean;
 }) {
+  const [languageExtension, setLanguageExtension] = useState<Extension | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLanguageExtension(null);
+
+    loadLanguageExtension(filename).then(extension => {
+      if (!cancelled) setLanguageExtension(extension);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filename]);
+
   if (loadingCode) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -50,7 +88,7 @@ export default function CodeArtifactPreview({
       <CodeMirror
         value={codeContent}
         theme={oneDark}
-        extensions={[getLanguageExtension(filename)].filter(Boolean) as never[]}
+        extensions={languageExtension ? [languageExtension] : []}
         readOnly
         style={{ height: '100%', fontSize: 13 }}
         basicSetup={{ lineNumbers: true, foldGutter: true, tabSize: 4 }}
