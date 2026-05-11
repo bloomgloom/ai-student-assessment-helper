@@ -1,27 +1,31 @@
 import { Award, BookOpen, ClipboardCheck, Download, Save, School, Upload } from 'lucide-react';
 import { PageHeaderAction } from '../../components/common/PageHeaderActions';
 import { PageTab } from '../../components/common/PageTabs';
+import { DOMAIN_PAGE_TEXT, DOMAIN_TAB_TEXT, DomainTab } from './constants';
 import { useDomainController } from './useDomainController';
-
-type DomainTab = 'standards' | 'scoring' | 'activity' | 'ratio';
 
 export function useDomainPage() {
   const domain = useDomainController();
 
   const domainTabs: PageTab<DomainTab>[] = [
-    { value: 'standards', label: '성취 기준', icon: <Award size={14} />, color: 'amber' },
-    ...(!domain.isCustomDomain ? [{ value: 'scoring' as const, label: '채점 기준', icon: <ClipboardCheck size={14} />, color: 'green' as const }] : []),
-    { value: 'activity', label: '기록 기준', icon: <BookOpen size={14} />, color: domain.isCustomDomain ? 'purple' : 'blue' },
+    { ...DOMAIN_TAB_TEXT.domainTabs.standards, icon: <Award size={14} /> },
+    ...(!domain.isCustomDomain ? [{ ...DOMAIN_TAB_TEXT.domainTabs.scoring, icon: <ClipboardCheck size={14} /> }] : []),
+    {
+      value: DOMAIN_TAB_TEXT.domainTabs.records.value,
+      label: DOMAIN_TAB_TEXT.domainTabs.records.label,
+      icon: <BookOpen size={14} />,
+      color: domain.isCustomDomain ? DOMAIN_TAB_TEXT.domainTabs.records.customColor : DOMAIN_TAB_TEXT.domainTabs.records.color,
+    },
   ];
   const subjectTabs: PageTab<DomainTab>[] = [
-    { value: 'ratio', label: '반영비율/만점관리', icon: <ClipboardCheck size={14} />, color: 'green' },
-    { value: 'activity', label: '세특 기준 관리', icon: <BookOpen size={14} />, color: 'blue' },
+    { ...DOMAIN_TAB_TEXT.subjectTabs.ratio, icon: <ClipboardCheck size={14} /> },
+    { ...DOMAIN_TAB_TEXT.subjectTabs.comments, icon: <BookOpen size={14} /> },
   ];
   const headerActions: PageHeaderAction[] = domain.selectedSubject ? [
     {
       key: 'save',
       variant: 'primary',
-      label: domain.saving ? '저장 중...' : '저장',
+      label: domain.saving ? DOMAIN_PAGE_TEXT.savingLabel : DOMAIN_PAGE_TEXT.saveLabel,
       icon: <Save size={14} />,
       onClick: domain.handleSave,
       disabled: domain.saving,
@@ -35,23 +39,23 @@ export function useDomainPage() {
       onChange: domain.handleUploadConfig,
       loading: domain.uploadingConfig,
       disabled: domain.uploadingConfig,
-      title: '작업 내용 업로드',
-      ariaLabel: '작업 내용 업로드',
+      title: DOMAIN_PAGE_TEXT.uploadConfigTitle,
+      ariaLabel: DOMAIN_PAGE_TEXT.uploadConfigTitle,
     },
     {
       key: 'download-config',
       icon: <Download size={14} />,
       onClick: domain.handleDownloadConfig,
-      title: '작업 내용 다운로드',
-      ariaLabel: '작업 내용 다운로드',
+      title: DOMAIN_PAGE_TEXT.downloadConfigTitle,
+      ariaLabel: DOMAIN_PAGE_TEXT.downloadConfigTitle,
     },
   ] : [];
 
   return {
     sidebar: {
-      title: '평가 영역 관리',
+      title: DOMAIN_PAGE_TEXT.sidebarTitle,
       upload: {
-        label: '영역 관리 파일 업로드',
+        label: DOMAIN_PAGE_TEXT.uploadLabel,
         loading: domain.uploadingDomains,
         input: (
           <input
@@ -68,11 +72,8 @@ export function useDomainPage() {
         {
           type: 'guide' as const,
           visible: domain.showGuide,
-          title: '업로드 안내',
-          lines: [
-            '나이스 > 교과담임 > 성적 > 지필/수행선행작업 > 반영비율/만점관리에서',
-            '조회 및 출력 후 파일 저장 버튼을 눌러 엑셀(XLS)를 선택하세요.',
-          ],
+          title: DOMAIN_PAGE_TEXT.guideTitle,
+          lines: [...DOMAIN_PAGE_TEXT.guideLines],
           onDismiss: domain.hideGuide,
         },
         { type: 'message' as const, visible: !!domain.uploadMessage, tone: 'success' as const, text: domain.uploadMessage },
@@ -82,7 +83,7 @@ export function useDomainPage() {
         nodes: domain.domainTree.visibleTree,
         empty: {
           icon: <School size={32} />,
-          message: <>영역 관리 파일을 업로드하면<br />과목과 수행평가 영역이 표시됩니다</>,
+          message: <>{DOMAIN_PAGE_TEXT.emptyTreeMessageLines[0]}<br />{DOMAIN_PAGE_TEXT.emptyTreeMessageLines[1]}</>,
           addYear: true,
           onAddYear: () => domain.domainTree.addNode(),
         },
@@ -147,20 +148,20 @@ export function useDomainPage() {
       evalChecked: domain.evalChecked,
       setEvalChecked: domain.setEvalChecked,
       removeEvalItem: domain.removeEvalItem,
-      setechMetaPrompts: domain.setechMetaPrompts,
-      setSetechMetaPrompts: domain.setSetechMetaPrompts,
-      handleGenerateSetechItems: domain.handleGenerateSetechItems,
-      generatingSetech: domain.generatingSetech,
-      handleGenerateSetechCriteria: domain.handleGenerateSetechCriteria,
-      addDomainSetechItem: domain.addDomainSetechItem,
-      setechItems: domain.setechItems,
-      setechChecked: domain.setechChecked,
-      setSetechChecked: domain.setSetechChecked,
-      updateSetechItem: domain.updateSetechItem,
-      removeSetechItem: domain.removeSetechItem,
+      commentsMetaPrompts: domain.commentsMetaPrompts,
+      setCommentsMetaPrompts: domain.setCommentsMetaPrompts,
+      handleGenerateCommentsItems: domain.handleGenerateCommentsItems,
+      generatingComments: domain.generatingComments,
+      handleGenerateCommentsCriteria: domain.handleGenerateCommentsCriteria,
+      addDomainCommentsItem: domain.addDomainCommentsItem,
+      commentsItems: domain.commentsItems,
+      commentsChecked: domain.commentsChecked,
+      setCommentsChecked: domain.setCommentsChecked,
+      updateCommentsItem: domain.updateCommentsItem,
+      removeCommentsItem: domain.removeCommentsItem,
       handleGenerateCommon: domain.handleGenerateCommon,
-      updateSubjectSetechMetaPrompt: domain.updateSubjectSetechMetaPrompt,
-      updateSubjectSetech: domain.updateSubjectSetech,
+      updateSubjectCommentsMetaPrompt: domain.updateSubjectCommentsMetaPrompt,
+      updateSubjectComments: domain.updateSubjectComments,
     },
   };
 }

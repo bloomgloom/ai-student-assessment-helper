@@ -275,7 +275,7 @@ router.delete('/standards/source-file', async (req: Request, res: Response) => {
       [year, semester, grade, subject]
     );
     await execute(
-      'DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=?',
+      'DELETE FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=?',
       [year, semester, grade, subject]
     );
     await execute(
@@ -455,7 +455,7 @@ router.delete('/domains/source-file', async (req: Request, res: Response) => {
       [year, semester, grade, subject]
     );
     await execute(
-      'DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=?',
+      'DELETE FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=?',
       [year, semester, grade, subject]
     );
     await execute(
@@ -489,13 +489,13 @@ router.delete('/domains/scope', async (req: Request, res: Response) => {
     if (domainName !== undefined) {
       await execute(`DELETE FROM subject_domains WHERE ${where} AND name=?`, [...args, domainName]);
       await execute(`DELETE FROM custom_domains WHERE ${where} AND name=?`, [...args, domainName]);
-      await execute(`DELETE FROM domain_setech WHERE ${where} AND domain_name=?`, [...args, domainName]);
+      await execute(`DELETE FROM domain_comments WHERE ${where} AND domain_name=?`, [...args, domainName]);
       await execute(`DELETE FROM domain_eval WHERE ${where} AND domain_name=?`, [...args, domainName]);
       await execute(`DELETE FROM domain_ai_prompts WHERE ${where} AND domain_name=?`, [...args, domainName]);
     } else {
       await execute(`DELETE FROM subject_domains WHERE ${where}`, args);
       await execute(`DELETE FROM custom_domains WHERE ${where}`, args);
-      await execute(`DELETE FROM domain_setech WHERE ${where}`, args);
+      await execute(`DELETE FROM domain_comments WHERE ${where}`, args);
       await execute(`DELETE FROM domain_eval WHERE ${where}`, args);
       await execute(`DELETE FROM domain_ai_prompts WHERE ${where}`, args);
     }
@@ -529,13 +529,13 @@ router.put('/domains/scope', async (req: Request, res: Response) => {
     if (assignments.length) {
       await execute(`UPDATE subject_domains SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
       await execute(`UPDATE custom_domains SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
-      await execute(`UPDATE domain_setech SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND domain_name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
+      await execute(`UPDATE domain_comments SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND domain_name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
       await execute(`UPDATE domain_eval SET ${assignments.join(', ')} WHERE ${where}${domainName !== undefined ? ' AND domain_name=?' : ''}`, [...values, ...args, ...(domainName !== undefined ? [domainName] : [])]);
     }
     if (toDomainName !== undefined && domainName !== undefined) {
       await execute(`UPDATE subject_domains SET name=? WHERE ${where} AND name=?`, [toDomainName, ...args, domainName]);
       await execute(`UPDATE custom_domains SET name=? WHERE ${where} AND name=?`, [toDomainName, ...args, domainName]);
-      await execute(`UPDATE domain_setech SET domain_name=? WHERE ${where} AND domain_name=?`, [toDomainName, ...args, domainName]);
+      await execute(`UPDATE domain_comments SET domain_name=? WHERE ${where} AND domain_name=?`, [toDomainName, ...args, domainName]);
       await execute(`UPDATE domain_eval SET domain_name=? WHERE ${where} AND domain_name=?`, [toDomainName, ...args, domainName]);
     }
   });
@@ -709,7 +709,7 @@ router.delete('/custom-domains/:id', async (req: Request, res: Response) => {
     await transaction(async () => {
       await execute('DELETE FROM custom_domains WHERE id=?', [req.params.id]);
       await execute(
-        'DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+        'DELETE FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
         [existing.year, existing.semester, existing.grade, existing.subject, existing.name]
       );
       await execute(
@@ -737,7 +737,7 @@ router.put('/custom-domains/:id', async (req: Request, res: Response) => {
   await transaction(async () => {
     await execute('UPDATE custom_domains SET name=? WHERE id=?', [name, id]);
     await execute(
-      'UPDATE domain_setech SET domain_name=? WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+      'UPDATE domain_comments SET domain_name=? WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
       [name, existing.year, existing.semester, existing.grade, existing.subject, existing.name]
     );
     await execute(
@@ -753,16 +753,16 @@ router.put('/custom-domains/:id', async (req: Request, res: Response) => {
 });
 
 // --- 세특 기준 ---
-router.get('/setech', async (req: Request, res: Response) => {
+router.get('/comments', async (req: Request, res: Response) => {
   const { year, semester, grade, subject, domainName } = req.query;
   const items = await queryAll(
-    'SELECT * FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
+    'SELECT * FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
     [Number(year), Number(semester), Number(grade), String(subject), String(domainName)]
   );
   res.json(items);
 });
 
-router.put('/setech/bulk', async (req: Request, res: Response) => {
+router.put('/comments/bulk', async (req: Request, res: Response) => {
   const { year, semester, grade, subject, domainName, items } = req.body as {
     year: number; semester: number; grade: number; subject: string; domainName: string;
     items: { type: string; title: string; prompt: string; extensions: string; sort_order: number }[];
@@ -770,12 +770,12 @@ router.put('/setech/bulk', async (req: Request, res: Response) => {
 
   await transaction(async () => {
     await execute(
-      'DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', 
+      'DELETE FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', 
       [year, semester, grade, subject, domainName]
     );
     for (const item of items) {
       await execute(
-        'INSERT INTO domain_setech(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO domain_comments(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
         [year, semester, grade, subject, domainName, item.type, item.title, item.prompt, item.extensions, item.sort_order]
       );
     }
@@ -870,8 +870,8 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
   meta.getColumn(1).width = 14;
   meta.getColumn(2).width = 40;
 
-  const setechItems = await queryAll<{ type: string; title: string; prompt: string; extensions: string; sort_order: number }>(
-    'SELECT type, title, prompt, extensions, sort_order FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
+  const commentsItems = await queryAll<{ type: string; title: string; prompt: string; extensions: string; sort_order: number }>(
+    'SELECT type, title, prompt, extensions, sort_order FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY sort_order, id',
     [year, semester, grade, subject, domainName]
   );
   const evalItems = await queryAll<{ name: string; score: string; item_type: string; rubric: string; sort_order: number }>(
@@ -885,7 +885,7 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
 
   const standards = wb.addWorksheet('성취평가기준');
   standards.addRow(['sort_order', 'domain_name_ref', 'code', 'content']);
-  setechItems.filter(item => item.type === '성취기준').forEach((item, index) => {
+  commentsItems.filter(item => item.type === '성취기준').forEach((item, index) => {
     let ref = { domain_name_ref: '', code: item.title, content: '' };
     try { const p = JSON.parse(item.extensions || '{}'); ref = { domain_name_ref: p.domain_name_ref || '', code: p.code || item.title, content: p.content || '' }; } catch { /* use fallback */ }
     standards.addRow([item.sort_order ?? index, ref.domain_name_ref, ref.code, ref.content]);
@@ -895,10 +895,10 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
   evalSheet.addRow(['sort_order', 'item_type', 'name', 'score', 'rubric']);
   evalItems.forEach((item, index) => evalSheet.addRow([item.sort_order ?? index, item.item_type, item.name, item.score, item.rubric]));
 
-  const setechSheet = wb.addWorksheet('세특기준');
-  setechSheet.addRow(['sort_order', 'type', 'title', 'prompt', 'extensions']);
-  setechItems.filter(item => item.type !== '성취기준').forEach((item, index) => {
-    setechSheet.addRow([item.sort_order ?? index, item.type, item.title, item.prompt, item.extensions]);
+  const commentsSheet = wb.addWorksheet('세특기준');
+  commentsSheet.addRow(['sort_order', 'type', 'title', 'prompt', 'extensions']);
+  commentsItems.filter(item => item.type !== '성취기준').forEach((item, index) => {
+    commentsSheet.addRow([item.sort_order ?? index, item.type, item.title, item.prompt, item.extensions]);
   });
 
   const promptSheet = wb.addWorksheet('AI요청');
@@ -975,18 +975,18 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
       });
     }
 
-    const setechRows: { type: string; title: string; prompt: string; extensions: string; sort_order: number }[] = [];
-    const setechSheet = wb.getWorksheet('세특기준');
-    if (setechSheet) {
-      const h = headerMap(setechSheet.getRow(1));
-      setechSheet.eachRow((row, rowNum) => {
+    const commentsRows: { type: string; title: string; prompt: string; extensions: string; sort_order: number }[] = [];
+    const commentsSheet = wb.getWorksheet('세특기준');
+    if (commentsSheet) {
+      const h = headerMap(commentsSheet.getRow(1));
+      commentsSheet.eachRow((row, rowNum) => {
         if (rowNum === 1) return;
         const type = cellText(row.getCell(h.type).value) || '항목';
         const title = cellText(row.getCell(h.title).value);
         const prompt = cellText(row.getCell(h.prompt).value);
         if (!title && !prompt) return;
-        setechRows.push({
-          sort_order: Number(cellText(row.getCell(h.sort_order).value)) || setechRows.length,
+        commentsRows.push({
+          sort_order: Number(cellText(row.getCell(h.sort_order).value)) || commentsRows.length,
           type,
           title,
           prompt,
@@ -1009,7 +1009,7 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
     }
 
     await transaction(async () => {
-      await execute('DELETE FROM domain_setech WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
+      await execute('DELETE FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
       await execute('DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
       await execute('DELETE FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
 
@@ -1020,13 +1020,13 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
           content: row.content,
         });
         await execute(
-          'INSERT INTO domain_setech(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+          'INSERT INTO domain_comments(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
           [year, semester, grade, subject, domainName, '성취기준', row.code, '', extensions, row.sort_order ?? index]
         );
       }
-      for (const [index, row] of setechRows.entries()) {
+      for (const [index, row] of commentsRows.entries()) {
         await execute(
-          'INSERT INTO domain_setech(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+          'INSERT INTO domain_comments(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
           [year, semester, grade, subject, domainName, row.type, row.title, row.prompt, row.extensions, row.sort_order ?? standardRows.length + index]
         );
       }
@@ -1044,7 +1044,7 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
       }
     });
 
-    res.json({ ok: true, standards: standardRows.length, setech: setechRows.length, eval: evalRows.length, prompts: aiPromptRows.length });
+    res.json({ ok: true, standards: standardRows.length, comments: commentsRows.length, eval: evalRows.length, prompts: aiPromptRows.length });
   } catch (e: unknown) {
     res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
   } finally {

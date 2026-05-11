@@ -39,7 +39,7 @@ export async function initDb(): Promise<void> {
       created_at  TEXT    DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS setech_criteria (
+    CREATE TABLE IF NOT EXISTS comments_criteria (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       set_id     INTEGER NOT NULL REFERENCES criteria_sets(id) ON DELETE CASCADE,
       type       TEXT    NOT NULL DEFAULT '항목',
@@ -80,7 +80,7 @@ export async function initDb(): Promise<void> {
     );
 
     -- [신규] 도메인별 세특 기준
-    CREATE TABLE IF NOT EXISTS domain_setech (
+    CREATE TABLE IF NOT EXISTS domain_comments (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       year        INTEGER NOT NULL,
       semester    INTEGER NOT NULL,
@@ -133,8 +133,8 @@ export async function initDb(): Promise<void> {
       filename   TEXT    NOT NULL DEFAULT '',
       scoring_filename TEXT NOT NULL DEFAULT '',
       scoring_filepath TEXT NOT NULL DEFAULT '',
-      setech_filename TEXT NOT NULL DEFAULT '',
-      setech_filepath TEXT NOT NULL DEFAULT '',
+      comments_filename TEXT NOT NULL DEFAULT '',
+      comments_filepath TEXT NOT NULL DEFAULT '',
       created_at TEXT    DEFAULT (datetime('now'))
     );
 
@@ -204,7 +204,7 @@ export async function initDb(): Promise<void> {
     CREATE TABLE IF NOT EXISTS generated_content (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id   INTEGER NOT NULL REFERENCES class_students(id) ON DELETE CASCADE,
-      content_type TEXT    NOT NULL CHECK(content_type IN ('scoring', 'setech')),
+      content_type TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments')),
       domain       TEXT    NOT NULL DEFAULT '',
       content      TEXT    NOT NULL DEFAULT '',
       updated_at   TEXT    DEFAULT (datetime('now')),
@@ -214,8 +214,8 @@ export async function initDb(): Promise<void> {
 
   await ensureColumn('classes', 'scoring_filename', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('classes', 'scoring_filepath', "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn('classes', 'setech_filename', "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn('classes', 'setech_filepath', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('classes', 'comments_filename', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('classes', 'comments_filepath', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('subject_domains', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('achievement_standards', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('class_students', 'personal_num', "TEXT NOT NULL DEFAULT ''");
@@ -234,7 +234,7 @@ async function migrateStoredUploadPaths(): Promise<void> {
   const db = getClient();
   const pairs = [
     ['classes', 'scoring_filepath'],
-    ['classes', 'setech_filepath'],
+    ['classes', 'comments_filepath'],
     ['artifacts', 'filepath'],
   ] as const;
 
@@ -249,14 +249,17 @@ async function migrateStoredUploadPaths(): Promise<void> {
 }
 
 async function ensureColumn(table: string, column: string, definition: string): Promise<void> {
+  if (!(await columnExists(table, column))) {
+    await getClient().execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+async function columnExists(table: string, column: string): Promise<boolean> {
   const rows = await getClient().execute(`PRAGMA table_info(${table})`);
-  const exists = rows.rows.some((row) => {
+  return rows.rows.some((row) => {
     const obj = row as unknown as Record<string, unknown>;
     return obj.name === column || (Array.isArray(row) && row[1] === column);
   });
-  if (!exists) {
-    await getClient().execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
 }
 
 async function ensureRenameColumn(table: string, oldName: string, newName: string): Promise<void> {

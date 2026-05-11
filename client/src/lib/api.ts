@@ -105,10 +105,10 @@ export const criteriaApi = {
   deleteCustomDomain: (id: number) => api.delete(`/criteria/custom-domains/${id}`),
 
   // 세특
-  getSetech: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
-    api.get('/criteria/setech', { params: { year, semester, grade, subject, domainName, t: Date.now() } }),
-  bulkSaveSetech: (year: number, semester: number, grade: number, subject: string, domainName: string, items: unknown[]) =>
-    api.put('/criteria/setech/bulk', { year, semester, grade, subject, domainName, items }),
+  getComments: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
+    api.get('/criteria/comments', { params: { year, semester, grade, subject, domainName, t: Date.now() } }),
+  bulkSaveComments: (year: number, semester: number, grade: number, subject: string, domainName: string, items: unknown[]) =>
+    api.put('/criteria/comments/bulk', { year, semester, grade, subject, domainName, items }),
 
   // 평가
   getEval: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
@@ -141,7 +141,7 @@ export const recordsApi = {
     studentId: number,
     data: { content_type: string; domain: string; content: string }
   ) => api.put(`/records/students/${studentId}/content`, data),
-  exportExcel: (sessionId: number, type: 'setech' | 'scoring') =>
+  exportExcel: (sessionId: number, type: 'comments' | 'scoring') =>
     api.get(`/records/sessions/${sessionId}/export?type=${type}`, { responseType: 'blob' }),
   exportFull: (classId: number) =>
     api.get(`/records/export-full/${classId}`, { responseType: 'blob' }),
@@ -186,14 +186,14 @@ export const classesApi = {
     form.append('file', file);
     return api.post('/classes/upload/scoring', form);
   },
-  uploadSetech: (file: File) => {
+  uploadComments: (file: File) => {
     const form = new FormData();
     form.append('file', file);
-    return api.post('/classes/upload/setech', form);
+    return api.post('/classes/upload/comments', form);
   },
   delete: (id: number) => api.delete(`/classes/${id}`),
   deleteScoring: (id: number) => api.delete(`/classes/${id}/scoring`),
-  deleteSetech: (id: number) => api.delete(`/classes/${id}/setech`),
+  deleteComments: (id: number) => api.delete(`/classes/${id}/comments`),
   syncSession: (classId: number, sessionId: number) =>
     api.post(`/classes/${classId}/sync-session/${sessionId}`),
 };
@@ -203,7 +203,7 @@ export const aiApi = {
   generate: (data: {
     studentId: number;
     domain: string;
-    contentType: 'scoring' | 'setech';
+    contentType: 'scoring' | 'comments';
     criteriaSetId: number;
   }) => api.post('/ai/generate', data),
   spellcheck: (data: { text: string }, signal?: AbortSignal) => api.post('/ai/spellcheck', data, { signal }),

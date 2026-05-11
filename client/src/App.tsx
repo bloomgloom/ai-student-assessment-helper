@@ -42,8 +42,8 @@ function Sidebar() {
           </button>
           {!collapsed && (
             <div className="min-w-0">
-              <h1 className="text-base font-bold leading-tight">학생 평가 관리</h1>
-              <p className="text-xs text-gray-400 mt-0.5">AI 채점·세특</p>
+              <h1 className="text-base font-bold leading-tight">AI 기반 평가 관리</h1>
+              <p className="text-xs text-gray-400 mt-0.5">AI 채점·세특 지원</p>
             </div>
           )}
         </div>

@@ -7,7 +7,12 @@ import {
 } from '../../components/common/academicTree';
 import { AcademicTreeControllerHelpers, useAcademicTreeController } from '../../hooks/useAcademicTreeController';
 import { clearStoredSelection, saveStoredSelection, useStoredSelectionRestore } from '../../hooks/useStoredSelectionRestore';
-import { CRITERIA_SELECTION_KEY } from './constants';
+import {
+  CRITERIA_SELECTION_KEY,
+  CRITERIA_SOURCE_TYPE,
+  CRITERIA_TREE_KEY_PREFIXES,
+  CRITERIA_TREE_TEXT,
+} from './constants';
 import { CriteriaStandardRow, CriteriaSubjectItem } from './types';
 
 type CriteriaTreeNode = AcademicTreeNode<CriteriaSubjectItem>;
@@ -15,7 +20,7 @@ type StoredCriteriaSelection = Pick<CriteriaSubjectItem, 'year' | 'semester' | '
 
 function buildCriteriaTree(items: CriteriaSubjectItem[]): CriteriaTreeNode[] {
   return buildAcademicTree(items, {
-    keyPrefixes: { year: 'y', semester: 's', grade: 'g', subject: 'sub', domain: 'dom' },
+    keyPrefixes: CRITERIA_TREE_KEY_PREFIXES,
     getDomainEntries: (domains) => domains
       .filter(item => item.domain_name)
       .map(item => ({ name: item.domain_name, subject: item })),
@@ -81,7 +86,7 @@ export function useCriteriaTree() {
     sub: Pick<CriteriaSubjectItem, 'year' | 'semester' | 'grade'>,
     helpers: AcademicTreeControllerHelpers<CriteriaSubjectItem>,
   ) => {
-    const parents = createAcademicParentPathDrafts<CriteriaSubjectItem>({ year: 'y', semester: 's', grade: 'g' }, sub);
+    const parents = createAcademicParentPathDrafts<CriteriaSubjectItem>(CRITERIA_TREE_KEY_PREFIXES, sub);
     helpers.setDraftNodes(prev => {
       const keys = new Set(prev.map(node => node.key));
       return [...prev, ...parents.filter(node => !keys.has(node.key))];
@@ -103,15 +108,15 @@ export function useCriteriaTree() {
     clickable: (item) => item.kind === 'domain' && !!item.subject,
     onSelect: (item) => item.subject && loadStandards(item.subject),
     deleteSubject: async (subject, _node, helpers) => {
-      if (!confirm(`${subject.subject} 성취 기준 파일과 데이터를 삭제하시겠습니까?`)) return;
-      await criteriaApi.deleteSource('standards', subject.year, subject.semester, subject.grade, subject.subject);
+      if (!confirm(CRITERIA_TREE_TEXT.deleteSubjectConfirm(subject.subject))) return;
+      await criteriaApi.deleteSource(CRITERIA_SOURCE_TYPE, subject.year, subject.semester, subject.grade, subject.subject);
       preserveParentPath(subject, helpers);
       if (isSameSubject(selected, subject)) clearSelection();
       await loadSubjects();
     },
     deleteScope: async (node, helpers) => {
       if (!node.year) return;
-      if (!confirm(`${node.label} 아래 성취 기준을 모두 삭제하시겠습니까?`)) return;
+      if (!confirm(CRITERIA_TREE_TEXT.deleteScopeConfirm(node.label))) return;
       await criteriaApi.deleteStandardsScope({
         year: node.year,
         semester: node.semester,
@@ -149,12 +154,12 @@ export function useCriteriaTree() {
       const responseError = error && typeof error === 'object' && 'response' in error
         ? (error as any).response?.data?.error
         : undefined;
-      return responseError || (node.kind === 'subject' ? '내장 성취 기준을 찾을 수 없습니다.' : undefined);
+      return responseError || (node.kind === 'subject' ? CRITERIA_TREE_TEXT.missingBuiltInStandards : undefined);
     },
     subjectDownloadAction: {
       visible: (subject) => !!subject.has_source,
       onDownload: (subject) => {
-        window.location.href = criteriaApi.sourceUrl('standards', subject.year, subject.semester, subject.grade, subject.subject);
+        window.location.href = criteriaApi.sourceUrl(CRITERIA_SOURCE_TYPE, subject.year, subject.semester, subject.grade, subject.subject);
       },
     },
   });

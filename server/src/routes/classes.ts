@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { UPLOADS_DIR, ensureDir } from '../services/storage';
-import { parseClassFilename, parseScoringExcel, parseSetechFilename, parseSetechExcel } from '../services/excel';
+import { parseClassFilename, parseScoringExcel, parseCommentsFilename, parseCommentsExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
 const UPLOAD_DIR = path.join(UPLOADS_DIR, 'scoring');
@@ -67,20 +67,20 @@ router.get('/:id/domains', async (req: Request, res: Response) => {
 router.post('/upload', upload.fields([
   { name: 'file', maxCount: 1 },
   { name: 'scoringFile', maxCount: 1 },
-  { name: 'setechFile', maxCount: 1 },
+  { name: 'commentsFile', maxCount: 1 },
 ]), async (req: Request, res: Response) => {
   const files = req.files as Record<string, Express.Multer.File[]> | undefined;
   const scoringFile = files?.scoringFile?.[0] || files?.file?.[0];
-  const setechFile = files?.setechFile?.[0];
+  const commentsFile = files?.commentsFile?.[0];
   if (!scoringFile) return res.status(400).json({ error: '채점 파일이 없습니다.' });
 
   const originalName = decodeUploadFilename(scoringFile.originalname);
-  const setechOriginalName = setechFile ? decodeUploadFilename(setechFile.originalname) : '';
+  const commentsOriginalName = commentsFile ? decodeUploadFilename(commentsFile.originalname) : '';
 
   // 1. 파일명 파싱 (parseClassFilename 내부에서도 NFC 정규화하므로 이중 보호)
   let classInfo = parseClassFilename(originalName);
-  const setechInfo = setechOriginalName ? parseSetechFilename(setechOriginalName) : null;
-  if (setechOriginalName && !setechInfo) {
+  const commentsInfo = commentsOriginalName ? parseCommentsFilename(commentsOriginalName) : null;
+  if (commentsOriginalName && !commentsInfo) {
     return res.status(400).json({
       error: '세특 파일명에서 수업 정보를 파싱할 수 없습니다.',
       hint: '파일명 형식: "2026_1학기_2학년_1_정보_과목세특_20251022132700.xlsx"',
@@ -107,12 +107,12 @@ router.post('/upload', upload.fields([
     };
   }
 
-  if (setechInfo) {
-    const sameClass = classInfo.year === setechInfo.year
-      && classInfo.semester === setechInfo.semester
-      && classInfo.grade === setechInfo.grade
-      && classInfo.subject === setechInfo.subject
-      && String(classInfo.room).replace(/강의실$/, '') === String(setechInfo.room).replace(/강의실$/, '');
+  if (commentsInfo) {
+    const sameClass = classInfo.year === commentsInfo.year
+      && classInfo.semester === commentsInfo.semester
+      && classInfo.grade === commentsInfo.grade
+      && classInfo.subject === commentsInfo.subject
+      && String(classInfo.room).replace(/강의실$/, '') === String(commentsInfo.room).replace(/강의실$/, '');
     if (!sameClass) {
       return res.status(400).json({ error: '채점 파일과 세특 파일의 학년도/학기/학년/과목/강의실 정보가 일치하지 않습니다.' });
     }
@@ -178,11 +178,11 @@ router.post('/upload', upload.fields([
   try {
     const classId = await transaction(async () => {
       const r = await execute(
-        `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, setech_filename, setech_filepath)
+        `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, comments_filename, comments_filepath)
          VALUES(?,?,?,?,?,?,?,?,?,?)`,
         [
           classInfo!.year, classInfo!.semester, classInfo!.grade, classInfo!.subject, classInfo!.room,
-          originalName, originalName, scoringFile.path, setechOriginalName, setechFile?.path || '',
+          originalName, originalName, scoringFile.path, commentsOriginalName, commentsFile?.path || '',
         ]
       );
       const classId = Number(r.lastInsertRowid);
@@ -271,8 +271,8 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
     return res.status(400).json({ error: 'E1 이후 셀에서 수행평가 영역명을 찾을 수 없습니다.' });
   }
 
-  const existingClass = await queryOne<{ id: number; setech_filename: string }>(
-    'SELECT id, setech_filename FROM classes WHERE year=? AND semester=? AND grade=? AND subject=? AND room=?',
+  const existingClass = await queryOne<{ id: number; comments_filename: string }>(
+    'SELECT id, comments_filename FROM classes WHERE year=? AND semester=? AND grade=? AND subject=? AND room=?',
     [classInfo.year, classInfo.semester, classInfo.grade, classInfo.subject, classInfo.room]
   );
 
@@ -282,7 +282,7 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
   if (existingClass) {
     classId = existingClass.id;
     // 세특 파일이 이미 있으면 학생 명단 일치 여부 확인
-    if (existingClass.setech_filename) {
+    if (existingClass.comments_filename) {
       const existingStudents = await queryAll<{ id: number; name: string; student_num: number }>(
         'SELECT id, name, student_num FROM class_students WHERE class_id=? ORDER BY name', [classId]
       );
@@ -323,7 +323,7 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
         await execute('INSERT INTO class_students(class_id, student_num, name, excel_row, personal_num) VALUES(?,?,?,?,?)',
           [classId, fullNum, s.name, s.excelRow, '']);
       }
-    } else if (!existingClass.setech_filename) {
+    } else if (!existingClass.comments_filename) {
       const existingStudents = await queryAll<{ id: number; name: string; student_num: number }>(
         'SELECT id, name, student_num FROM class_students WHERE class_id=? ORDER BY name', [classId]
       );
@@ -339,7 +339,7 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
   } else {
     const r = await transaction(async () => {
       const ins = await execute(
-        `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, setech_filename, setech_filepath)
+        `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, comments_filename, comments_filepath)
          VALUES(?,?,?,?,?,?,?,?,?,?)`,
         [classInfo.year, classInfo.semester, classInfo.grade, classInfo.subject, classInfo.room,
           originalName, originalName, file.path, '', '']
@@ -371,24 +371,24 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
 });
 
 // ── 세특 파일 단독 업로드 (수업 생성/갱신) ───────────────────────────────
-router.post('/upload/setech', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/upload/comments', upload.single('file'), async (req: Request, res: Response) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: '세특 파일이 없습니다.' });
 
   const originalName = decodeUploadFilename(file.originalname);
-  const setechInfo = parseSetechFilename(originalName);
-  if (!setechInfo) {
+  const commentsInfo = parseCommentsFilename(originalName);
+  if (!commentsInfo) {
     return res.status(400).json({
       error: '세특 파일명에서 수업 정보를 파싱할 수 없습니다.',
       hint: '파일명 형식: "2026_1학기_2학년_1_정보_과목세특_20251022132700.xlsx"',
     });
   }
 
-  const { year, semester, grade, subject, room } = setechInfo;
+  const { year, semester, grade, subject, room } = commentsInfo;
 
-  let parsedStudents: Awaited<ReturnType<typeof parseSetechExcel>>;
+  let parsedStudents: Awaited<ReturnType<typeof parseCommentsExcel>>;
   try {
-    parsedStudents = await parseSetechExcel(file.path);
+    parsedStudents = await parseCommentsExcel(file.path);
   } catch (e) {
     return res.status(400).json({ error: `세특 파일 파싱 오류: ${e instanceof Error ? e.message : e}` });
   }
@@ -439,7 +439,7 @@ router.post('/upload/setech', upload.single('file'), async (req: Request, res: R
       }
     }
     await execute(
-      'UPDATE classes SET setech_filename=?, setech_filepath=? WHERE id=?',
+      'UPDATE classes SET comments_filename=?, comments_filepath=? WHERE id=?',
       [originalName, file.path, classId]
     );
   } else {
@@ -453,7 +453,7 @@ router.post('/upload/setech', upload.single('file'), async (req: Request, res: R
 
     const r = await transaction(async () => {
       const ins = await execute(
-        `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, setech_filename, setech_filepath)
+        `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, comments_filename, comments_filepath)
          VALUES(?,?,?,?,?,?,?,?,?,?)`,
         [year, semester, grade, subject, room, originalName, '', '', originalName, file.path]
       );
@@ -498,16 +498,16 @@ router.delete('/:id/scoring', async (req: Request, res: Response) => {
 });
 
 // ── 세특 파일만 삭제 ──────────────────────────────────────────────────────
-router.delete('/:id/setech', async (req: Request, res: Response) => {
-  const cls = await queryOne<{ setech_filepath: string }>(
-    'SELECT setech_filepath FROM classes WHERE id=?', [req.params.id]
+router.delete('/:id/comments', async (req: Request, res: Response) => {
+  const cls = await queryOne<{ comments_filepath: string }>(
+    'SELECT comments_filepath FROM classes WHERE id=?', [req.params.id]
   );
   if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
-  if (cls.setech_filepath) {
-    try { fs.unlinkSync(cls.setech_filepath); } catch { /* ignore */ }
+  if (cls.comments_filepath) {
+    try { fs.unlinkSync(cls.comments_filepath); } catch { /* ignore */ }
   }
   await execute(
-    'UPDATE classes SET setech_filename=?, setech_filepath=? WHERE id=?',
+    'UPDATE classes SET comments_filename=?, comments_filepath=? WHERE id=?',
     ['', '', req.params.id]
   );
   // 개인번호도 함께 초기화 (세특에서 가져온 데이터)
@@ -518,8 +518,8 @@ router.delete('/:id/setech', async (req: Request, res: Response) => {
 // ── 수업 삭제 ─────────────────────────────────────────────────────────────
 router.delete('/:id', async (req: Request, res: Response) => {
   const cls = await queryOne<{
-    scoring_filepath: string; setech_filepath: string;
-  }>('SELECT scoring_filepath, setech_filepath FROM classes WHERE id=?', [req.params.id]);
+    scoring_filepath: string; comments_filepath: string;
+  }>('SELECT scoring_filepath, comments_filepath FROM classes WHERE id=?', [req.params.id]);
 
   if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
 
@@ -540,8 +540,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
   if (cls.scoring_filepath) {
     try { fs.unlinkSync(cls.scoring_filepath); } catch { /* ignore */ }
   }
-  if (cls.setech_filepath) {
-    try { fs.unlinkSync(cls.setech_filepath); } catch { /* ignore */ }
+  if (cls.comments_filepath) {
+    try { fs.unlinkSync(cls.comments_filepath); } catch { /* ignore */ }
   }
 
   // DB 삭제 (generated_content, artifacts는 ON DELETE CASCADE)

@@ -35,7 +35,7 @@ function CriteriaStandardsTable({ standards }: Pick<CriteriaContentProps, 'stand
 
   return (
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable p-6">
-      <div className="min-w-[980px] bg-white border border-gray-200 rounded-md overflow-hidden">
+      <div className="min-w-[760px] bg-white border border-gray-200 rounded-md overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500">
             <tr>

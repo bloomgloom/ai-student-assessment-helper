@@ -6,7 +6,7 @@ interface RecordsCollapsedTreeClass {
   subject: string;
   room: string;
   scoring_filename: string;
-  setech_filename: string;
+  comments_filename: string;
 }
 
 interface RecordsCollapsedTreeProps {

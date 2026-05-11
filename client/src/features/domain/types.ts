@@ -25,7 +25,7 @@ export interface SubjectDomainRow {
   source_filename?: string;
 }
 
-export interface SetechItem {
+export interface CommentsItem {
   id?: number;
   type: string;
   title: string;

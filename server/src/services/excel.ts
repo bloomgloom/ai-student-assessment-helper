@@ -13,7 +13,7 @@ export interface ClassInfo {
   room: string;       // 1강의실
 }
 
-export interface SetechFileInfo extends ClassInfo {
+export interface CommentsFileInfo extends ClassInfo {
   timestamp: string;
 }
 
@@ -78,7 +78,7 @@ export function parseClassFilename(filename: string): ClassInfo | null {
   return null;
 }
 
-export function parseSetechFilename(filename: string): SetechFileInfo | null {
+export function parseCommentsFilename(filename: string): CommentsFileInfo | null {
   const normalized = filename.normalize('NFC');
   const base = path.basename(normalized, path.extname(normalized));
   const match = base.match(/(\d{4})_(\d+)학기_(\d+)학년_(.+?)_(.+?)_과목세특_(\d+)/);
@@ -460,7 +460,7 @@ function colIdxToLetter(idx: number): string {
   return s;
 }
 
-export interface SetechStudent {
+export interface CommentsStudent {
   name: string;
   classNum: number;
   studentNum: number;
@@ -472,7 +472,7 @@ export interface SetechStudent {
  * 세특 Excel 파일에서 학생 목록(이름, 반/번호, 개인번호)을 추출합니다.
  * 헤더 행을 자동 탐지하며, 개인번호 열이 없으면 빈 문자열로 처리합니다.
  */
-export async function parseSetechExcel(filePath: string): Promise<SetechStudent[]> {
+export async function parseCommentsExcel(filePath: string): Promise<CommentsStudent[]> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
   const sheet = wb.worksheets[0];
@@ -501,7 +501,7 @@ export async function parseSetechExcel(filePath: string): Promise<SetechStudent[
   if (!classCol && !combinedClassNumCol) classCol = 2;
   if (!numCol && !combinedClassNumCol) numCol = 3;
 
-  const students: SetechStudent[] = [];
+  const students: CommentsStudent[] = [];
   sheet.eachRow((row, rowIdx) => {
     if (rowIdx <= headerRow) return;
     const name = cleanStudentName(String(row.getCell(nameCol).value ?? '').trim());
@@ -627,12 +627,12 @@ export async function writeScoringToExcel(
  * 세특 파일 구조: Row 1 = 헤더, Row 2+ = 학생 데이터
  *   C4(col4) = 학생개인번호, C10(col10) = 세부능력 및 특기사항
  * @param filePath      원본 파일 경로
- * @param entries       [{ personalNum, setechText }]
+ * @param entries       [{ personalNum, commentsText }]
  * @returns             수정된 파일의 Buffer
  */
-export async function writeSetechToExcel(
+export async function writeCommentsToExcel(
   filePath: string,
-  entries: { personalNum: string; setechText: string }[]
+  entries: { personalNum: string; commentsText: string }[]
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
@@ -641,9 +641,9 @@ export async function writeSetechToExcel(
   if (!sheet) throw new Error('엑셀 파일에 시트가 없습니다.');
 
   const PERSONAL_NUM_COL = 4;  // D열 = 학생개인번호
-  const SETECH_COL = 10;       // J열 = 세부능력 및 특기사항
+  const COMMENTS_COL = 10;       // J열 = 세부능력 및 특기사항
 
-  const personalNumMap = new Map(entries.map(e => [e.personalNum, e.setechText]));
+  const personalNumMap = new Map(entries.map(e => [e.personalNum, e.commentsText]));
 
   sheet.eachRow((row, rowIdx) => {
     if (rowIdx === 1) return; // 헤더 스킵
@@ -651,7 +651,7 @@ export async function writeSetechToExcel(
     if (!pNum) return;
     const text = personalNumMap.get(pNum);
     if (text !== undefined) {
-      row.getCell(SETECH_COL).value = text;
+      row.getCell(COMMENTS_COL).value = text;
     }
   });
 

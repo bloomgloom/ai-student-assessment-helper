@@ -135,11 +135,11 @@ router.post('/reset', async (_req: Request, res: Response) => {
     // 2. 데이터 테이블 초기화 (settings 제외)
     // ON DELETE CASCADE 덕분에 classes 삭제 시 assessment_domains, class_students,
     // artifacts, generated_content 자동 삭제
-    // criteria_sets 삭제 시 setech_criteria, eval_domains 자동 삭제
+    // criteria_sets 삭제 시 comments_criteria, eval_domains 자동 삭제
     await execute('DELETE FROM classes');
     await execute('DELETE FROM subject_domains');
     await execute('DELETE FROM achievement_standards');
-    await execute('DELETE FROM domain_setech');
+    await execute('DELETE FROM domain_comments');
     await execute('DELETE FROM domain_eval');
     await execute('DELETE FROM custom_domains');
     await execute('DELETE FROM criteria_sets');

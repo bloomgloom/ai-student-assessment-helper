@@ -5,7 +5,7 @@ import fs from 'fs';
 import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { UPLOADS_DIR, ensureDir } from '../services/storage';
-import { parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeSetechToExcel } from '../services/excel';
+import { parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeCommentsToExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
 const UPLOAD_DIR = path.join(UPLOADS_DIR, 'records');
@@ -34,10 +34,10 @@ function headerMap(row: ExcelJS.Row): Record<string, number> {
 function parseGeneratedContentValue(contentType: string, content: string): Array<{ item: string; value: string }> {
   try {
     const parsed = JSON.parse(content || '{}');
-    if (contentType === 'setech') return [{ item: 'text', value: String(parsed.text ?? '') }];
+    if (contentType === 'comments') return [{ item: 'text', value: String(parsed.text ?? '') }];
     return Object.entries(parsed).map(([item, value]) => ({ item, value: String(value ?? '') }));
   } catch {
-    return [{ item: contentType === 'setech' ? 'text' : 'raw', value: content || '' }];
+    return [{ item: contentType === 'comments' ? 'text' : 'raw', value: content || '' }];
   }
 }
 
@@ -79,12 +79,12 @@ router.put('/students/:studentId/content', async (req: Request, res: Response) =
 
 router.get('/export/:classId', async (req: Request, res: Response) => {
   const classId = req.params.classId;
-  const type = (req.query.type as string) || 'setech';
+  const type = (req.query.type as string) || 'comments';
 
   const cls = await queryOne<{
     year: number; semester: number; grade: number; subject: string; room: string;
     scoring_filename: string; scoring_filepath: string;
-    setech_filename: string; setech_filepath: string; filename: string;
+    comments_filename: string; comments_filepath: string; filename: string;
   }>('SELECT * FROM classes WHERE id=?', [classId]);
   if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
 
@@ -137,15 +137,15 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
 
     } else {
       // ── 세특 파일에 종합 세특 기록 ────────────────────────────────────
-      if (!cls.setech_filepath || !fs.existsSync(cls.setech_filepath)) {
+      if (!cls.comments_filepath || !fs.existsSync(cls.comments_filepath)) {
         return res.status(400).json({ error: '세특 원본 파일이 없습니다. 파일을 먼저 업로드해주세요.' });
       }
 
-      const entries: { personalNum: string; setechText: string }[] = [];
+      const entries: { personalNum: string; commentsText: string }[] = [];
       for (const s of students) {
         if (!s.personal_num) continue;
         const row = await queryOne<{ content: string }>(
-          `SELECT content FROM generated_content WHERE student_id=? AND content_type='setech' AND domain='__SUBJECT_COMPREHENSIVE__'`,
+          `SELECT content FROM generated_content WHERE student_id=? AND content_type='comments' AND domain='__SUBJECT_COMPREHENSIVE__'`,
           [s.id]
         );
         let text = '';
@@ -155,11 +155,11 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
             text = parsed.text || '';
           } catch { text = row.content; }
         }
-        if (text) entries.push({ personalNum: s.personal_num, setechText: text });
+        if (text) entries.push({ personalNum: s.personal_num, commentsText: text });
       }
 
-      buffer = await writeSetechToExcel(cls.setech_filepath, entries);
-      downloadName = cls.setech_filename;
+      buffer = await writeCommentsToExcel(cls.comments_filepath, entries);
+      downloadName = cls.comments_filename;
     }
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -264,7 +264,7 @@ router.post('/import-full/:classId', upload.single('file'), async (req: Request,
     let saved = 0;
     await transaction(async () => {
       for (const entry of grouped.values()) {
-        const content = entry.contentType === 'setech'
+        const content = entry.contentType === 'comments'
           ? JSON.stringify({ text: entry.items.text ?? '' })
           : JSON.stringify(entry.items);
         await execute(`

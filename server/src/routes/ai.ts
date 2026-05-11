@@ -16,7 +16,7 @@ interface ArtifactRow {
 interface GenerateRequest {
   studentId: number;
   domain: string;
-  contentType: 'scoring' | 'setech';
+  contentType: 'scoring' | 'comments';
   criteriaSetId: number;
 }
 
@@ -24,7 +24,7 @@ interface BatchGenerateRequest {
   classId?: number;
   sessionId?: number;
   domain: string;
-  contentType: 'scoring' | 'setech';
+  contentType: 'scoring' | 'comments';
   criteriaSetId?: number;
   studentIds?: number[];
 }
@@ -43,7 +43,7 @@ interface EvalCriterion {
   rubric: string;
 }
 
-interface SetechCriterion {
+interface CommentsCriterion {
   type: string;
   title: string;
   prompt: string;
@@ -145,11 +145,11 @@ async function getDomainEvalCriteria(classContext: ClassContext | null, domain: 
   );
 }
 
-async function getDomainSetechCriteria(classContext: ClassContext | null, domain: string): Promise<SetechCriterion[]> {
+async function getDomainCommentsCriteria(classContext: ClassContext | null, domain: string): Promise<CommentsCriterion[]> {
   if (!classContext) return [];
-  return queryAll<SetechCriterion>(
+  return queryAll<CommentsCriterion>(
     `SELECT type, title, prompt, extensions
-     FROM domain_setech
+     FROM domain_comments
      WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?
      ORDER BY sort_order, id`,
     [classContext.year, classContext.semester, classContext.grade, classContext.subject, domain]
@@ -177,7 +177,7 @@ function buildScoringContent(result: string, criteria: EvalCriterion[]): string 
   return JSON.stringify(content);
 }
 
-function buildStoredContent(contentType: 'scoring' | 'setech', result: string, criteria: EvalCriterion[]): string {
+function buildStoredContent(contentType: 'scoring' | 'comments', result: string, criteria: EvalCriterion[]): string {
   if (contentType === 'scoring') return buildScoringContent(result, criteria);
   return JSON.stringify({ text: result });
 }
@@ -268,19 +268,19 @@ router.post('/generate', async (req: Request, res: Response) => {
   // 기준에 따른 지시사항 구성
   if (criteriaSet.mode === '세특') {
     const globalCommon = await queryOne<{ prompt: string }>(
-      "SELECT prompt FROM setech_criteria WHERE set_id=? AND type='공통' LIMIT 1",
+      "SELECT prompt FROM comments_criteria WHERE set_id=? AND type='공통' LIMIT 1",
       [criteriaSetId]
     );
     if (globalCommon) parts.push(`[전체 공통 지시사항]\n${globalCommon.prompt}\n---`);
 
     const criteria = await queryOne<{ prompt: string }>(
-      'SELECT prompt FROM setech_criteria WHERE set_id=? AND title=? LIMIT 1',
+      'SELECT prompt FROM comments_criteria WHERE set_id=? AND title=? LIMIT 1',
       [criteriaSetId, domain]
     );
     if (criteria) {
       parts.push(`[기록 작성 지시사항]\n${criteria.prompt}\n---`);
     } else {
-      const domainCriteria = await getDomainSetechCriteria(classContext, domain);
+      const domainCriteria = await getDomainCommentsCriteria(classContext, domain);
       domainCriteria.forEach((item) => {
         parts.push(`[${item.title || item.type}]\n${item.prompt}\n---`);
       });
@@ -396,14 +396,14 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
 
       const criteriaSet = criteriaSetId
         ? await queryOne<{ mode: string }>('SELECT * FROM criteria_sets WHERE id=?', [criteriaSetId])
-        : { mode: contentType === 'setech' ? '세특' : '평가' };
+        : { mode: contentType === 'comments' ? '세특' : '평가' };
       if (!criteriaSet) { error = '기준 없음'; } else {
         const parts: string[] = [];
 
         if (criteriaSet.mode === '세특') {
           if (domain === '__SUBJECT_COMPREHENSIVE__') {
             // 종합 세특: 공통기준 + 종합세특기준 + 학생별 영역별 요약
-            const comprehensiveCriteria = await getDomainSetechCriteria(classContext, '__SUBJECT_COMPREHENSIVE__');
+            const comprehensiveCriteria = await getDomainCommentsCriteria(classContext, '__SUBJECT_COMPREHENSIVE__');
             const commonCriterion = comprehensiveCriteria.find((c) => c.type === '공통');
             const comprehensiveCriterion = comprehensiveCriteria.find((c) => c.type === '종합');
 
@@ -412,7 +412,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
 
             // 영역별 요약 수집
             const domainSummaries = await queryAll<{ domain: string; content: string }>(
-              `SELECT domain, content FROM generated_content WHERE student_id=? AND content_type='setech' AND domain != '__SUBJECT_COMPREHENSIVE__' ORDER BY rowid`,
+              `SELECT domain, content FROM generated_content WHERE student_id=? AND content_type='comments' AND domain != '__SUBJECT_COMPREHENSIVE__' ORDER BY rowid`,
               [student.id]
             );
             if (domainSummaries.length) {
@@ -430,12 +430,12 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
           } else {
             // 영역 세특: 공통기준 + 성취 기준 + 채점기준/획득점수 + 산출물
             // 1) 공통기준
-            const subjectCriteria = await getDomainSetechCriteria(classContext, '__SUBJECT_COMPREHENSIVE__');
+            const subjectCriteria = await getDomainCommentsCriteria(classContext, '__SUBJECT_COMPREHENSIVE__');
             const commonCriterion = subjectCriteria.find((c) => c.type === '공통');
             if (commonCriterion?.prompt) parts.push(`[공통 기준]\n${commonCriterion.prompt}\n---`);
 
             // 2) 성취 기준
-            const domainAllCriteria = await getDomainSetechCriteria(classContext, domain);
+            const domainAllCriteria = await getDomainCommentsCriteria(classContext, domain);
             const standardRefs = domainAllCriteria.filter((c) => c.type === '성취기준');
             if (standardRefs.length) {
               const stdParts: string[] = [];

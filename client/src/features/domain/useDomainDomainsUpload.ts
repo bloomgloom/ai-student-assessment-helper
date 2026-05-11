@@ -1,5 +1,6 @@
 import { ChangeEvent, RefObject, useState } from 'react';
 import { criteriaApi } from '../../lib/api';
+import { DOMAIN_UPLOAD_TEXT } from './constants';
 
 interface UseDomainDomainsUploadOptions {
   inputRef: RefObject<HTMLInputElement>;
@@ -23,7 +24,7 @@ export function useDomainDomainsUpload({
     try {
       const res = await criteriaApi.uploadDomains(file);
       const data = res.data;
-      setMessage(`${data.year}학년도 ${data.semester}학기 ${data.grade}학년 ${data.subject}(${data.credit}): 영역 ${data.totalCount}개 업로드, 수행 반영 영역 ${data.reflectedPerformanceCount}개`);
+      setMessage(DOMAIN_UPLOAD_TEXT.successMessage(data));
       await reloadSubjects();
     } catch (err: any) {
       setError(err?.response?.data?.error || String(err));

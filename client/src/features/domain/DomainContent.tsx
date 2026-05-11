@@ -1,12 +1,12 @@
 import { Dispatch, ReactNode, SetStateAction } from 'react';
-import { AlertCircle, Award, BookOpen, ClipboardCheck, Plus, Trash2 } from 'lucide-react';
+import { AlertCircle, ClipboardCheck, Plus, Trash2 } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
-import { CriteriaItemSection } from '../../components/common/CriteriaItemSection';
-import { SectionTitle } from '../../components/common/SectionTitle';
-import { EvalItem, SetechItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
+import { DomainCriteriaPanel } from './DomainCriteriaPanel';
+import { DomainSubjectCommentsPanel } from './DomainSubjectCommentsPanel';
+import { EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
 
-type DomainTab = 'standards' | 'scoring' | 'activity' | 'ratio';
+type DomainTab = 'standards' | 'scoring' | 'records' | 'ratio' | 'comments';
 
 interface DomainContentProps {
   selectedSubject: SubjectItem | null;
@@ -52,20 +52,20 @@ interface DomainContentProps {
   evalChecked: Set<number>;
   setEvalChecked: Dispatch<SetStateAction<Set<number>>>;
   removeEvalItem: (idx: number) => void;
-  setechMetaPrompts: Record<number, string>;
-  setSetechMetaPrompts: Dispatch<SetStateAction<Record<number, string>>>;
-  handleGenerateSetechItems: () => void;
-  generatingSetech: boolean;
-  handleGenerateSetechCriteria: () => void;
-  addDomainSetechItem: () => void;
-  setechItems: SetechItem[];
-  setechChecked: Set<number>;
-  setSetechChecked: Dispatch<SetStateAction<Set<number>>>;
-  updateSetechItem: (idx: number, field: keyof SetechItem, value: string) => void;
-  removeSetechItem: (idx: number) => void;
+  commentsMetaPrompts: Record<number, string>;
+  setCommentsMetaPrompts: Dispatch<SetStateAction<Record<number, string>>>;
+  handleGenerateCommentsItems: () => void;
+  generatingComments: boolean;
+  handleGenerateCommentsCriteria: () => void;
+  addDomainCommentsItem: () => void;
+  commentsItems: CommentsItem[];
+  commentsChecked: Set<number>;
+  setCommentsChecked: Dispatch<SetStateAction<Set<number>>>;
+  updateCommentsItem: (idx: number, field: keyof CommentsItem, value: string) => void;
+  removeCommentsItem: (idx: number) => void;
   handleGenerateCommon: (type: string, metaPrompt: string) => void;
-  updateSubjectSetechMetaPrompt: (type: string, metaPrompt: string) => void;
-  updateSubjectSetech: (type: string, prompt: string) => void;
+  updateSubjectCommentsMetaPrompt: (type: string, metaPrompt: string) => void;
+  updateSubjectComments: (type: string, prompt: string) => void;
 }
 
 function EmptySelection() {
@@ -128,20 +128,20 @@ export function DomainContent({
   evalChecked,
   setEvalChecked,
   removeEvalItem,
-  setechMetaPrompts,
-  setSetechMetaPrompts,
-  handleGenerateSetechItems,
-  generatingSetech,
-  handleGenerateSetechCriteria,
-  addDomainSetechItem,
-  setechItems,
-  setechChecked,
-  setSetechChecked,
-  updateSetechItem,
-  removeSetechItem,
+  commentsMetaPrompts,
+  setCommentsMetaPrompts,
+  handleGenerateCommentsItems,
+  generatingComments,
+  handleGenerateCommentsCriteria,
+  addDomainCommentsItem,
+  commentsItems,
+  commentsChecked,
+  setCommentsChecked,
+  updateCommentsItem,
+  removeCommentsItem,
   handleGenerateCommon,
-  updateSubjectSetechMetaPrompt,
-  updateSubjectSetech,
+  updateSubjectCommentsMetaPrompt,
+  updateSubjectComments,
 }: DomainContentProps) {
   if (!selectedSubject) {
     return <EmptySelection />;
@@ -149,12 +149,9 @@ export function DomainContent({
 
   return (
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable p-6">
-      <div className="min-w-[1120px] space-y-8">
+      <div className="min-w-[760px] space-y-8">
       {!selectedDomain && activeTab === 'ratio' && (
         <Section>
-          <SectionTitle icon={<ClipboardCheck size={16} className="text-green-500" />}>
-            반영비율/만점관리
-          </SectionTitle>
           <div className="mb-4">
             <AiGenerateBox
               label="평가 영역 자동 생성"
@@ -301,88 +298,81 @@ export function DomainContent({
 
       {selectedDomain && activeTab === 'standards' && (
         <Section>
-          <SectionTitle icon={<Award size={16} className="text-amber-500" />}>
-            성취 기준 관리
-          </SectionTitle>
-          <div className="space-y-4">
-            {achievementStandards.length === 0 ? (
+          <DomainCriteriaPanel
+            prompt={achievementStandards.length === 0 ? (
               <p className="text-xs text-gray-400 text-center py-2 bg-gray-50 rounded border border-dashed border-gray-200">
                 기준 관리에 성취기준을 먼저 업로드하세요.
               </p>
             ) : (
-              <AiGenerateBox
-                label="성취 기준 항목 자동 생성"
-                placeholder="성취 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)"
-                value={standardsMetaPrompt}
-                onChange={(value) => {
+              {
+                label: '성취 기준 항목 자동 생성',
+                placeholder: "성취 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)",
+                value: standardsMetaPrompt,
+                onChange: (value) => {
                   setStandardsMetaPrompt(value);
                   setIsDirty(true);
-                }}
-                onGenerate={handleGenerateStandards}
-                generating={generatingStandards}
-              />
+                },
+                onGenerate: handleGenerateStandards,
+                generating: generatingStandards,
+              }
             )}
-            <CriteriaItemSection
-              title="성취 기준 항목"
-              addLabel="항목 추가"
-              onAdd={addStandardRef}
-              empty={standardRefs.length === 0 && achievementStandards.length > 0 && (
+            items={{
+              title: '성취 기준 항목',
+              addLabel: '항목 추가',
+              onAdd: addStandardRef,
+              empty: standardRefs.length === 0 && achievementStandards.length > 0 && (
                 <p className="text-center py-4 text-gray-400 text-sm">참조할 성취기준을 추가하거나 AI로 선택하세요.</p>
-              )}
-            >
-              {standardRefs.map((ref, idx) => {
-                const codes = uniqueCodesForDomain(ref.domain_name_ref);
-                return (
-                  <div key={idx} className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <select
-                        className="input text-xs flex-[3] min-w-0"
-                        value={ref.domain_name_ref}
-                        onChange={e => updateStandardRefDomain(idx, e.target.value)}
-                      >
-                        <option value="">영역 선택</option>
-                        {uniqueStandardDomains.map(d => <option key={d} value={d}>{d}</option>)}
-                      </select>
-                      <select
-                        className="input text-xs flex-[7] min-w-0"
-                        value={ref.code}
-                        onChange={e => updateStandardRefCode(idx, e.target.value)}
-                        disabled={!ref.domain_name_ref}
-                      >
-                        <option value="">성취기준 선택</option>
-                        {codes.map(s => {
-                          const preview = s.content.replace(s.code, '').trim().slice(0, 40);
-                          return <option key={s.code} value={s.code}>{s.code} {preview}{s.content.length > s.code.length + 40 ? '…' : ''}</option>;
-                        })}
-                      </select>
-                      <button
-                        className="p-1 hover:bg-red-100 text-red-400 rounded shrink-0"
-                        onClick={() => removeStandardRef(idx)}
-                      >
-                        <Trash2 size={13} />
-                      </button>
+              ),
+              children: standardRefs.map((ref, idx) => {
+                  const codes = uniqueCodesForDomain(ref.domain_name_ref);
+                  return (
+                    <div key={idx} className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="input text-xs flex-[3] min-w-0"
+                          value={ref.domain_name_ref}
+                          onChange={e => updateStandardRefDomain(idx, e.target.value)}
+                        >
+                          <option value="">영역 선택</option>
+                          {uniqueStandardDomains.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <select
+                          className="input text-xs flex-[7] min-w-0"
+                          value={ref.code}
+                          onChange={e => updateStandardRefCode(idx, e.target.value)}
+                          disabled={!ref.domain_name_ref}
+                        >
+                          <option value="">성취기준 선택</option>
+                          {codes.map(s => {
+                            const preview = s.content.replace(s.code, '').trim().slice(0, 40);
+                            return <option key={s.code} value={s.code}>{s.code} {preview}{s.content.length > s.code.length + 40 ? '…' : ''}</option>;
+                          })}
+                        </select>
+                        <button
+                          className="p-1 hover:bg-red-100 text-red-400 rounded shrink-0"
+                          onClick={() => removeStandardRef(idx)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                      {ref.content && (
+                        <p className="text-xs text-gray-600 leading-relaxed bg-white rounded p-2 border border-amber-100">
+                          <span className="font-mono text-blue-600 mr-1.5">{ref.code}</span>
+                          {ref.content.replace(ref.code, '').trim()}
+                        </p>
+                      )}
                     </div>
-                    {ref.content && (
-                      <p className="text-xs text-gray-600 leading-relaxed bg-white rounded p-2 border border-amber-100">
-                        <span className="font-mono text-blue-600 mr-1.5">{ref.code}</span>
-                        {ref.content.replace(ref.code, '').trim()}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </CriteriaItemSection>
-          </div>
+                  );
+                }),
+            }}
+          />
         </Section>
       )}
 
       {selectedDomain && !isCustomDomain && activeTab === 'scoring' && (
         <Section>
-          <SectionTitle icon={<ClipboardCheck size={16} className="text-green-500" />}>
-            채점 기준 관리
-          </SectionTitle>
-          <div className="space-y-4">
-            {(() => {
+          <DomainCriteriaPanel
+            top={(() => {
               const formulaIdx = evalItems.findIndex(i => i.item_type === 'formula');
               if (formulaIdx < 0) return null;
               const formulaItem = evalItems[formulaIdx];
@@ -406,31 +396,28 @@ export function DomainContent({
                 </div>
               );
             })()}
-
-            <AiGenerateBox
-              label="채점 기준 항목 자동 생성"
-              placeholder="채점 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 코드 기반 수행평가, 4단계 루브릭으로)"
-              value={evalMetaPrompts[-1] || ''}
-              onChange={(value) => {
+            prompt={{
+              label: '채점 기준 항목 자동 생성',
+              placeholder: '채점 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 코드 기반 수행평가, 4단계 루브릭으로)',
+              value: evalMetaPrompts[-1] || '',
+              onChange: (value) => {
                 setEvalMetaPrompts(p => ({ ...p, [-1]: value }));
                 setIsDirty(true);
-              }}
-              onGenerate={handleGenerateEvalItems}
-              generating={generatingEval}
-            />
-
-            <CriteriaItemSection
-              title="채점 기준 항목"
-              addLabel="항목 추가"
-              generating={generatingEval}
-              generateDisabled={evalItems.filter(i => i.item_type !== 'formula').length === 0}
-              onGenerate={handleGenerateEvalRubrics}
-              onAdd={addEvalItem}
-              empty={evalItems.filter(i => i.item_type !== 'formula').length === 0 && (
+              },
+              onGenerate: handleGenerateEvalItems,
+              generating: generatingEval,
+            }}
+            items={{
+              title: '채점 기준 항목',
+              addLabel: '항목 추가',
+              generating: generatingEval,
+              generateDisabled: evalItems.filter(i => i.item_type !== 'formula').length === 0,
+              onGenerate: handleGenerateEvalRubrics,
+              onAdd: addEvalItem,
+              empty: evalItems.filter(i => i.item_type !== 'formula').length === 0 && (
                 <p className="text-center py-6 text-gray-400 text-sm">채점 항목을 추가하거나 AI로 생성하세요.</p>
-              )}
-            >
-              {evalItems.map((item, idx) => {
+              ),
+              children: evalItems.map((item, idx) => {
                 if (item.item_type === 'formula') return null;
                 const isChecked = evalChecked.has(idx);
                 return (
@@ -460,126 +447,78 @@ export function DomainContent({
                     onRemove={() => removeEvalItem(idx)}
                   />
                 );
-              })}
-            </CriteriaItemSection>
-          </div>
+              }),
+            }}
+          />
         </Section>
       )}
 
-      {activeTab === 'activity' && (
+      {selectedDomain && activeTab === 'records' && (
         <Section>
-          <SectionTitle icon={<BookOpen size={16} className={isCustomDomain ? 'text-purple-500' : 'text-blue-500'} />}>
-            {selectedDomain ? '기록 기준 관리' : '세특 기준 관리'}
-          </SectionTitle>
+          <DomainCriteriaPanel
+            prompt={{
+              label: '기록 기준 항목 자동 생성',
+              placeholder: '기록 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 보고서와 코드를 각각 기록하는 항목으로 구성)',
+              value: commentsMetaPrompts[-1] || '',
+              onChange: (value) => {
+                setCommentsMetaPrompts(p => ({ ...p, [-1]: value }));
+                setIsDirty(true);
+              },
+              onGenerate: handleGenerateCommentsItems,
+              generating: generatingComments,
+            }}
+            items={{
+              title: '기록 기준 항목',
+              addLabel: '항목 추가',
+              generating: generatingComments,
+              generateDisabled: commentsItems.length === 0,
+              onGenerate: handleGenerateCommentsCriteria,
+              onAdd: addDomainCommentsItem,
+              empty: commentsItems.length === 0 && (
+                <p className="text-center py-6 text-gray-400 text-sm">활동 기록 항목을 추가하거나 AI로 생성하세요.</p>
+              ),
+              children: commentsItems.map((item, idx) => {
+                const isChecked = commentsChecked.has(idx);
+                return (
+                  <CriteriaItemCard
+                    key={idx}
+                    checked={isChecked}
+                    title={item.title}
+                    instruction={commentsMetaPrompts[idx] || ''}
+                    result={item.prompt}
+                    draggable
+                    titlePlaceholder="항목 이름 (예: 자료수집 및 분석)"
+                    instructionPlaceholder="기록 기준 내용 생성을 위한 지시사항을 입력하세요. (예: 학생의 탐구 과정 중심으로 작성 기준 생성)"
+                    resultPlaceholder="이 항목의 기록 작성 기준 (예: 학생이 제출한 산출물을 분석하여 성취수준을 평가하고...)"
+                    resultLabel="기록 기준 내용"
+                    onCheckedChange={(checked) => {
+                      const next = new Set(commentsChecked);
+                      if (checked) next.add(idx); else next.delete(idx);
+                      setCommentsChecked(next);
+                    }}
+                    onTitleChange={(value) => updateCommentsItem(idx, 'title', value)}
+                    onInstructionChange={(value) => {
+                      setCommentsMetaPrompts(p => ({ ...p, [idx]: value }));
+                      setIsDirty(true);
+                    }}
+                    onResultChange={(value) => updateCommentsItem(idx, 'prompt', value)}
+                    onRemove={() => removeCommentsItem(idx)}
+                  />
+                );
+              }),
+            }}
+          />
+        </Section>
+      )}
 
-          {selectedDomain ? (
-            <div className="space-y-4">
-              <AiGenerateBox
-                label="기록 기준 항목 자동 생성"
-                placeholder="기록 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 보고서와 코드를 각각 기록하는 항목으로 구성)"
-                value={setechMetaPrompts[-1] || ''}
-                onChange={(value) => {
-                  setSetechMetaPrompts(p => ({ ...p, [-1]: value }));
-                  setIsDirty(true);
-                }}
-                onGenerate={handleGenerateSetechItems}
-                generating={generatingSetech}
-              />
-
-              <CriteriaItemSection
-                title="기록 기준 항목"
-                addLabel="항목 추가"
-                generating={generatingSetech}
-                generateDisabled={setechItems.length === 0}
-                onGenerate={handleGenerateSetechCriteria}
-                onAdd={addDomainSetechItem}
-                empty={setechItems.length === 0 && (
-                  <p className="text-center py-6 text-gray-400 text-sm">활동 기록 항목을 추가하거나 AI로 생성하세요.</p>
-                )}
-              >
-                {setechItems.map((item, idx) => {
-                  const isChecked = setechChecked.has(idx);
-                  return (
-                    <CriteriaItemCard
-                      key={idx}
-                      checked={isChecked}
-                      title={item.title}
-                      instruction={setechMetaPrompts[idx] || ''}
-                      result={item.prompt}
-                      draggable
-                      titlePlaceholder="항목 이름 (예: 자료수집 및 분석)"
-                      instructionPlaceholder="기록 기준 내용 생성을 위한 지시사항을 입력하세요. (예: 학생의 탐구 과정 중심으로 작성 기준 생성)"
-                      resultPlaceholder="이 항목의 기록 작성 기준 (예: 학생이 제출한 산출물을 분석하여 성취수준을 평가하고...)"
-                      resultLabel="기록 기준 내용"
-                      onCheckedChange={(checked) => {
-                        const next = new Set(setechChecked);
-                        if (checked) next.add(idx); else next.delete(idx);
-                        setSetechChecked(next);
-                      }}
-                      onTitleChange={(value) => updateSetechItem(idx, 'title', value)}
-                      onInstructionChange={(value) => {
-                        setSetechMetaPrompts(p => ({ ...p, [idx]: value }));
-                        setIsDirty(true);
-                      }}
-                      onResultChange={(value) => updateSetechItem(idx, 'prompt', value)}
-                      onRemove={() => removeSetechItem(idx)}
-                    />
-                  );
-                })}
-              </CriteriaItemSection>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="space-y-4">
-                {['공통', '종합'].map((type) => {
-                  const item = setechItems.find(i => i.type === type);
-                  let metaPrompt = '';
-                  try { metaPrompt = JSON.parse(item?.extensions || '{}').metaPrompt || ''; } catch { /* ignore */ }
-                  const label = type === '공통' ? '세특 공통 기준' : '종합 세특 기준';
-                  const desc = type === '공통'
-                    ? '모든 영역별 세특 및 종합 세특을 작성할 때 AI에게 공통으로 지시할 프롬프트입니다.'
-                    : '최종 학기말 세특을 작성할 때 사용할 프롬프트입니다.';
-
-                  return (
-                    <div key={type} className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                      <div className="flex items-center gap-2 mb-3">
-                        <BookOpen size={14} className="text-blue-400" />
-                        <span className="font-medium text-gray-700 text-sm">{label}</span>
-                        <span className="text-xs text-gray-400 ml-1">{desc}</span>
-                      </div>
-                      <div className="grid gap-x-2 gap-y-1" style={{ gridTemplateColumns: '1fr auto 1fr' }}>
-                        <span className="text-xs text-gray-500 font-medium">지시 사항</span>
-                        <div />
-                        <span className="text-xs text-gray-500 font-medium">생성된 기준</span>
-                        <textarea
-                          className="textarea w-full text-sm leading-relaxed resize-y"
-                          style={{ minHeight: '100px' }}
-                          placeholder={`${label} 위한 지시사항을 입력하세요.`}
-                          value={metaPrompt}
-                          onChange={(e) => updateSubjectSetechMetaPrompt(type, e.target.value)}
-                        />
-                        <button
-                          className="btn-rainbow px-3 text-xs flex items-center justify-center gap-1 whitespace-nowrap"
-                          style={{ alignSelf: 'stretch' }}
-                          onClick={() => handleGenerateCommon(type, metaPrompt)}
-                          title={`AI로 ${label} 생성`}
-                        >
-                          ✨ 생성
-                        </button>
-                        <textarea
-                          className="textarea w-full text-sm leading-relaxed resize-y"
-                          style={{ minHeight: '100px' }}
-                          placeholder="생성된 기준이 여기에 표시됩니다. 직접 수정도 가능합니다."
-                          value={item?.prompt || ''}
-                          onChange={(e) => updateSubjectSetech(type, e.target.value)}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+      {!selectedDomain && activeTab === 'comments' && (
+        <Section>
+          <DomainSubjectCommentsPanel
+            items={commentsItems}
+            onMetaPromptChange={updateSubjectCommentsMetaPrompt}
+            onPromptChange={updateSubjectComments}
+            onGenerate={handleGenerateCommon}
+          />
         </Section>
       )}
       </div>

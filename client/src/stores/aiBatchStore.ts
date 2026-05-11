@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type BatchContentType = 'scoring' | 'setech';
+export type BatchContentType = 'scoring' | 'comments';
 export type BatchStatus = 'running' | 'stopping' | 'completed' | 'error' | 'stopped';
 
 export interface GeneratedContentUpdate {

@@ -6,7 +6,11 @@ import {
   createAcademicParentPathDrafts,
 } from '../../components/common/academicTree';
 import { AcademicTreeControllerHelpers, useAcademicTreeController } from '../../hooks/useAcademicTreeController';
-import { DOMAIN_SELECTION_KEY, DOMAIN_SOURCE_TYPE } from './constants';
+import {
+  DOMAIN_SOURCE_TYPE,
+  DOMAIN_TREE_KEY_PREFIXES,
+  DOMAIN_TREE_TEXT,
+} from './constants';
 import { SubjectItem } from './types';
 
 type DomainTreeNode = AcademicTreeNode<SubjectItem>;
@@ -23,7 +27,7 @@ interface UseDomainTreeOptions {
 
 function buildDomainTree(subjects: SubjectItem[]): DomainTreeNode[] {
   return buildAcademicTree(subjects, {
-    keyPrefixes: { year: 'dy', semester: 'ds', grade: 'dg', subject: 'dsub', domain: 'ddom' },
+    keyPrefixes: DOMAIN_TREE_KEY_PREFIXES,
     getDomainEntries: ([sub]) => [
       ...sub.fixedDomains.map(domain => ({ name: domain.name, subject: sub, isCustom: false })),
       ...sub.customDomains.map(domain => ({ name: domain.name, subject: sub, isCustom: true })),
@@ -39,7 +43,7 @@ function preserveParentPath(
   sub: Pick<SubjectItem, 'year' | 'semester' | 'grade'>,
   helpers: AcademicTreeControllerHelpers<SubjectItem>,
 ) {
-  const parents = createAcademicParentPathDrafts<SubjectItem>({ year: 'dy', semester: 'ds', grade: 'dg' }, sub);
+  const parents = createAcademicParentPathDrafts<SubjectItem>(DOMAIN_TREE_KEY_PREFIXES, sub);
   helpers.setDraftNodes(prev => {
     const keys = new Set(prev.map(node => node.key));
     return [...prev, ...parents.filter(node => !keys.has(node.key))];
@@ -94,7 +98,7 @@ export function useDomainTree({
       else if (item.kind === 'subject') onSelectSubject(item.subject);
     },
     deleteSubject: async (subject, _node, helpers) => {
-      if (!confirm(`${subject.subject} 영역 관리 파일과 데이터를 삭제하시겠습니까?`)) return;
+      if (!confirm(DOMAIN_TREE_TEXT.deleteSubjectConfirm(subject.subject))) return;
       await criteriaApi.deleteSource(DOMAIN_SOURCE_TYPE, subject.year, subject.semester, subject.grade, subject.subject);
       preserveParentPath(subject, helpers);
       if (isSameSubject(selectedSubject, subject)) {
@@ -104,7 +108,7 @@ export function useDomainTree({
     },
     deleteScope: async (node, helpers) => {
       if (!node.year) return;
-      if (!confirm(`${node.label} 아래 평가 영역 데이터를 모두 삭제하시겠습니까?`)) return;
+      if (!confirm(DOMAIN_TREE_TEXT.deleteScopeConfirm(node.label))) return;
       await criteriaApi.deleteDomainsScope({
         year: node.year,
         semester: node.semester,
@@ -120,7 +124,7 @@ export function useDomainTree({
     },
     createAnchor: (scope) => criteriaApi.createDomainsAnchor(scope.year, scope.semester, scope.grade, scope.subject),
     createDomain: (node, name) => {
-      if (!node.subject) throw new Error('상위 과목 정보가 없습니다.');
+      if (!node.subject) throw new Error(DOMAIN_TREE_TEXT.missingParentSubject);
       return criteriaApi.addCustomDomain({
         year: node.subject.year,
         semester: node.subject.semester,

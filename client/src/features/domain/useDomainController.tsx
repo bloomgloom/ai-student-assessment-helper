@@ -4,7 +4,7 @@ import { useAiAction } from '../../hooks/useAiAction';
 import {
   AiPromptRow,
   EvalItem,
-  SetechItem,
+  CommentsItem,
   StandardRef,
   SubjectDomainRow,
   SubjectItem,
@@ -12,6 +12,7 @@ import {
 import {
   DOMAIN_GUIDE_KEY,
   DOMAIN_SELECTION_KEY,
+  getSubjectCommentsTemplate,
   SUBJECT_COMPREHENSIVE_DOMAIN,
 } from './constants';
 import { useDomainDomainsUpload } from './useDomainDomainsUpload';
@@ -46,7 +47,7 @@ export function useDomainController() {
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const [isCustomDomain, setIsCustomDomain] = useState<boolean>(false);
 
-  const [setechItems, setSetechItems] = useState<SetechItem[]>([]);
+  const [commentsItems, setCommentsItems] = useState<CommentsItem[]>([]);
   const [evalItems, setEvalItems] = useState<EvalItem[]>([]);
 
   const [allSubjectDomains, setAllSubjectDomains] = useState<SubjectDomainRow[]>([]);
@@ -59,17 +60,17 @@ export function useDomainController() {
   const configFileRef = useRef<HTMLInputElement>(null);
 
   const [evalMetaPrompts, setEvalMetaPrompts] = useState<Record<number, string>>({});
-  const [setechMetaPrompts, setSetechMetaPrompts] = useState<Record<number, string>>({});
+  const [commentsMetaPrompts, setCommentsMetaPrompts] = useState<Record<number, string>>({});
   const [evalChecked, setEvalChecked] = useState<Set<number>>(new Set());
-  const [setechChecked, setSetechChecked] = useState<Set<number>>(new Set());
+  const [commentsChecked, setCommentsChecked] = useState<Set<number>>(new Set());
   const [standardsMetaPrompt, setStandardsMetaPrompt] = useState<string>('');
   const [subjectDomainsMetaPrompt, setSubjectDomainsMetaPrompt] = useState<string>('');
   const [subjectCommonPrompt, setSubjectCommonPrompt] = useState<string>('');
   const [generatingStandards, setGeneratingStandards] = useState(false);
   const [generatingSubjectDomains, setGeneratingSubjectDomains] = useState(false);
   const [generatingEval, setGeneratingEval] = useState(false);
-  const [generatingSetech, setGeneratingSetech] = useState(false);
-  const [activeTab, setActiveTab] = useState<'standards' | 'scoring' | 'activity' | 'ratio'>('standards');
+  const [generatingComments, setGeneratingComments] = useState(false);
+  const [activeTab, setActiveTab] = useState<'standards' | 'scoring' | 'records' | 'ratio' | 'comments'>('standards');
   const [isDirty, setIsDirty] = useState(false);
   const runAiAction = useAiAction();
   const domainRestoredRef = useRef(false);
@@ -94,15 +95,15 @@ export function useDomainController() {
 
   const loadCriteria = useCallback(async (sub: SubjectItem, domainName: string, isCustom: boolean) => {
     setIsDirty(false);
-    const sr = await criteriaApi.getSetech(sub.year, sub.semester, sub.grade, sub.subject, domainName);
-    const allItems = sr.data as SetechItem[];
+    const sr = await criteriaApi.getComments(sub.year, sub.semester, sub.grade, sub.subject, domainName);
+    const allItems = sr.data as CommentsItem[];
 
     // '성취기준' 타입은 standardRefs로 분리, '활동공통' 타입은 공통 기준으로 분리
     const refs: StandardRef[] = allItems
       .filter(i => i.type === '성취기준')
       .map(i => { try { return JSON.parse(i.extensions || '{}'); } catch { return { domain_name_ref: '', code: '', content: '' }; } });
     setStandardRefs(refs);
-    setSetechItems(allItems.filter(i => i.type !== '성취기준' && i.type !== '활동공통'));
+    setCommentsItems(allItems.filter(i => i.type !== '성취기준' && i.type !== '활동공통'));
 
     // 성취기준 관리 데이터 로드 (과목/영역 자동 생성 모두 성취기준을 참조)
     try {
@@ -121,8 +122,8 @@ export function useDomainController() {
 
       // 과목 공통 세특 기준 로드 (AI 생성 context용)
       try {
-        const subjRes = await criteriaApi.getSetech(sub.year, sub.semester, sub.grade, sub.subject, SUBJECT_COMPREHENSIVE_DOMAIN);
-        const commonItem = (subjRes.data as SetechItem[]).find(i => i.type === '공통');
+        const subjRes = await criteriaApi.getComments(sub.year, sub.semester, sub.grade, sub.subject, SUBJECT_COMPREHENSIVE_DOMAIN);
+        const commonItem = (subjRes.data as CommentsItem[]).find(i => i.type === '공통');
         setSubjectCommonPrompt(commonItem?.prompt || '');
       } catch { setSubjectCommonPrompt(''); }
     } else {
@@ -140,16 +141,16 @@ export function useDomainController() {
           .filter(([key]) => key === 'eval_items' || key.startsWith('eval_item:'))
           .map(([key, value]) => [key === 'eval_items' ? -1 : Number(key.slice('eval_item:'.length)), value])
       ));
-      setSetechMetaPrompts(Object.fromEntries(
+      setCommentsMetaPrompts(Object.fromEntries(
         Object.entries(savedPrompts)
-          .filter(([key]) => key === 'setech_items' || key.startsWith('setech_item:'))
-          .map(([key, value]) => [key === 'setech_items' ? -1 : Number(key.slice('setech_item:'.length)), value])
+          .filter(([key]) => key === 'comments_items' || key.startsWith('comments_item:'))
+          .map(([key, value]) => [key === 'comments_items' ? -1 : Number(key.slice('comments_item:'.length)), value])
       ));
     } catch {
       setSubjectDomainsMetaPrompt('');
       setStandardsMetaPrompt('');
       setEvalMetaPrompts({});
-      setSetechMetaPrompts({});
+      setCommentsMetaPrompts({});
     }
   }, []);
 
@@ -160,7 +161,7 @@ export function useDomainController() {
     setIsCustomDomain(isCustom);
     setAllSubjectDomains([]);
     setEvalChecked(new Set());
-    setSetechChecked(new Set());
+    setCommentsChecked(new Set());
     setActiveTab('standards');
     loadCriteria(sub, domain, isCustom);
     localStorage.setItem(DOMAIN_SELECTION_KEY, JSON.stringify(domainSelectionPayload(sub, domain)));
@@ -171,7 +172,7 @@ export function useDomainController() {
     setSelectedSubject(sub);
     setSelectedDomain(null);
     setIsCustomDomain(true);
-    setSetechChecked(new Set());
+    setCommentsChecked(new Set());
     setActiveTab('ratio');
     loadCriteria(sub, SUBJECT_COMPREHENSIVE_DOMAIN, true);
     const dr = await criteriaApi.getSubjectDomains(sub.year, sub.semester, sub.grade, sub.subject);
@@ -236,7 +237,7 @@ export function useDomainController() {
       }
 
       // standardRefs를 '성취기준' 타입 아이템으로 변환 후 앞에 붙임
-      const refItems: SetechItem[] = standardRefs.map((r, i) => ({
+      const refItems: CommentsItem[] = standardRefs.map((r, i) => ({
         type: '성취기준',
         title: r.code,
         prompt: '',
@@ -245,9 +246,9 @@ export function useDomainController() {
       }));
       const sItems = [
         ...refItems,
-        ...setechItems.map((item, i) => ({ ...item, sort_order: refItems.length + i })),
+        ...commentsItems.map((item, i) => ({ ...item, sort_order: refItems.length + i })),
       ];
-      await criteriaApi.bulkSaveSetech(selectedSubject.year, selectedSubject.semester, selectedSubject.grade, selectedSubject.subject, domainToSave, sItems);
+      await criteriaApi.bulkSaveComments(selectedSubject.year, selectedSubject.semester, selectedSubject.grade, selectedSubject.subject, domainToSave, sItems);
 
       const aiPromptRows = compactPromptRows([
         ...(!selectedDomain ? [{ prompt_key: 'subject_domains', prompt: subjectDomainsMetaPrompt }] : []),
@@ -256,8 +257,8 @@ export function useDomainController() {
           prompt_key: Number(key) === -1 ? 'eval_items' : `eval_item:${key}`,
           prompt,
         })) : []),
-        ...(selectedDomain ? Object.entries(setechMetaPrompts).map(([key, prompt]) => ({
-          prompt_key: Number(key) === -1 ? 'setech_items' : `setech_item:${key}`,
+        ...(selectedDomain ? Object.entries(commentsMetaPrompts).map(([key, prompt]) => ({
+          prompt_key: Number(key) === -1 ? 'comments_items' : `comments_item:${key}`,
           prompt,
         })) : []),
       ]);
@@ -295,7 +296,7 @@ export function useDomainController() {
     setSelectedDomain(null);
     setAllSubjectDomains([]);
     setStandardRefs([]);
-    setSetechItems([]);
+    setCommentsItems([]);
     setEvalItems([]);
     setAchievementStandards([]);
     localStorage.removeItem(DOMAIN_SELECTION_KEY);
@@ -351,7 +352,7 @@ export function useDomainController() {
         file
       );
       await loadCriteria(selectedSubject, domainName, isCustomDomain || !selectedDomain);
-      alert(`업로드 완료: 성취 기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 기록 기준 ${r.data.setech}개, AI 요청 ${r.data.prompts ?? 0}개`);
+      alert(`업로드 완료: 성취 기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 기록 기준 ${r.data.comments}개, AI 요청 ${r.data.prompts ?? 0}개`);
     } catch (err: any) {
       alert(`기준 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
     } finally {
@@ -411,17 +412,17 @@ export function useDomainController() {
     setIsDirty(true);
   };
 
-  const updateSetechItem = (idx: number, field: keyof SetechItem, value: string) => {
-    setSetechItems(p => p.map((item, i) => i === idx ? { ...item, [field]: value } : item));
+  const updateCommentsItem = (idx: number, field: keyof CommentsItem, value: string) => {
+    setCommentsItems(p => p.map((item, i) => i === idx ? { ...item, [field]: value } : item));
     setIsDirty(true);
   };
-  const removeSetechItem = (idx: number) => {
-    setSetechItems(p => p.filter((_, i) => i !== idx));
+  const removeCommentsItem = (idx: number) => {
+    setCommentsItems(p => p.filter((_, i) => i !== idx));
     setIsDirty(true);
   };
 
-  const addDomainSetechItem = () => {
-    setSetechItems(p => [...p, { type: '항목', title: '', prompt: '', extensions: '', sort_order: p.length }]);
+  const addDomainCommentsItem = () => {
+    setCommentsItems(p => [...p, { type: '항목', title: '', prompt: '', extensions: '', sort_order: p.length }]);
     setIsDirty(true);
   };
 
@@ -540,17 +541,19 @@ export function useDomainController() {
     const seen = new Set<string>();
     return achievementStandards.filter(s => s.domain_name === domain && !seen.has(s.code) && seen.add(s.code));
   };
-  const updateSubjectSetech = (type: string, prompt: string) => {
-    setSetechItems(prev => {
+  const updateSubjectComments = (type: string, prompt: string) => {
+    const template = getSubjectCommentsTemplate(type);
+    setCommentsItems(prev => {
       if (prev.find(i => i.type === type)) {
         return prev.map(i => i.type === type ? { ...i, prompt } : i);
       }
-      return [...prev, { type, title: type === '공통' ? '세특 공통 기준' : '종합 세특 기준', prompt, extensions: '', sort_order: type === '공통' ? 0 : 1 }];
+      return [...prev, { type, title: template.label, prompt, extensions: '', sort_order: template.sortOrder }];
     });
     setIsDirty(true);
   };
-  const updateSubjectSetechMetaPrompt = (type: string, metaPrompt: string) => {
-    setSetechItems(prev => {
+  const updateSubjectCommentsMetaPrompt = (type: string, metaPrompt: string) => {
+    const template = getSubjectCommentsTemplate(type);
+    setCommentsItems(prev => {
       if (prev.find(i => i.type === type)) {
         return prev.map(i => {
           if (i.type !== type) return i;
@@ -561,10 +564,10 @@ export function useDomainController() {
       }
       return [...prev, {
         type,
-        title: type === '공통' ? '세특 공통 기준' : '종합 세특 기준',
+        title: template.label,
         prompt: '',
         extensions: JSON.stringify({ metaPrompt }),
-        sort_order: type === '공통' ? 0 : 1,
+        sort_order: template.sortOrder,
       }];
     });
     setIsDirty(true);
@@ -619,7 +622,7 @@ export function useDomainController() {
   };
 
   const handleGenerateCommon = async (type: string, metaPrompt: string) => {
-    const label = type === '공통' ? '세특 공통 기준' : '종합 세특 기준';
+    const { label } = getSubjectCommentsTemplate(type);
     await runAiAction({
       title: `${label} 생성 중`,
       errorMessage: '기준 생성에 실패했습니다.',
@@ -628,7 +631,7 @@ export function useDomainController() {
       const base = `과목: ${selectedSubject?.subject}\n기준 유형: ${label}`;
       const extra = metaPrompt.trim() ? `\n추가 요청: ${metaPrompt.trim()}` : '';
       const res = await aiApi.generatePrompt({ prompt: base + extra, systemPrompt }, signal);
-      updateSubjectSetech(type, res.data.result.trim());
+      updateSubjectComments(type, res.data.result.trim());
     });
   };
 
@@ -717,21 +720,21 @@ export function useDomainController() {
   };
 
   // 활동 기록 항목 목록 AI 생성 (상단 버튼)
-  const handleGenerateSetechItems = async () => {
+  const handleGenerateCommentsItems = async () => {
     const stdCtx = buildStandardsContext();
     const actCtx = buildActivityContext();
     const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
     const stdPart = stdCtx ? `\n\n성취 기준:\n${stdCtx}` : '';
     const actPart = actCtx ? `\n\n${actCtx}` : '';
-    const extra = setechMetaPrompts[-1]?.trim() ? `\n\n추가 요청: ${setechMetaPrompts[-1]}` : '';
+    const extra = commentsMetaPrompts[-1]?.trim() ? `\n\n추가 요청: ${commentsMetaPrompts[-1]}` : '';
     await runAiJsonArrayGeneration<any>({
       title: '기록 기준 항목 생성 중',
       errorMessage: '생성 실패',
-      setLoading: setGeneratingSetech,
+      setLoading: setGeneratingComments,
       systemPrompt: `당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준을 참고하여 활동 기록 항목 목록(제목, 기록 작성 지시사항)을 JSON 배열로 생성하세요. 반드시 아래 형식만 반환하세요: [{"title":"항목명","prompt":"기록 작성 지시사항"}]`,
       prompt: `${base}${stdPart}${actPart}${extra}`,
       onGenerated: (newItems) => {
-      setSetechItems(newItems.map((item: any, j: number) => ({
+      setCommentsItems(newItems.map((item: any, j: number) => ({
         title: item.title || '',
         prompt: item.prompt || '',
         type: '항목',
@@ -743,17 +746,17 @@ export function useDomainController() {
   };
 
   // 활동 기록 항목 기준 AI 생성 (소제목 옆 버튼 - 선택/전체 항목)
-  const handleGenerateSetechCriteria = async () => {
-    const targets = setechChecked.size > 0
-      ? setechItems.map((_, i) => i).filter(i => setechChecked.has(i))
-      : setechItems.map((_, i) => i);
+  const handleGenerateCommentsCriteria = async () => {
+    const targets = commentsChecked.size > 0
+      ? commentsItems.map((_, i) => i).filter(i => commentsChecked.has(i))
+      : commentsItems.map((_, i) => i);
     if (targets.length === 0) return;
-    const targetLabel = setechChecked.size > 0 ? `선택한 ${setechChecked.size}개` : `전체 ${targets.length}개`;
+    const targetLabel = commentsChecked.size > 0 ? `선택한 ${commentsChecked.size}개` : `전체 ${targets.length}개`;
     if (!confirm(`${targetLabel} 기록 작성 기준을 AI로 생성하시겠습니까?`)) return;
     await runAiAction({
       title: '기록 작성 기준 생성 중',
       errorMessage: '생성 실패',
-      setLoading: setGeneratingSetech,
+      setLoading: setGeneratingComments,
       initialProgress: { progress: 0, message: `0/${targets.length} 완료` },
     }, async ({ signal, setProgress }) => {
       const stdCtx = buildStandardsContext();
@@ -765,11 +768,11 @@ export function useDomainController() {
       for (let i = 0; i < targets.length; i++) {
         if (signal.aborted) break;
         const idx = targets[i];
-        const item = setechItems[idx];
-        const extra = setechMetaPrompts[idx]?.trim() ? `\n\n추가 요청: ${setechMetaPrompts[idx]}` : '';
+        const item = commentsItems[idx];
+        const extra = commentsMetaPrompts[idx]?.trim() ? `\n\n추가 요청: ${commentsMetaPrompts[idx]}` : '';
         const prompt = `${base}\n항목명: ${item.title || '(미입력)'}${stdPart}${actPart}${extra}`;
         const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
-        updateSetechItem(idx, 'prompt', res.data.result.trim());
+        updateCommentsItem(idx, 'prompt', res.data.result.trim());
         setProgress(((i + 1) / targets.length) * 100, `${i + 1}/${targets.length} 완료`);
       }
     });
@@ -852,19 +855,19 @@ export function useDomainController() {
     evalChecked,
     setEvalChecked,
     removeEvalItem,
-    setechMetaPrompts,
-    setSetechMetaPrompts,
-    handleGenerateSetechItems,
-    generatingSetech,
-    handleGenerateSetechCriteria,
-    addDomainSetechItem,
-    setechItems,
-    setechChecked,
-    setSetechChecked,
-    updateSetechItem,
-    removeSetechItem,
+    commentsMetaPrompts,
+    setCommentsMetaPrompts,
+    handleGenerateCommentsItems,
+    generatingComments,
+    handleGenerateCommentsCriteria,
+    addDomainCommentsItem,
+    commentsItems,
+    commentsChecked,
+    setCommentsChecked,
+    updateCommentsItem,
+    removeCommentsItem,
     handleGenerateCommon,
-    updateSubjectSetechMetaPrompt,
-    updateSubjectSetech,
+    updateSubjectCommentsMetaPrompt,
+    updateSubjectComments,
   };
 }

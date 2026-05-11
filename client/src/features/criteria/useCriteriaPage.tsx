@@ -1,4 +1,5 @@
 import { BookOpen } from 'lucide-react';
+import { CRITERIA_PAGE_TEXT } from './constants';
 import { useCriteriaController } from './useCriteriaController';
 
 export function useCriteriaPage() {
@@ -6,9 +7,9 @@ export function useCriteriaPage() {
 
   return {
     sidebar: {
-      title: '성취 기준 관리',
+      title: CRITERIA_PAGE_TEXT.sidebarTitle,
       upload: {
-        label: '성취 기준 파일 업로드',
+        label: CRITERIA_PAGE_TEXT.uploadLabel,
         loading: standardsUpload.uploading,
         input: (
           <input
@@ -25,11 +26,8 @@ export function useCriteriaPage() {
         {
           type: 'guide' as const,
           visible: guide.visible,
-          title: '업로드 안내',
-          lines: [
-            '나이스 > 교과담임 > 성적 > 지필/수행선행작업 > 성취기준관리에서',
-            '성취기준 및 성취수준(평가기준)을 조회 및 출력 후 파일 저장 버튼을 눌러 엑셀(XLS)를 선택하세요.',
-          ],
+          title: CRITERIA_PAGE_TEXT.guideTitle,
+          lines: [...CRITERIA_PAGE_TEXT.guideLines],
           onDismiss: guide.dismiss,
         },
         { type: 'message' as const, visible: !!standardsUpload.message, tone: 'success' as const, text: standardsUpload.message },
@@ -39,7 +37,7 @@ export function useCriteriaPage() {
         nodes: criteria.tree.nodes,
         empty: {
           icon: <BookOpen size={32} />,
-          message: '성취 기준 파일을 업로드하세요',
+          message: CRITERIA_PAGE_TEXT.emptyTreeMessage,
           addYear: true,
           onAddYear: () => criteria.tree.addNode(),
         },
