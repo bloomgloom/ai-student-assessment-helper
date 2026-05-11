@@ -181,12 +181,6 @@ export const classesApi = {
   getOne: (id: number) => api.get(`/classes/${id}`),
   getStudents: (id: number) => api.get(`/classes/${id}/students`),
   getDomains: (id: number) => api.get(`/classes/${id}/domains`),
-  upload: (file: File, setechFile?: File | null) => {
-    const form = new FormData();
-    form.append('scoringFile', file);
-    if (setechFile) form.append('setechFile', setechFile);
-    return api.post('/classes/upload', form);
-  },
   uploadScoring: (file: File) => {
     const form = new FormData();
     form.append('file', file);

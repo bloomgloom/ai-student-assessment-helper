@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { criteriaApi, aiApi } from '../lib/api';
 import { useAiAction } from '../hooks/useAiAction';
 import {
@@ -6,16 +6,19 @@ import {
   BookOpen, ClipboardCheck, School, Upload, Loader2, AlertCircle,
   Award, Download, X
 } from 'lucide-react';
+import {
+  AcademicTreeNode,
+  buildAcademicTree,
+  createAcademicParentPathDrafts,
+} from '../components/common/academicTree';
 import { AiGenerateBox } from '../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../components/common/CriteriaItemCard';
 import { CriteriaItemSection } from '../components/common/CriteriaItemSection';
-import { PageHeader } from '../components/common/PageHeader';
-import { PageSidebar } from '../components/common/PageSidebar';
+import { PageLayout } from '../components/common/PageLayout';
 import { PageTabs, PageTab } from '../components/common/PageTabs';
 import { SectionTitle } from '../components/common/SectionTitle';
 import { SetechCriteriaPanels } from '../components/common/SetechCriteriaPanels';
-import { TreeView } from '../components/common/TreeView';
-import { TreeIconButton, TreeNodeView } from '../components/common/TreeNodeView';
+import { AcademicTreeControllerHelpers, useAcademicTreeController } from '../hooks/useAcademicTreeController';
 
 interface SubjectItem {
   year: number;
@@ -74,49 +77,7 @@ interface AiPromptRow {
 }
 
 
-interface TreeNode {
-  key: string;
-  label: string;
-  kind: 'year' | 'semester' | 'grade' | 'subject' | 'domain';
-  year?: number;
-  semester?: number;
-  grade?: number;
-  subjectName?: string;
-  children?: TreeNode[];
-  subject?: SubjectItem;
-  domainName?: string;
-  isCustom?: boolean;
-  isDraft?: boolean;
-  parentKey?: string | null;
-}
-
-type EditingTreeItem = { key: string; mode: 'add'; value: string };
-
-function nodeKey(parts: Array<string | number | undefined>) {
-  return parts.filter(v => v !== undefined && v !== '').join('|');
-}
-
-function nextChildKind(kind?: TreeNode['kind']): TreeNode['kind'] {
-  if (!kind) return 'year';
-  if (kind === 'year') return 'semester';
-  if (kind === 'semester') return 'grade';
-  if (kind === 'grade') return 'subject';
-  return 'domain';
-}
-
-function mergeDraftNodes(nodes: TreeNode[], drafts: TreeNode[], parentKey: string | null = null): TreeNode[] {
-  const existingKeys = new Set(nodes.map(node => node.key));
-  const directDrafts = drafts
-    .filter(node => node.parentKey === parentKey && !existingKeys.has(node.key))
-    .map(node => ({ ...node, children: mergeDraftNodes([], drafts, node.key) }));
-  return [
-    ...nodes.map(node => ({
-      ...node,
-      children: mergeDraftNodes(node.children || [], drafts, node.key),
-    })),
-    ...directDrafts,
-  ];
-}
+type TreeNode = AcademicTreeNode<SubjectItem>;
 
 function domainSelectionPayload(sub: SubjectItem, domain: string | null) {
   return {
@@ -141,84 +102,18 @@ function parseAiJson<T>(value: string): T {
 }
 
 function buildTree(subjects: SubjectItem[]): TreeNode[] {
-  const yearMap = new Map<number, Map<number, Map<number, SubjectItem[]>>>();
-
-  for (const sub of subjects) {
-    if (!yearMap.has(sub.year)) yearMap.set(sub.year, new Map());
-    const semMap = yearMap.get(sub.year)!;
-    if (!semMap.has(sub.semester)) semMap.set(sub.semester, new Map());
-    const gradeMap = semMap.get(sub.semester)!;
-    if (!gradeMap.has(sub.grade)) gradeMap.set(sub.grade, []);
-    gradeMap.get(sub.grade)!.push(sub);
-  }
-
-  const result: TreeNode[] = [];
-  for (const [year, semMap] of [...yearMap.entries()].sort((a, b) => a[0] - b[0])) {
-    const yearNode: TreeNode = { key: nodeKey(['dy', year]), label: `${year}학년도`, kind: 'year', year, children: [] };
-    for (const [semester, gradeMap] of [...semMap.entries()].sort((a, b) => a[0] - b[0])) {
-      if (semester === 0) continue;
-      const semNode: TreeNode = { key: nodeKey(['ds', year, semester]), label: `${semester}학기`, kind: 'semester', year, semester, children: [] };
-      for (const [grade, subjects] of [...gradeMap.entries()].sort((a, b) => a[0] - b[0])) {
-        if (grade === 0) continue;
-        const gradeNode: TreeNode = { key: nodeKey(['dg', year, semester, grade]), label: `${grade}학년`, kind: 'grade', year, semester, grade, children: [] };
-        for (const sub of subjects.sort((a, b) => a.subject.localeCompare(b.subject))) {
-          if (!sub.subject) continue;
-          const subjectNode: TreeNode = {
-            key: nodeKey(['dsub', sub.year, sub.semester, sub.grade, sub.subject]),
-            label: sub.subject,
-            kind: 'subject',
-            year: sub.year,
-            semester: sub.semester,
-            grade: sub.grade,
-            subjectName: sub.subject,
-            children: [],
-            subject: sub,
-          };
-
-          for (const fd of sub.fixedDomains) {
-            subjectNode.children!.push({
-              key: nodeKey(['ddom', sub.year, sub.semester, sub.grade, sub.subject, fd.name]),
-              label: fd.name,
-              kind: 'domain',
-              year: sub.year,
-              semester: sub.semester,
-              grade: sub.grade,
-              subjectName: sub.subject,
-              subject: sub,
-              domainName: fd.name,
-              isCustom: false,
-            });
-          }
-          for (const cd of sub.customDomains) {
-            subjectNode.children!.push({
-              key: nodeKey(['ddom', sub.year, sub.semester, sub.grade, sub.subject, cd.name]),
-              label: cd.name,
-              kind: 'domain',
-              year: sub.year,
-              semester: sub.semester,
-              grade: sub.grade,
-              subjectName: sub.subject,
-              subject: sub,
-              domainName: cd.name,
-              isCustom: true,
-            });
-          }
-          gradeNode.children!.push(subjectNode);
-        }
-        semNode.children!.push(gradeNode);
-      }
-      yearNode.children!.push(semNode);
-    }
-    result.push(yearNode);
-  }
-  return result;
+  return buildAcademicTree(subjects, {
+    keyPrefixes: { year: 'dy', semester: 'ds', grade: 'dg', subject: 'dsub', domain: 'ddom' },
+    getDomainEntries: ([sub]) => [
+      ...sub.fixedDomains.map(domain => ({ name: domain.name, subject: sub, isCustom: false })),
+      ...sub.customDomains.map(domain => ({ name: domain.name, subject: sub, isCustom: true })),
+    ],
+  });
 }
 
 export default function DomainPage() {
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [tree, setTree] = useState<TreeNode[]>([]);
-  const [draftNodes, setDraftNodes] = useState<TreeNode[]>([]);
-  const [editing, setEditing] = useState<EditingTreeItem | null>(null);
 
   const [selectedSubject, setSelectedSubject] = useState<SubjectItem | null>(null);
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
@@ -272,8 +167,6 @@ export default function DomainPage() {
   useEffect(() => {
     setTree(buildTree(subjects));
   }, [subjects]);
-
-  const visibleTree = useMemo(() => mergeDraftNodes(tree, draftNodes), [tree, draftNodes]);
 
   const loadCriteria = useCallback(async (sub: SubjectItem, domainName: string, isCustom: boolean) => {
     setIsDirty(false);
@@ -492,10 +385,6 @@ export default function DomainPage() {
     setShowGuide(false);
   };
 
-  const handleDownloadSubjectFile = (sub: SubjectItem) => {
-    window.location.href = criteriaApi.sourceUrl('domains', sub.year, sub.semester, sub.grade, sub.subject);
-  };
-
   const isSameSubject = (a: SubjectItem | null, b: Pick<SubjectItem, 'year' | 'semester' | 'grade' | 'subject'>) =>
     !!a && a.year === b.year && a.semester === b.semester && a.grade === b.grade && a.subject === b.subject;
 
@@ -518,180 +407,15 @@ export default function DomainPage() {
     localStorage.removeItem('domainPage_lastSelection');
   };
 
-  const removeDraftSubtree = (nodes: TreeNode[], rootKey: string) => {
-    const childrenByParent = new Map<string | null | undefined, TreeNode[]>();
-    for (const draft of nodes) {
-      const children = childrenByParent.get(draft.parentKey) || [];
-      children.push(draft);
-      childrenByParent.set(draft.parentKey, children);
-    }
-    const keysToRemove = new Set<string>();
-    const visit = (key: string) => {
-      keysToRemove.add(key);
-      for (const child of childrenByParent.get(key) || []) visit(child.key);
-    };
-    visit(rootKey);
-    return nodes.filter(item => !keysToRemove.has(item.key));
-  };
-
-  const preserveParentPath = (sub: Pick<SubjectItem, 'year' | 'semester' | 'grade'>) => {
-    const yearNode: TreeNode = {
-      key: nodeKey(['dy', sub.year]),
-      label: `${sub.year}학년도`,
-      kind: 'year',
-      year: sub.year,
-      children: [],
-      isDraft: true,
-      parentKey: null,
-    };
-    const semesterNode: TreeNode = {
-      key: nodeKey(['ds', sub.year, sub.semester]),
-      label: `${sub.semester}학기`,
-      kind: 'semester',
-      year: sub.year,
-      semester: sub.semester,
-      children: [],
-      isDraft: true,
-      parentKey: yearNode.key,
-    };
-    const gradeNode: TreeNode = {
-      key: nodeKey(['dg', sub.year, sub.semester, sub.grade]),
-      label: `${sub.grade}학년`,
-      kind: 'grade',
-      year: sub.year,
-      semester: sub.semester,
-      grade: sub.grade,
-      children: [],
-      isDraft: true,
-      parentKey: semesterNode.key,
-    };
-    const parents = [yearNode, semesterNode, gradeNode];
-    setDraftNodes(prev => {
+  const preserveParentPath = (
+    sub: Pick<SubjectItem, 'year' | 'semester' | 'grade'>,
+    helpers: AcademicTreeControllerHelpers<SubjectItem>,
+  ) => {
+    const parents = createAcademicParentPathDrafts<SubjectItem>({ year: 'dy', semester: 'ds', grade: 'dg' }, sub);
+    helpers.setDraftNodes(prev => {
       const keys = new Set(prev.map(node => node.key));
       return [...prev, ...parents.filter(node => !keys.has(node.key))];
     });
-  };
-
-  const handleAddNode = (node?: TreeNode) => {
-    const kind = nextChildKind(node?.kind);
-    const draftKey = `domain-draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const draft: TreeNode = {
-      key: draftKey,
-      parentKey: node?.key ?? null,
-      isDraft: true,
-      kind,
-      label: '',
-      year: node?.year,
-      semester: node?.semester,
-      grade: node?.grade,
-      subjectName: node?.subjectName,
-      subject: node?.subject,
-      children: kind === 'domain' ? undefined : [],
-    };
-    setDraftNodes(prev => [...prev, draft]);
-    setEditing({ key: draftKey, mode: 'add', value: '' });
-  };
-
-  const findNodeByKey = (nodes: TreeNode[], key: string): TreeNode | null => {
-    for (const node of nodes) {
-      if (node.key === key) return node;
-      const child = findNodeByKey(node.children || [], key);
-      if (child) return child;
-    }
-    return null;
-  };
-
-  const commitAddNode = async (node: TreeNode, value: string): Promise<boolean> => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      setDraftNodes(prev => removeDraftSubtree(prev, node.key));
-      return true;
-    }
-
-    if (node.kind === 'year') {
-      const year = Number(trimmed);
-      if (!year) {
-        alert('학년도는 숫자로 입력하세요.');
-        return false;
-      }
-      await criteriaApi.createDomainsAnchor(year, 0, 0, '');
-    } else if (node.kind === 'semester') {
-      const semester = Number(trimmed);
-      if (!semester || !node.year) {
-        alert('학기는 숫자로 입력하세요.');
-        return false;
-      }
-      await criteriaApi.createDomainsAnchor(node.year, semester, 0, '');
-    } else if (node.kind === 'grade') {
-      const grade = Number(trimmed);
-      if (!grade || !node.year || !node.semester) {
-        alert('학년은 숫자로 입력하세요.');
-        return false;
-      }
-      await criteriaApi.createDomainsAnchor(node.year, node.semester, grade, '');
-    } else if (node.kind === 'subject') {
-      if (!node.year || !node.semester || !node.grade) {
-        alert('상위 항목을 먼저 입력하세요.');
-        return false;
-      }
-      await criteriaApi.createDomainsAnchor(node.year, node.semester, node.grade, trimmed);
-    } else if (node.subject) {
-      await criteriaApi.addCustomDomain({
-        year: node.subject.year,
-        semester: node.subject.semester,
-        grade: node.subject.grade,
-        subject: node.subject.subject,
-        name: trimmed,
-      });
-    }
-
-    setDraftNodes(prev => removeDraftSubtree(prev, node.key));
-    await loadSubjects();
-    return true;
-  };
-
-  const commitEditing = async () => {
-    if (!editing) return;
-    const current = editing;
-    const node = findNodeByKey(visibleTree, current.key);
-    if (!node) {
-      setEditing(null);
-      return;
-    }
-    try {
-      const ok = await commitAddNode(node, current.value);
-      if (ok) setEditing(null);
-      else setEditing(current);
-    } catch (e: any) {
-      alert(e?.response?.data?.error || '저장에 실패했습니다.');
-      setEditing(current);
-    }
-  };
-
-  const cancelEditing = () => {
-    if (editing) setDraftNodes(prev => removeDraftSubtree(prev, editing.key));
-    setEditing(null);
-  };
-
-  const handleDeleteNode = async (node: TreeNode) => {
-    if (node.isDraft) {
-      setDraftNodes(prev => removeDraftSubtree(prev, node.key));
-      return;
-    }
-    if (!node.year) return;
-    if (!confirm(`${node.label} 아래 평가 영역 데이터를 모두 삭제하시겠습니까?`)) return;
-    await criteriaApi.deleteDomainsScope({
-      year: node.year,
-      semester: node.semester,
-      grade: node.grade,
-      subject: node.subjectName,
-      domainName: node.domainName,
-    });
-    setDraftNodes(prev => removeDraftSubtree(prev, node.key));
-    if (isSelectedInScope(node)) {
-      clearDomainSelection();
-    }
-    await loadSubjects();
   };
 
   const getDownloadFilename = (disposition: string, fallback: string) => {
@@ -753,16 +477,6 @@ export default function DomainPage() {
     }
   };
 
-  const handleDeleteSubjectFile = async (sub: SubjectItem) => {
-    if (!confirm(`${sub.subject} 영역 관리 파일과 데이터를 삭제하시겠습니까?`)) return;
-    await criteriaApi.deleteSource('domains', sub.year, sub.semester, sub.grade, sub.subject);
-    preserveParentPath(sub);
-    if (isSameSubject(selectedSubject, sub)) {
-      clearDomainSelection();
-    }
-    await loadSubjects();
-  };
-
   const selectedDomainKey = selectedSubject && selectedDomain
     ? `${selectedSubject.year}-${selectedSubject.semester}-${selectedSubject.grade}-${selectedSubject.subject}-${selectedDomain}`
     : null;
@@ -770,6 +484,72 @@ export default function DomainPage() {
   const selectedSubjectKey = selectedSubject
     ? `${selectedSubject.year}-${selectedSubject.semester}-${selectedSubject.grade}-${selectedSubject.subject}`
     : null;
+
+  const domainTree = useAcademicTreeController<SubjectItem>({
+    tree,
+    draftKeyPrefix: 'domain-draft',
+    selected: (item) => {
+      if (!item.subject) return false;
+      if (item.kind === 'domain') {
+        const key = `${item.subject.year}-${item.subject.semester}-${item.subject.grade}-${item.subject.subject}-${item.domainName}`;
+        return selectedDomainKey === key;
+      }
+      if (item.kind === 'subject' && !selectedDomainKey) {
+        const key = `${item.subject.year}-${item.subject.semester}-${item.subject.grade}-${item.subject.subject}`;
+        return selectedSubjectKey === key;
+      }
+      return false;
+    },
+    clickable: (item) => (item.kind === 'subject' || item.kind === 'domain') && !!item.subject,
+    onSelect: (item) => {
+      if (!item.subject) return;
+      if (item.kind === 'domain') handleSelectDomain(item.subject, item.domainName!, !!item.isCustom);
+      else if (item.kind === 'subject') handleSelectSubject(item.subject);
+    },
+    deleteSubject: async (subject, _node, helpers) => {
+      if (!confirm(`${subject.subject} 영역 관리 파일과 데이터를 삭제하시겠습니까?`)) return;
+      await criteriaApi.deleteSource('domains', subject.year, subject.semester, subject.grade, subject.subject);
+      preserveParentPath(subject, helpers);
+      if (isSameSubject(selectedSubject, subject)) {
+        clearDomainSelection();
+      }
+      await loadSubjects();
+    },
+    deleteScope: async (node, helpers) => {
+      if (!node.year) return;
+      if (!confirm(`${node.label} 아래 평가 영역 데이터를 모두 삭제하시겠습니까?`)) return;
+      await criteriaApi.deleteDomainsScope({
+        year: node.year,
+        semester: node.semester,
+        grade: node.grade,
+        subject: node.subjectName,
+        domainName: node.domainName,
+      });
+      helpers.removeDraftSubtree(node.key);
+      if (isSelectedInScope(node)) {
+        clearDomainSelection();
+      }
+      await loadSubjects();
+    },
+    createAnchor: (scope) => criteriaApi.createDomainsAnchor(scope.year, scope.semester, scope.grade, scope.subject),
+    createDomain: (node, name) => {
+      if (!node.subject) throw new Error('상위 과목 정보가 없습니다.');
+      return criteriaApi.addCustomDomain({
+        year: node.subject.year,
+        semester: node.subject.semester,
+        grade: node.subject.grade,
+        subject: node.subject.subject,
+        name,
+      });
+    },
+    onAfterCommit: loadSubjects,
+    subjectDownloadAction: {
+      visible: (subject) => !!subject.has_source,
+      onDownload: (subject) => {
+        window.location.href = criteriaApi.sourceUrl('domains', subject.year, subject.semester, subject.grade, subject.subject);
+      },
+    },
+  });
 
   const subjectHasUploadedFile = !!selectedSubject?.has_source;
   const subjectAssessmentRows = allSubjectDomains.filter(row => row.eval_type === '지필' || row.eval_type === '수행');
@@ -1184,13 +964,13 @@ export default function DomainPage() {
   ];
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <PageSidebar
-        title="평가 영역 관리"
-        upload={(
-          <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploadingDomains ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
-            {uploadingDomains ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-            {uploadingDomains ? '처리 중...' : '영역 관리 파일 업로드'}
+    <PageLayout
+      sidebar={{
+        title: '평가 영역 관리',
+        upload: {
+          label: '영역 관리 파일 업로드',
+          loading: uploadingDomains,
+          input: (
             <input
               ref={domainsFileRef}
               type="file"
@@ -1199,129 +979,40 @@ export default function DomainPage() {
               onChange={handleDomainsUpload}
               disabled={uploadingDomains}
             />
-          </label>
-        )}
-        notices={(
+          ),
+        },
+        notices: [
+          {
+            type: 'guide',
+            visible: showGuide,
+            title: '업로드 안내',
+            lines: [
+              '나이스 > 교과담임 > 성적 > 지필/수행선행작업 > 반영비율/만점관리에서',
+              '조회 및 출력 후 파일 저장 버튼을 눌러 엑셀(XLS)를 선택하세요.',
+            ],
+            onDismiss: hideGuide,
+          },
+          { type: 'message', visible: !!uploadMessage, tone: 'success', text: uploadMessage },
+          { type: 'message', visible: !!uploadError, tone: 'error', text: uploadError },
+        ],
+        tree: {
+          nodes: domainTree.visibleTree,
+          empty: {
+            icon: <School size={32} />,
+            message: <>영역 관리 파일을 업로드하면<br />과목과 수행평가 영역이 표시됩니다</>,
+            addYear: true,
+            onAddYear: () => domainTree.addNode(),
+          },
+          addYear: true,
+          onAddYear: () => domainTree.addNode(),
+          node: domainTree.nodeConfig,
+        },
+      }}
+      header={selectedSubject ? {
+        eyebrow: `${selectedSubject?.year}학년도 ${selectedSubject?.semester}학기 ${selectedSubject?.grade}학년 > ${selectedSubject?.subject}`,
+        title: selectedDomain ? selectedDomain : '종합 세특 기준 (과목 공통)',
+        actions: (
           <>
-          {showGuide && (
-            <div className="relative rounded border border-blue-200 bg-blue-50 p-2 pr-7 text-xs leading-relaxed text-blue-900">
-              <button className="absolute right-1.5 top-1.5 text-blue-500 hover:text-blue-700" onClick={hideGuide} title="다시 보지 않기">
-                <X size={12} />
-              </button>
-              <div className="font-medium mb-1">업로드 안내</div>
-              <p>나이스 &gt; 교과담임 &gt; 성적 &gt; 지필/수행선행작업 &gt; 반영비율/만점관리에서</p>
-              <p>조회 및 출력 후 파일 저장 버튼을 눌러 엑셀(XLS)를 선택하세요.</p>
-            </div>
-          )}
-          {uploadMessage && <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded p-2 leading-snug">{uploadMessage}</p>}
-          {uploadError && (
-            <div className="flex items-start gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
-              <AlertCircle size={12} className="mt-0.5 shrink-0" />
-              <p className="whitespace-pre-wrap leading-snug">{uploadError}</p>
-            </div>
-          )}
-          </>
-        )}
-        tree={(
-        <TreeView
-          nodes={visibleTree}
-          empty={(
-            <div className="text-center py-10 text-gray-400">
-              <School size={32} className="mx-auto mb-2 opacity-30" />
-              <p className="text-xs">영역 관리 파일을 업로드하면<br />과목과 수행평가 영역이 표시됩니다</p>
-              <button
-                className="mt-4 flex w-full items-center justify-center rounded border border-dashed border-blue-200 py-1.5 text-blue-500 hover:bg-blue-50"
-                onClick={() => handleAddNode()}
-                title="학년도 추가"
-              >
-                <Plus size={14} />
-              </button>
-            </div>
-          )}
-          addYearButton={(
-            <button
-              className="flex w-full items-center justify-center rounded border border-dashed border-transparent py-1 text-blue-500 opacity-0 transition hover:border-blue-200 hover:bg-blue-50 hover:opacity-100 group-hover/tree:opacity-100"
-              onClick={() => handleAddNode()}
-              title="학년도 추가"
-            >
-              <Plus size={14} />
-            </button>
-          )}
-        >
-          {(node, i) => (
-            <TreeNodeView
-              key={node.key || i}
-              node={node}
-              editing={editing}
-              selected={(item) => {
-                if (!item.subject) return false;
-                if (item.kind === 'domain') {
-                  const key = `${item.subject.year}-${item.subject.semester}-${item.subject.grade}-${item.subject.subject}-${item.domainName}`;
-                  return selectedDomainKey === key;
-                }
-                if (item.kind === 'subject' && !selectedDomainKey) {
-                  const key = `${item.subject.year}-${item.subject.semester}-${item.subject.grade}-${item.subject.subject}`;
-                  return selectedSubjectKey === key;
-                }
-                return false;
-              }}
-              clickable={(item) => (item.kind === 'subject' || item.kind === 'domain') && !!item.subject}
-              onSelect={(item) => {
-                if (!item.subject) return;
-                if (item.kind === 'domain') handleSelectDomain(item.subject, item.domainName!, !!item.isCustom);
-                else if (item.kind === 'subject') handleSelectSubject(item.subject);
-              }}
-              canAdd={(item) => item.kind !== 'subject' && item.kind !== 'domain'}
-              onAdd={handleAddNode}
-              canDelete={(item) => item.kind !== 'domain'}
-              onDelete={(item) => {
-                const isSubject = !!item.subject && !item.domainName;
-                if (isSubject) handleDeleteSubjectFile(item.subject!);
-                else handleDeleteNode(item);
-              }}
-              actions={(item) => item.kind === 'subject' ? (
-                item.subject?.has_source ? (
-                  <TreeIconButton
-                    title="원본 파일 다운로드"
-                    onClick={() => handleDownloadSubjectFile(item.subject!)}
-                    variant="blue"
-                  >
-                    <Download size={13} />
-                  </TreeIconButton>
-                ) : (
-                  <span className="w-[21px]" />
-                )
-              ) : null}
-              onEditChange={(value) => setEditing(prev => prev ? { ...prev, value } : prev)}
-              onEditCommit={commitEditing}
-              onEditCancel={cancelEditing}
-            />
-          )}
-        </TreeView>
-        )}
-      />
-
-      {/* 우측: 편집 영역 */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {!selectedSubject ? (
-          <div className="flex-1 flex items-center justify-center text-gray-400">
-            <div className="text-center">
-              <ClipboardCheck size={40} className="mx-auto mb-3 opacity-30" />
-              <p className="text-sm">왼쪽 트리에서 영역이나 과목명을 선택하세요</p>
-              <p className="text-xs mt-2">과목을 선택하면 종합 세특 기준을, 영역을 선택하면 해당 영역의 기준을 설정합니다.</p>
-            </div>
-          </div>
-        ) : (
-          <>
-            <PageHeader
-              eyebrow={(
-                <>
-                  {selectedSubject?.year}학년도 {selectedSubject?.semester}학기 {selectedSubject?.grade}학년 &gt; {selectedSubject?.subject}
-                </>
-              )}
-              title={selectedDomain ? selectedDomain : '종합 세특 기준 (과목 공통)'}
-              actions={(
-                <>
                 <button className="btn-primary text-sm px-4" onClick={handleSave} disabled={saving}>
                   <Save size={14} /> {saving ? '저장 중...' : '저장'}
                 </button>
@@ -1348,13 +1039,23 @@ export default function DomainPage() {
                 >
                   <Download size={14} />
                 </button>
-                </>
-              )}
-            />
-
-            <PageTabs value={activeTab} tabs={selectedDomain ? domainTabs : subjectTabs} onChange={setActiveTab} />
-
-            <div className="flex-1 overflow-y-auto scrollbar-stable p-6 space-y-8">
+          </>
+        ),
+      } : undefined}
+      tabs={selectedSubject ? (
+        <PageTabs value={activeTab} tabs={selectedDomain ? domainTabs : subjectTabs} onChange={setActiveTab} />
+      ) : undefined}
+    >
+      {!selectedSubject ? (
+        <div className="flex-1 flex items-center justify-center text-gray-400">
+          <div className="text-center">
+            <ClipboardCheck size={40} className="mx-auto mb-3 opacity-30" />
+            <p className="text-sm">왼쪽 트리에서 영역이나 과목명을 선택하세요</p>
+            <p className="text-xs mt-2">과목을 선택하면 종합 세특 기준을, 영역을 선택하면 해당 영역의 기준을 설정합니다.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto scrollbar-stable p-6 space-y-8">
 
               {/* 과목 반영비율/만점관리 */}
               {!selectedDomain && activeTab === 'ratio' && (
@@ -1811,9 +1512,7 @@ export default function DomainPage() {
               </section>}
 
             </div>
-          </>
-        )}
-      </div>
-    </div>
+      )}
+    </PageLayout>
   );
 }

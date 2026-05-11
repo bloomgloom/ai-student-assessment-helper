@@ -1,6 +1,21 @@
-# Next Page Layout Refactor Tasks
+# Page Layout Refactor Tasks
 
-다음 세션에서 이어갈 페이지 구성 모듈화 메모입니다.
+페이지 구성 모듈화 작업 기록입니다.
+
+## 완료 상태
+
+완료됨.
+
+- `client/src/components/common/PageLayout.tsx` 추가
+- `CriteriaPage` 최상위 좌우 레이아웃을 `PageLayout`으로 이동
+- `DomainPage` 최상위 좌우 레이아웃, 헤더 데이터, 탭 슬롯을 `PageLayout`으로 이동
+- `RecordsPage` 최상위 좌우 레이아웃을 `PageLayout`으로 이동
+- `PageSidebar`를 `PageTreeSidebar` 계층으로 교체
+- `PageTreeSidebarTitle`, `PageTreeSidebarUpload`, `PageTreeSidebarTree`로 사이드바 제목/업로드/트리 영역 분리
+- `CriteriaPage`, `DomainPage`, `RecordsPage`는 `PageLayout`에 사이드바/트리 설정을 넘기고, `PageLayout`이 `PageTreeSidebar`를 렌더링
+- `RecordsPage`의 접힘 트리 내용은 `RecordsCollapsedTree`로 분리해 `tree` 슬롯에 전달
+
+남은 기능 단위 분리는 `NEXT_DOMAIN_FUNCTION_REFACTOR_TASKS.md`에 따로 정리했다.
 
 ## 목표
 
@@ -20,7 +35,10 @@
 
 이미 있는 공통 컴포넌트:
 
-- `client/src/components/common/PageSidebar.tsx`
+- `client/src/components/common/PageTreeSidebar.tsx`
+- `client/src/components/common/PageTreeSidebarTitle.tsx`
+- `client/src/components/common/PageTreeSidebarUpload.tsx`
+- `client/src/components/common/PageTreeSidebarTree.tsx`
 - `client/src/components/common/PageHeader.tsx`
 - `client/src/components/common/PageTabs.tsx`
 - `client/src/components/common/TreeView.tsx`
@@ -40,27 +58,32 @@
 - 성취/채점/기록 기준 항목 섹션 공통화
 - 주요 스크롤 컨테이너에 `scrollbar-gutter: stable` 적용
 
-## 제안 컴포넌트
+## 적용 컴포넌트
 
 ### `PageLayout`
 
-예상 파일:
+파일:
 
 - `client/src/components/common/PageLayout.tsx`
 
-예상 props:
+props:
 
-- `sidebar: ReactNode`
-- `header?: ReactNode`
+- `sidebar: ReactNode | { title; upload?; notices?; tree }`
+- `header?: { eyebrow?: ReactNode; title?: ReactNode; actions?: ReactNode; hideTitle?: boolean }`
 - `tabs?: ReactNode`
 - `children: ReactNode`
-- `hideHeader?: boolean`
-- `contentClassName?: string`
+- `className?: string`
+- `mainClassName?: string`
 
 역할:
 
 - 전체 `flex h-screen overflow-hidden bg-gray-50` 구조 통일
 - 왼쪽 사이드바와 오른쪽 메인 영역 배치
+- 사이드바 설정으로 `PageTreeSidebar` 렌더링
+- 제목 설정으로 `PageTreeSidebarTitle` 렌더링
+- 업로드 설정으로 `PageTreeSidebarUpload` 렌더링
+- 트리 설정으로 `PageTreeSidebarTree` 렌더링
+- 헤더 데이터로 `PageHeader` 렌더링
 - 메인 영역의 `min-w-0`, `overflow-hidden`, 스크롤 컨테이너 정책 통일
 
 ### `PageShell`
@@ -85,10 +108,11 @@
 - `CriteriaPage`, `DomainPage`는 거의 같은 방식으로 적용 가능
 - `RecordsPage`는 제목 없는 특수 케이스를 `header={null}` 또는 `hideHeader`로 처리 가능
 
-주의:
+현재 판단:
 
-- 너무 많은 props를 받으면 오히려 읽기 어려워질 수 있다.
-- 먼저 `PageLayout`처럼 얇은 레이아웃 컴포넌트부터 적용하고, 반복이 남으면 `PageShell`로 올리는 편이 안전하다.
+- 이번 단계에서는 만들지 않았다.
+- 너무 많은 props를 받으면 오히려 읽기 어려워질 수 있어, 먼저 얇은 `PageLayout`만 적용했다.
+- 세 페이지에서 같은 조합 반복이 더 명확해지면 다음 단계에서 검토한다.
 
 ## 페이지별 적용 방향
 
@@ -96,15 +120,16 @@
 
 현재 구조:
 
-- 왼쪽 `PageSidebar`
+- 왼쪽 `PageTreeSidebar`
 - 오른쪽 선택 전 empty state
 - 선택 후 `PageHeader`
 - 본문 테이블
 
-적용:
+적용 결과:
 
-- `PageLayout`으로 좌우 구조 통일
-- `PageHeader`는 그대로 사용
+- `PageLayout`으로 좌우 구조 통일 완료
+- 헤더 데이터만 `PageLayout`에 전달
+- 사이드바/트리 설정만 `PageLayout`에 전달
 - 탭 없음
 - 헤더 액션 없음
 
@@ -112,17 +137,18 @@
 
 현재 구조:
 
-- 왼쪽 `PageSidebar`
+- 왼쪽 `PageTreeSidebar`
 - 오른쪽 선택 전 empty state
 - 선택 후 `PageHeader`
 - `PageTabs`
 - 본문 탭 콘텐츠
 
-적용:
+적용 결과:
 
-- `PageLayout`으로 좌우 구조 통일
-- `PageHeader` actions에 저장/업로드/다운로드 유지
+- `PageLayout`으로 좌우 구조 통일 완료
+- 저장/업로드/다운로드는 `header.actions`로 전달
 - `PageTabs`를 `tabs` slot으로 전달
+- 사이드바/트리 설정만 `PageLayout`에 전달
 - 본문 탭 콘텐츠는 현재처럼 내부 모듈화 유지
 
 ### `RecordsPage`
@@ -134,27 +160,22 @@
 - 오른쪽 제목 헤더 없음
 - 상단 툴바와 큰 테이블
 
-적용:
+적용 결과:
 
-- `PageLayout`을 쓰되 `header` 생략 가능해야 함
-- 왼쪽 사이드바는 접힘 상태가 있으므로 `PageSidebar` 직접 적용은 나중으로 미룰 수 있음
-- 먼저 오른쪽 메인 영역의 공통 overflow/content 구조만 맞추는 것이 안전
+- `PageLayout` 적용 완료
+- 제목 헤더 없이 사용
+- 왼쪽 사이드바는 접힘 상태가 있으므로 기존 자체 사이드바를 `sidebar` 슬롯에 전달
+- 오른쪽 메인 영역의 공통 overflow/content 구조 통일
 
 ## 검증 포인트
 
-작업 후 반드시 실행:
+실행 완료:
 
 ```bash
 npm run build --workspace=client
 ```
 
-가능하면:
-
-```bash
-npm run build
-```
-
-UI 확인:
+남은 UI 확인:
 
 - 세 페이지의 왼쪽 사이드바 시작 위치와 너비
 - 오른쪽 헤더 top/bottom padding

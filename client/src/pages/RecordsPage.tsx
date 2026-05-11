@@ -3,11 +3,12 @@ import { recordsApi, criteriaApi, classesApi, aiApi } from '../lib/api';
 import { useAiBatchStore } from '../stores/aiBatchStore';
 import {
   Download, Loader2, Users,
-  Save, Upload, AlertCircle, CheckCircle2, Trash2, X, PanelLeftClose, PanelLeftOpen
+  Save, Upload, Trash2, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
-import { TreeView } from '../components/common/TreeView';
-import { TreeIconButton, TreeNodeView, TreeNodeKind } from '../components/common/TreeNodeView';
+import { TreeNodeKind } from '../components/common/TreeNodeView';
 import { AiProgressOverlay } from '../components/common/AiProgressOverlay';
+import { PageLayout } from '../components/common/PageLayout';
+import { RecordsCollapsedTree } from '../features/records/RecordsCollapsedTree';
 
 const ArtifactViewer = lazy(() => import('../components/ArtifactViewer'));
 
@@ -100,25 +101,6 @@ function buildTree(classes: ClassItem[], subjects: any[]): TreeNode[] {
     }
   }
   return result;
-}
-
-function formatClassLabel(c: ClassItem) {
-  return `${c.year}학년도 ${c.semester}학기 ${c.grade}학년 ${c.subject} ${c.room}`;
-}
-
-function roomIconLabel(room: string) {
-  const match = room.match(/\d+/);
-  return match ? match[0] : room.slice(0, 1);
-}
-
-function sortClassesForCollapsedTree(items: ClassItem[]) {
-  return [...items].sort((a, b) =>
-    a.year - b.year ||
-    a.semester - b.semester ||
-    a.grade - b.grade ||
-    a.subject.localeCompare(b.subject, 'ko') ||
-    roomIconLabel(a.room).localeCompare(roomIconLabel(b.room), 'ko', { numeric: true })
-  );
 }
 
 const FROZEN_DEFAULT_WIDTHS = {
@@ -902,23 +884,25 @@ export default function RecordsPage() {
   const separatorShadow = '2px 0 5px rgba(0,0,0,0.08)';
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
-      <div className={`${treeCollapsed ? 'w-14' : 'w-72'} border-r border-gray-200 bg-white flex flex-col shrink-0 transition-[width] duration-200`}>
-        <div className="p-3 border-b border-gray-200 shrink-0 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            {!treeCollapsed && <h2 className="text-sm font-semibold text-gray-700">채점 기록 관리</h2>}
-            <button
-              type="button"
-              className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 ${treeCollapsed ? 'mx-auto' : 'ml-auto'}`}
-              onClick={toggleTreeCollapsed}
-              title={treeCollapsed ? '트리 펼치기' : '트리 접기'}
-            >
-              {treeCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-            </button>
-          </div>
-          <label className={`flex items-center justify-center gap-1.5 w-full py-2 text-xs rounded-md cursor-pointer border ${uploadingFiles ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
-            {uploadingFiles ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-            {!treeCollapsed && (uploadingFiles ? '처리 중...' : '파일 업로드')}
+    <PageLayout
+      sidebar={{
+        title: '채점 기록 관리',
+        collapsed: treeCollapsed,
+        titleAction: (
+          <button
+            type="button"
+            className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 ${treeCollapsed ? 'mx-auto' : 'ml-auto'}`}
+            onClick={toggleTreeCollapsed}
+            title={treeCollapsed ? '트리 펼치기' : '트리 접기'}
+          >
+            {treeCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+          </button>
+        ),
+        upload: {
+          label: '파일 업로드',
+          loading: uploadingFiles,
+          hideLabel: treeCollapsed,
+          input: (
             <input
               ref={classFilesRef}
               type="file"
@@ -928,209 +912,78 @@ export default function RecordsPage() {
               onChange={handleClassFilesUpload}
               disabled={uploadingFiles}
             />
-          </label>
-          {showGuide && !treeCollapsed && (
-            <div className="relative rounded border border-blue-200 bg-blue-50 p-2 pr-7 text-xs leading-relaxed text-blue-900">
-              <button className="absolute right-1.5 top-1.5 text-blue-500 hover:text-blue-700" onClick={hideGuide} title="다시 보지 않기">
-                <X size={12} />
-              </button>
-              <div className="font-medium">1. 수행평가 채점 파일 업로드</div>
-              <p>나이스 &gt; 교과담임 &gt; 성적 &gt; 수행평가 &gt; 수행평가성적관리에서</p>
-              <p>조회 후 일괄파일업로드 &gt; 엑셀다운로드를 선택하세요.</p>
-              <div className="mt-2 font-medium">2. 교과 세특 파일 업로드</div>
-              <p>나이스 &gt; 교과담임 &gt; 성적 &gt; 성적처리 &gt; 과목별세부능력및특기사항에서</p>
-              <p>조회 후 엑셀내려받기를 선택하세요.</p>
-            </div>
-          )}
-          {uploadMsg && !treeCollapsed && (
-            <div className={`flex items-start gap-1.5 text-xs rounded p-2 border ${uploadMsg.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' :
-              uploadMsg.type === 'warn' ? 'bg-yellow-50 border-yellow-200 text-yellow-800' :
-                'bg-green-50 border-green-200 text-green-700'
-              }`}>
-              {uploadMsg.type === 'error' ? <AlertCircle size={12} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={12} className="mt-0.5 shrink-0" />}
-              <p className="whitespace-pre-wrap leading-snug">{uploadMsg.text}</p>
-            </div>
-          )}
-        </div>
-        {treeCollapsed ? (
-          <div className="flex-1 overflow-auto scrollbar-stable py-2 px-2">
-            <div className="flex flex-col items-center gap-0.5 py-1">
-              {(() => {
-                const sorted = sortClassesForCollapsedTree(classes);
-                type SubGroup = { grade: number; subject: string; items: ClassItem[] };
-                type GradeGroup = { grade: number; subs: SubGroup[] };
-                type YSGroup = { year: number; semester: number; gradeGroups: GradeGroup[] };
-                const groups: YSGroup[] = [];
-                for (const c of sorted) {
-                  let ysg = groups.find(g => g.year === c.year && g.semester === c.semester);
-                  if (!ysg) { ysg = { year: c.year, semester: c.semester, gradeGroups: [] }; groups.push(ysg); }
-                  let gg = ysg.gradeGroups.find(g => g.grade === c.grade);
-                  if (!gg) { gg = { grade: c.grade, subs: [] }; ysg.gradeGroups.push(gg); }
-                  let sg = gg.subs.find(s => s.subject === c.subject);
-                  if (!sg) { sg = { grade: c.grade, subject: c.subject, items: [] }; gg.subs.push(sg); }
-                  sg.items.push(c);
-                }
-
-                const box = 'relative flex h-8 w-8 items-center justify-center rounded text-xs font-bold shadow-sm select-none transition-opacity';
-
-                // Small dot indicator for collapsed state
-                const CollapsedDot = () => (
-                  <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-orange-400 border border-white z-10" />
-                );
-
-                return groups.map(ysg => {
-                  const ysKey = `y${ysg.year}s${ysg.semester}`;
-                  const yKey = `y${ysg.year}`;
-                  const ysOpen = getNodeOpen(ysKey);
-                  const yOpen = getNodeOpen(yKey);
-
-                  return (
-                    <div key={`${ysg.year}-${ysg.semester}`} className="flex flex-col items-center gap-0.5">
-                      {/* Year box */}
-                      <button
-                        type="button"
-                        className={`${box} bg-slate-600 text-white cursor-pointer hover:bg-slate-500 ${!yOpen ? 'opacity-50' : ''}`}
-                        onClick={() => toggleNodeOpen(yKey)}
-                        title={yOpen ? `${ysg.year}학년도 접기` : `${ysg.year}학년도 펼치기`}
-                      >
-                        {String(ysg.year).slice(-2)}
-                        {!yOpen && <CollapsedDot />}
-                      </button>
-                      {/* Semester box */}
-                      <button
-                        type="button"
-                        className={`${box} ${ysg.semester === 1 ? 'bg-sky-200 text-sky-800 hover:bg-sky-300' : 'bg-amber-200 text-amber-800 hover:bg-amber-300'} cursor-pointer ${!ysOpen ? 'opacity-50' : ''}`}
-                        onClick={() => toggleNodeOpen(ysKey)}
-                        title={ysOpen ? `${ysg.semester}학기 접기` : `${ysg.semester}학기 펼치기`}
-                      >
-                        {ysg.semester === 1 ? '전' : '후'}
-                        {!ysOpen && <CollapsedDot />}
-                      </button>
-
-                      {/* Grade/Subject/Room boxes (hidden if year or semester collapsed) */}
-                      {yOpen && ysOpen && (
-                        <>
-                          <div className="h-px w-8 bg-gray-300 my-0.5" />
-                          {ysg.gradeGroups.map((gg, gi) => {
-                            const gKey = `y${ysg.year}s${ysg.semester}g${gg.grade}`;
-                            const gOpen = getNodeOpen(gKey);
-                            return (
-                              <div key={gg.grade} className="flex flex-col items-center gap-0.5">
-                                {/* Grade box */}
-                                <button
-                                  type="button"
-                                  className={`${box} bg-gray-900 text-white cursor-pointer hover:bg-gray-700 ${!gOpen ? 'opacity-50' : ''}`}
-                                  onClick={() => toggleNodeOpen(gKey)}
-                                  title={gOpen ? `${gg.grade}학년 접기` : `${gg.grade}학년 펼치기`}
-                                >
-                                  {gg.grade}
-                                  {!gOpen && <CollapsedDot />}
-                                </button>
-
-                                {/* Subject boxes (hidden if grade collapsed) */}
-                                {gOpen && gg.subs.map((sg, si) => {
-                                  const subKey = `y${ysg.year}s${ysg.semester}g${sg.grade}_${sg.subject}`;
-                                  const subOpen = getNodeOpen(subKey);
-                                  return (
-                                    <div key={sg.subject} className="flex flex-col items-center gap-0.5">
-                                      {/* Subject box */}
-                                      <button
-                                        type="button"
-                                        className={`${box} bg-gray-500 text-white cursor-pointer hover:bg-gray-400 ${!subOpen ? 'opacity-50' : ''}`}
-                                        onClick={() => toggleNodeOpen(subKey)}
-                                        title={subOpen ? `${sg.subject} 접기` : `${sg.subject} 펼치기`}
-                                      >
-                                        {sg.subject.slice(0, 1)}
-                                        {!subOpen && <CollapsedDot />}
-                                      </button>
-
-                                      {/* Room buttons (hidden if subject collapsed) */}
-                                      {subOpen && sg.items.map(c => (
-                                        <button
-                                          key={c.id}
-                                          type="button"
-                                          className={`flex h-8 w-8 items-center justify-center rounded border text-xs font-bold transition-colors ${selectedClass?.id === c.id
-                                            ? 'border-blue-400 bg-blue-600 text-white shadow-sm'
-                                            : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'
-                                            }`}
-                                          onClick={() => handleSelectClass(c)}
-                                          title={formatClassLabel(c)}
-                                        >
-                                          {roomIconLabel(c.room)}
-                                        </button>
-                                      ))}
-                                      {si < gg.subs.length - 1 && subOpen && (
-                                        <div className="h-px w-8 bg-gray-100 my-0.5" />
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                                {gi < ysg.gradeGroups.length - 1 && gOpen && (
-                                  <div className="h-px w-8 bg-gray-200 my-0.5" />
-                                )}
-                              </div>
-                            );
-                          })}
-                        </>
-                      )}
-                      <div className="h-px w-8 bg-gray-300 my-1" />
-                    </div>
-                  );
-                });
-              })()}
-              {classes.length === 0 && (
-                <div className="py-6 text-center text-xs text-gray-400">없음</div>
-              )}
-            </div>
-          </div>
+          ),
+        },
+        notices: treeCollapsed ? [] : [
+          {
+            type: 'guide',
+            visible: showGuide,
+            sections: [
+              {
+                title: '1. 수행평가 채점 파일 업로드',
+                lines: [
+                  '나이스 > 교과담임 > 성적 > 수행평가 > 수행평가성적관리에서',
+                  '조회 후 일괄파일업로드 > 엑셀다운로드를 선택하세요.',
+                ],
+              },
+              {
+                title: '2. 교과 세특 파일 업로드',
+                lines: [
+                  '나이스 > 교과담임 > 성적 > 성적처리 > 과목별세부능력및특기사항에서',
+                  '조회 후 엑셀내려받기를 선택하세요.',
+                ],
+              },
+            ],
+            onDismiss: hideGuide,
+          },
+          { type: 'message', visible: !!uploadMsg, tone: uploadMsg?.type || 'success', text: uploadMsg?.text },
+        ],
+        tree: treeCollapsed ? (
+          <RecordsCollapsedTree
+            classes={classes}
+            selectedClassId={selectedClass?.id}
+            getNodeOpen={getNodeOpen}
+            onToggleOpen={toggleNodeOpen}
+            onSelectClass={handleSelectClass}
+          />
         ) : (
-          <TreeView
-            nodes={tree}
-            empty={<p className="text-xs text-gray-400 text-center py-8">수업이 없습니다</p>}
-          >
-            {(node, idx) => (
-                <TreeNodeView
-                  key={node.path || idx}
-                  node={node}
-                  selected={(item) => item.kind === 'room' && selectedClass?.id === item.classItem?.id}
-                  clickable={(item) => item.kind === 'room' && !!item.classItem}
-                  onSelect={(item) => item.classItem && handleSelectClass(item.classItem)}
-                  openStates={treeOpenStates}
-                  onToggleOpen={toggleNodeOpen}
-                  actions={(item) => item.kind === 'room' && item.classItem ? (
-                    <>
-                      <TreeIconButton
-                        title="채점 파일 삭제"
-                        onClick={() => handleDeleteScoring(item.classItem!)}
-                        variant="blue"
-                        visible={item.classItem.scoring_filename ? 'always' : 'hidden'}
-                      >
-                        <Trash2 size={12} />
-                      </TreeIconButton>
-                      <TreeIconButton
-                        title="세특 파일 삭제"
-                        onClick={() => handleDeleteSetech(item.classItem!)}
-                        variant="purple"
-                        visible={item.classItem.setech_filename ? 'always' : 'hidden'}
-                      >
-                        <Trash2 size={12} />
-                      </TreeIconButton>
-                      <TreeIconButton
-                        title="전체 삭제"
-                        onClick={() => handleDeleteClass(item.classItem!)}
-                        variant="red"
-                        visible="always"
-                      >
-                        <Trash2 size={13} />
-                      </TreeIconButton>
-                    </>
-                  ) : null}
-                />
-            )}
-          </TreeView>
-        )}
-      </div>
-
+          {
+            nodes: tree,
+            empty: <p className="text-xs text-gray-400 text-center py-8">수업이 없습니다</p>,
+            node: {
+              selected: (item) => item.kind === 'room' && selectedClass?.id === item.classItem?.id,
+              clickable: (item) => item.kind === 'room' && !!item.classItem,
+              onSelect: (item) => item.classItem && handleSelectClass(item.classItem),
+              openStates: treeOpenStates,
+              onToggleOpen: toggleNodeOpen,
+              actions: (item) => item.kind === 'room' && item.classItem ? [
+                {
+                  title: '채점 파일 삭제',
+                  icon: 'trash',
+                  variant: 'blue',
+                  visible: item.classItem.scoring_filename ? 'always' : 'hidden',
+                  onClick: (node) => handleDeleteScoring(node.classItem!),
+                },
+                {
+                  title: '세특 파일 삭제',
+                  icon: 'trash',
+                  variant: 'purple',
+                  visible: item.classItem.setech_filename ? 'always' : 'hidden',
+                  onClick: (node) => handleDeleteSetech(node.classItem!),
+                },
+                {
+                  title: '전체 삭제',
+                  icon: 'trash',
+                  variant: 'red',
+                  visible: 'always',
+                  onClick: (node) => handleDeleteClass(node.classItem!),
+                },
+              ] : [],
+            },
+          }
+        ),
+      }}
+    >
       {!selectedClass ? (
         <div className="flex-1 flex items-center justify-center text-gray-400">
           <div className="text-center">
@@ -1572,6 +1425,6 @@ export default function RecordsPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageLayout>
   );
 }

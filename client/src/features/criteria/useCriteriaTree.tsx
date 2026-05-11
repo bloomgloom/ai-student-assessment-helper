@@ -1,0 +1,185 @@
+import { useEffect, useState } from 'react';
+import { BookOpen } from 'lucide-react';
+import { criteriaApi } from '../../lib/api';
+import {
+  AcademicTreeNode,
+  buildAcademicTree,
+  createAcademicParentPathDrafts,
+} from '../../components/common/academicTree';
+import { AcademicTreeControllerHelpers, useAcademicTreeController } from '../../hooks/useAcademicTreeController';
+import { clearStoredSelection, saveStoredSelection, useStoredSelectionRestore } from '../../hooks/useStoredSelectionRestore';
+import { CRITERIA_SELECTION_KEY } from './constants';
+import { CriteriaStandardRow, CriteriaSubjectItem } from './types';
+
+type CriteriaTreeNode = AcademicTreeNode<CriteriaSubjectItem>;
+type StoredCriteriaSelection = Pick<CriteriaSubjectItem, 'year' | 'semester' | 'grade' | 'subject' | 'domain_name'>;
+
+function buildCriteriaTree(items: CriteriaSubjectItem[]): CriteriaTreeNode[] {
+  return buildAcademicTree(items, {
+    keyPrefixes: { year: 'y', semester: 's', grade: 'g', subject: 'sub', domain: 'dom' },
+    getDomainEntries: (domains) => domains
+      .filter(item => item.domain_name)
+      .map(item => ({ name: item.domain_name, subject: item })),
+  });
+}
+
+export function useCriteriaTree() {
+  const [subjects, setSubjects] = useState<CriteriaSubjectItem[]>([]);
+  const [tree, setTree] = useState<CriteriaTreeNode[]>([]);
+  const [selected, setSelected] = useState<CriteriaSubjectItem | null>(null);
+  const [standards, setStandards] = useState<CriteriaStandardRow[]>([]);
+
+  const loadSubjects = async () => {
+    const res = await criteriaApi.getStandardSubjects();
+    setSubjects(res.data);
+    setTree(buildCriteriaTree(res.data));
+  };
+
+  const loadStandards = async (subject: CriteriaSubjectItem) => {
+    setSelected(subject);
+    saveStoredSelection<StoredCriteriaSelection>(CRITERIA_SELECTION_KEY, {
+      year: subject.year,
+      semester: subject.semester,
+      grade: subject.grade,
+      subject: subject.subject,
+      domain_name: subject.domain_name,
+    });
+    const res = await criteriaApi.getStandards(subject.year, subject.semester, subject.grade, subject.subject);
+    setStandards(res.data.filter((row: CriteriaStandardRow) => row.domain_name === subject.domain_name));
+  };
+
+  useEffect(() => { loadSubjects(); }, []);
+
+  useStoredSelectionRestore<CriteriaSubjectItem, StoredCriteriaSelection>({
+    storageKey: CRITERIA_SELECTION_KEY,
+    items: subjects,
+    findItem: (items, stored) => items.find(s =>
+      s.year === stored.year && s.semester === stored.semester && s.grade === stored.grade &&
+      s.subject === stored.subject && s.domain_name === stored.domain_name
+    ),
+    onRestore: loadStandards,
+  });
+
+  const isSameSubject = (a: CriteriaSubjectItem | null, b: Pick<CriteriaSubjectItem, 'year' | 'semester' | 'grade' | 'subject'>) =>
+    !!a && a.year === b.year && a.semester === b.semester && a.grade === b.grade && a.subject === b.subject;
+
+  const isSelectedInScope = (node: CriteriaTreeNode) => {
+    if (!selected || selected.year !== node.year) return false;
+    if (node.semester !== undefined && selected.semester !== node.semester) return false;
+    if (node.grade !== undefined && selected.grade !== node.grade) return false;
+    if (node.subjectName !== undefined && selected.subject !== node.subjectName) return false;
+    if (node.domainName !== undefined && selected.domain_name !== node.domainName) return false;
+    return true;
+  };
+
+  const clearSelection = () => {
+    setSelected(null);
+    setStandards([]);
+    clearStoredSelection(CRITERIA_SELECTION_KEY);
+  };
+
+  const preserveParentPath = (
+    sub: Pick<CriteriaSubjectItem, 'year' | 'semester' | 'grade'>,
+    helpers: AcademicTreeControllerHelpers<CriteriaSubjectItem>,
+  ) => {
+    const parents = createAcademicParentPathDrafts<CriteriaSubjectItem>({ year: 'y', semester: 's', grade: 'g' }, sub);
+    helpers.setDraftNodes(prev => {
+      const keys = new Set(prev.map(node => node.key));
+      return [...prev, ...parents.filter(node => !keys.has(node.key))];
+    });
+  };
+
+  const selectedKey = selected
+    ? `${selected.year}-${selected.semester}-${selected.grade}-${selected.subject}-${selected.domain_name}`
+    : null;
+
+  const criteriaTree = useAcademicTreeController<CriteriaSubjectItem>({
+    tree,
+    draftKeyPrefix: 'draft',
+    selected: (item) => {
+      const sub = item.subject;
+      const key = sub ? `${sub.year}-${sub.semester}-${sub.grade}-${sub.subject}-${item.domainName}` : '';
+      return item.kind === 'domain' && !!sub && selectedKey === key;
+    },
+    clickable: (item) => item.kind === 'domain' && !!item.subject,
+    onSelect: (item) => item.subject && loadStandards(item.subject),
+    deleteSubject: async (subject, _node, helpers) => {
+      if (!confirm(`${subject.subject} 성취 기준 파일과 데이터를 삭제하시겠습니까?`)) return;
+      await criteriaApi.deleteSource('standards', subject.year, subject.semester, subject.grade, subject.subject);
+      preserveParentPath(subject, helpers);
+      if (isSameSubject(selected, subject)) clearSelection();
+      await loadSubjects();
+    },
+    deleteScope: async (node, helpers) => {
+      if (!node.year) return;
+      if (!confirm(`${node.label} 아래 성취 기준을 모두 삭제하시겠습니까?`)) return;
+      await criteriaApi.deleteStandardsScope({
+        year: node.year,
+        semester: node.semester,
+        grade: node.grade,
+        subject: node.subjectName,
+        domainName: node.domainName,
+      });
+      helpers.removeDraftSubtree(node.key);
+      if (isSelectedInScope(node)) clearSelection();
+      await loadSubjects();
+    },
+    createAnchor: (scope) => criteriaApi.createStandardsAnchor(scope.year, scope.semester, scope.grade, ''),
+    createSubject: (scope, node) => criteriaApi.seedStandardsFromCurriculum({
+      year: scope.year,
+      semester: scope.semester,
+      grade: scope.grade,
+      subject: scope.subject,
+      credit: node.subject?.credit ?? 0,
+    }),
+    updateScope: (node, to) => {
+      if (!node.year) throw new Error('수정할 학년도 정보가 없습니다.');
+      return criteriaApi.updateStandardsScope({
+        from: { year: node.year, semester: node.semester, grade: node.grade, subject: node.subjectName, domainName: node.domainName },
+        to,
+      });
+    },
+    onAfterCommit: async ({ mode }) => {
+      if (mode === 'edit') {
+        setSelected(null);
+        setStandards([]);
+      }
+      await loadSubjects();
+    },
+    getCommitErrorMessage: (error, node) => {
+      const responseError = error && typeof error === 'object' && 'response' in error
+        ? (error as any).response?.data?.error
+        : undefined;
+      return responseError || (node.kind === 'subject' ? '내장 성취 기준을 찾을 수 없습니다.' : undefined);
+    },
+    subjectDownloadAction: {
+      visible: (subject) => !!subject.has_source,
+      onDownload: (subject) => {
+        window.location.href = criteriaApi.sourceUrl('standards', subject.year, subject.semester, subject.grade, subject.subject);
+      },
+    },
+  });
+
+  return {
+    selected,
+    standards,
+    reloadSubjects: loadSubjects,
+    clearSelection: () => setSelected(null),
+    header: selected ? {
+      eyebrow: `${selected.year}학년도 ${selected.semester}학기 ${selected.grade}학년 > ${selected.subject}`,
+      title: selected.domain_name,
+    } : undefined,
+    tree: {
+      nodes: criteriaTree.visibleTree,
+      empty: {
+        icon: <BookOpen size={32} />,
+        message: '성취 기준 파일을 업로드하세요',
+        addYear: true,
+        onAddYear: () => criteriaTree.addNode(),
+      },
+      addYear: true,
+      onAddYear: () => criteriaTree.addNode(),
+      node: criteriaTree.nodeConfig,
+    },
+  };
+}
