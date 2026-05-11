@@ -7,6 +7,7 @@ import { TreeNodeLike } from './TreeNodeView';
 
 interface PageLayoutHeader {
   eyebrow?: ReactNode;
+  leading?: ReactNode;
   title?: ReactNode;
   actions?: ReactNode | PageHeaderAction[];
   hideTitle?: boolean;
@@ -58,6 +59,7 @@ export function PageLayout<T extends TreeNodeLike<T>>({
         {header && (
           <PageHeader
             eyebrow={header.eyebrow}
+            leading={header.leading}
             title={header.title}
             actions={header.actions}
             hideTitle={header.hideTitle}

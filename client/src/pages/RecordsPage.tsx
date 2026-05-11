@@ -2,12 +2,13 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } fro
 import { recordsApi, criteriaApi, classesApi, aiApi } from '../lib/api';
 import { useAiBatchStore } from '../stores/aiBatchStore';
 import {
-  Download, Loader2, Users,
+  Download, Loader2,
   Save, Upload, Trash2, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { TreeNodeKind } from '../components/common/TreeNodeView';
-import { AiProgressOverlay } from '../components/common/AiProgressOverlay';
 import { PageLayout } from '../components/common/PageLayout';
+import { PageHeaderAction } from '../components/common/PageHeaderActions';
+import { RecordsContent } from '../features/records/RecordsContent';
 import { RecordsCollapsedTree } from '../features/records/RecordsCollapsedTree';
 
 const ArtifactViewer = lazy(() => import('../components/ArtifactViewer'));
@@ -882,6 +883,138 @@ export default function RecordsPage() {
     name: cw.chk + cw.cls + cw.num,
   };
   const separatorShadow = '2px 0 5px rgba(0,0,0,0.08)';
+  const selectedSubject = selectedClass
+    ? subjects.find(s => s.subject === selectedClass.subject)
+    : undefined;
+  const headerLeading = selectedClass ? (
+    <div className="flex min-w-0 items-center gap-2">
+      <div className="flex shrink-0 bg-gray-100 p-1 rounded gap-1 border border-gray-200">
+        <button
+          className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass.scoring_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
+            showScoring ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          disabled={!selectedClass.scoring_filename}
+          onClick={() => {
+            if (showScoring && !showSetech) { setShowScoring(false); setShowSetech(true); }
+            else { setShowScoring(!showScoring); }
+          }}
+        >
+          채점
+        </button>
+        <button
+          className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass.setech_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
+            showSetech ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          disabled={!selectedClass.setech_filename}
+          onClick={() => {
+            if (showSetech && !showScoring) { setShowSetech(false); setShowScoring(true); }
+            else { setShowSetech(!showSetech); }
+          }}
+        >
+          세특
+        </button>
+      </div>
+
+      <select
+        className="input w-[15rem] min-w-0 shrink text-xs py-1.5 px-2 bg-gray-50 font-medium text-gray-700"
+        value={domainFilter}
+        onChange={(e) => setDomainFilter(e.target.value)}
+      >
+        <option value="all">전체 영역 보기</option>
+        {selectedSubject?.fixedDomains.map((d: any) => (
+          <option key={d.name} value={d.name}>{d.name}</option>
+        ))}
+        {showSetech && selectedSubject?.customDomains.map((d: any) => (
+          <option key={d.name} value={d.name}>{d.name} (세특)</option>
+        ))}
+      </select>
+    </div>
+  ) : undefined;
+  const headerActions: PageHeaderAction[] = selectedClass ? [
+    ...(domainFilter !== 'all' ? [{
+      key: 'bulk-zip-upload',
+      type: 'file' as const,
+      variant: 'primary' as const,
+      label: '업로드',
+      icon: <Upload size={14} />,
+      loading: uploadingZip,
+      inputRef: fileInputRef,
+      accept: '.zip',
+      onChange: handleBulkZipUpload,
+      disabled: uploadingZip,
+    }] : []),
+    ...(showScoring ? [{
+      key: 'generate-scoring',
+      variant: 'rainbow' as const,
+      label: '채점',
+      onClick: () => handleBatchGenerate('scoring'),
+      disabled: batchGenerating,
+    }] : []),
+    ...(showSetech ? [{
+      key: 'generate-record',
+      variant: 'rainbow' as const,
+      label: '기록',
+      onClick: () => handleBatchGenerate('setech'),
+      disabled: batchGenerating,
+    }] : []),
+    ...(showSetech ? [{
+      key: 'generate-setech',
+      variant: 'rainbow' as const,
+      label: '세특',
+      onClick: () => handleBatchGenerate('setech', '__SUBJECT_COMPREHENSIVE__'),
+      disabled: batchGenerating,
+    }] : []),
+    ...(showSetech ? [{
+      key: 'spellcheck',
+      variant: 'rainbow' as const,
+      label: '교정',
+      onClick: handleBatchSpellcheck,
+      disabled: !!spellcheckProgress || spellcheckingIds.size > 0,
+      title: selectedStudentIds.size > 0 ? '선택한 행 맞춤법 검사' : '전체 행 맞춤법 검사',
+    }] : []),
+    ...(showScoring !== showSetech ? [{
+      key: 'export-current',
+      variant: 'success' as const,
+      label: '다운로드',
+      icon: <Download size={14} />,
+      onClick: () => handleExport(showScoring ? 'scoring' : 'setech'),
+    }] : []),
+    {
+      key: 'save',
+      variant: 'primary',
+      label: saving ? '저장 중...' : '저장',
+      icon: <Save size={14} />,
+      onClick: handleSaveAll,
+      disabled: saving,
+    },
+    {
+      key: 'delete',
+      variant: 'danger',
+      label: deleting ? '삭제 중...' : '삭제',
+      icon: <Trash2 size={14} />,
+      onClick: handleDeleteContent,
+      disabled: deleting || saving || batchGenerating,
+    },
+    {
+      key: 'import-full',
+      type: 'file',
+      icon: <Upload size={14} />,
+      loading: uploadingFullRecords,
+      inputRef: fullRecordsInputRef,
+      accept: '.xlsx,.xls',
+      onChange: handleImportFullRecords,
+      disabled: uploadingFullRecords,
+      title: '작업 내용 업로드',
+      ariaLabel: '작업 내용 업로드',
+    },
+    {
+      key: 'export-full',
+      icon: <Download size={14} />,
+      onClick: handleExportFullRecords,
+      title: '작업 내용 다운로드',
+      ariaLabel: '작업 내용 다운로드',
+    },
+  ] : [];
 
   return (
     <PageLayout
@@ -983,155 +1116,23 @@ export default function RecordsPage() {
           }
         ),
       }}
+      header={selectedClass ? {
+        leading: headerLeading,
+        actions: headerActions,
+        hideTitle: true,
+      } : undefined}
     >
-      {!selectedClass ? (
-        <div className="flex-1 flex items-center justify-center text-gray-400">
-          <div className="text-center">
-            <Users size={40} className="mx-auto mb-3 opacity-30" />
-            <p className="text-sm">왼쪽에서 영역을 선택하세요</p>
-          </div>
-        </div>
-      ) : (
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* 툴바 */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="flex bg-gray-100 p-1 rounded gap-1 border border-gray-200">
-                <button
-                  className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass?.scoring_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
-                    showScoring ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  disabled={!selectedClass?.scoring_filename}
-                  onClick={() => {
-                    if (showScoring && !showSetech) { setShowScoring(false); setShowSetech(true); }
-                    else { setShowScoring(!showScoring); }
-                  }}
-                >
-                  채점
-                </button>
-                <button
-                  className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass?.setech_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
-                    showSetech ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  disabled={!selectedClass?.setech_filename}
-                  onClick={() => {
-                    if (showSetech && !showScoring) { setShowSetech(false); setShowScoring(true); }
-                    else { setShowSetech(!showSetech); }
-                  }}
-                >
-                  세특
-                </button>
-              </div>
-
-              <select
-                className="input text-xs py-1.5 px-2 ml-2 bg-gray-50 font-medium text-gray-700"
-                value={domainFilter}
-                onChange={(e) => setDomainFilter(e.target.value)}
-              >
-                <option value="all">전체 영역 보기</option>
-                {subjects.find(s => s.subject === selectedClass.subject)?.fixedDomains.map((d: any) => (
-                  <option key={d.name} value={d.name}>{d.name}</option>
-                ))}
-                {showSetech && subjects.find(s => s.subject === selectedClass.subject)?.customDomains.map((d: any) => (
-                  <option key={d.name} value={d.name}>{d.name} (세특)</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex items-center gap-1">
-              {domainFilter !== 'all' && (
-                <label className={`flex items-center gap-1 cursor-pointer text-xs py-1.5 px-2.5 rounded text-white font-medium ${uploadingZip ? 'bg-indigo-300' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
-                  {uploadingZip ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-                  업로드
-                  <input type="file" accept=".zip" className="hidden" onChange={handleBulkZipUpload} disabled={uploadingZip} ref={fileInputRef} />
-                </label>
-              )}
-
-              {showScoring && (
-                <button className="btn-rainbow text-xs py-1.5 px-2.5" onClick={() => handleBatchGenerate('scoring')} disabled={batchGenerating}>
-                  ✨ 채점
-                </button>
-              )}
-
-              {showSetech && (
-                <button className="btn-rainbow text-xs py-1.5 px-2.5" onClick={() => handleBatchGenerate('setech')} disabled={batchGenerating}>
-                  ✨ 기록
-                </button>
-              )}
-
-              {showSetech && (
-                <button className="btn-rainbow text-xs py-1.5 px-2.5" onClick={() => handleBatchGenerate('setech', '__SUBJECT_COMPREHENSIVE__')} disabled={batchGenerating}>
-                  ✨ 세특
-                </button>
-              )}
-
-              {showSetech && (
-                <button
-                  className="btn-rainbow text-xs py-1.5 px-2.5"
-                  onClick={handleBatchSpellcheck}
-                  disabled={!!spellcheckProgress || spellcheckingIds.size > 0}
-                  title={selectedStudentIds.size > 0 ? '선택한 행 맞춤법 검사' : '전체 행 맞춤법 검사'}
-                >
-                  ✨ 교정
-                </button>
-              )}
-
-              {showScoring !== showSetech && (
-                <button className="btn-success text-xs py-1.5 px-2.5" onClick={() => handleExport(showScoring ? 'scoring' : 'setech')}>
-                  <Download size={12} /> 다운로드
-                </button>
-              )}
-
-              <button className="btn-primary text-xs py-1.5 px-2.5" onClick={handleSaveAll} disabled={saving}>
-                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 저장
-              </button>
-
-              <button className="btn-secondary text-xs py-1.5 px-2.5 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-300 transition-colors" onClick={handleDeleteContent} disabled={deleting || saving || batchGenerating}>
-                {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} 삭제
-              </button>
-
-              <label
-                className={`btn-secondary p-1.5 cursor-pointer ${uploadingFullRecords ? 'opacity-60' : ''}`}
-                title="작업 내용 업로드"
-                aria-label="작업 내용 업로드"
-              >
-                {uploadingFullRecords ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-                <input
-                  ref={fullRecordsInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  className="hidden"
-                  onChange={handleImportFullRecords}
-                  disabled={uploadingFullRecords}
-                />
-              </label>
-
-              <button
-                className="btn-secondary p-1.5"
-                onClick={handleExportFullRecords}
-                title="작업 내용 다운로드"
-                aria-label="작업 내용 다운로드"
-              >
-                <Download size={12} />
-              </button>
-            </div>
-          </div>
-
-          {/* 맞춤법 검사 팝업 오버레이 */}
-          {spellcheckProgress && (
-            <AiProgressOverlay
-              title="맞춤법 검사 중"
-              detail={`${spellcheckProgress.completed}/${spellcheckProgress.total}`}
-              progress={(spellcheckProgress.completed / Math.max(spellcheckProgress.total, 1)) * 100}
-              stopping={spellcheckStopping}
-              onStop={() => {
-                spellcheckAbortRef.current?.abort();
-                setSpellcheckStopping(true);
-              }}
-              tone="green"
-            />
-          )}
-
+      <RecordsContent
+        selected={!!selectedClass}
+        spellcheckProgress={spellcheckProgress}
+        spellcheckStopping={spellcheckStopping}
+        onStopSpellcheck={() => {
+          spellcheckAbortRef.current?.abort();
+          setSpellcheckStopping(true);
+        }}
+      >
+        {selectedClass && (
+          <>
           {/* 테이블 뷰 */}
           <div className="flex-1 overflow-auto scrollbar-stable bg-white">
             {students.length === 0 ? (
@@ -1423,8 +1424,9 @@ export default function RecordsPage() {
               </table>
             )}
           </div>
-        </div>
-      )}
+          </>
+        )}
+      </RecordsContent>
     </PageLayout>
   );
 }
