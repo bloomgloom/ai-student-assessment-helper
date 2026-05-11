@@ -5,13 +5,14 @@ import fs from 'fs';
 import * as unzipper from 'unzipper';
 import * as cheerio from 'cheerio';
 import { execute, queryOne, queryAll } from '../services/db';
+import { UPLOADS_DIR, ensureDir } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 
 const router = Router();
 
-const UPLOAD_DIR = path.join(__dirname, '../../uploads/artifacts');
-const TEMP_DIR = path.join(__dirname, '../../uploads/temp');
-[UPLOAD_DIR, TEMP_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
+const UPLOAD_DIR = path.join(UPLOADS_DIR, 'artifacts');
+const TEMP_DIR = path.join(UPLOADS_DIR, 'temp');
+[UPLOAD_DIR, TEMP_DIR].forEach(ensureDir);
 
 const upload = multer({ dest: TEMP_DIR, limits: { fileSize: 200 * 1024 * 1024 } });
 

@@ -4,11 +4,12 @@ import path from 'path';
 import fs from 'fs';
 import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
+import { UPLOADS_DIR, ensureDir } from '../services/storage';
 import { parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeSetechToExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
-const UPLOAD_DIR = path.join(__dirname, '../../uploads');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const UPLOAD_DIR = path.join(UPLOADS_DIR, 'records');
+ensureDir(UPLOAD_DIR);
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),

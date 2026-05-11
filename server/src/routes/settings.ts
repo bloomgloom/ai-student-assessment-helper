@@ -2,9 +2,10 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { queryAll, execute } from '../services/db';
+import { UPLOADS_DIR } from '../services/storage';
 import { callLLM, getLLMSettings, fetchOmlxModels } from '../services/llm';
 
-const UPLOADS_ROOT = path.join(__dirname, '../../uploads');
+const UPLOADS_ROOT = UPLOADS_DIR;
 
 const router = Router();
 

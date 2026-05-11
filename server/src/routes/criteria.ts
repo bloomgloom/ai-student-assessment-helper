@@ -4,13 +4,14 @@ import path from 'path';
 import fs from 'fs';
 import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
+import { UPLOADS_DIR, ensureDir } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 import { parseAreaManagementExcel, parseAchievementStandardsExcel } from '../services/excel';
 import informationCurriculumStandards from '../data/informationCurriculumStandards.json';
 
 const router = Router();
-const UPLOAD_DIR = path.join(__dirname, '../../uploads/criteria');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const UPLOAD_DIR = path.join(UPLOADS_DIR, 'criteria');
+ensureDir(UPLOAD_DIR);
 
 const upload = multer({
   storage: multer.diskStorage({

@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { queryAll } from './db';
+import { LOG_DIR } from './storage';
 
 export interface LLMSettings {
   provider: 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'openai-compatible' | 'omlx';
@@ -80,7 +81,7 @@ function getLogTimestamp(date = new Date()): string {
 }
 
 function getLogDir(): string {
-  return path.resolve(__dirname, '../../..', '.log');
+  return LOG_DIR;
 }
 
 export async function createLLMLogSession(label: string, metadata: Record<string, string | number | undefined> = {}): Promise<LLMLogSession> {

@@ -1,9 +1,8 @@
 import { createClient, type Client, type InValue } from '@libsql/client';
 import path from 'path';
-import fs from 'fs';
+import { DATA_DIR, LEGACY_UPLOADS_DIR, UPLOADS_DIR, ensureDir } from './storage';
 
-const DATA_DIR = path.join(__dirname, '../../data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+ensureDir(DATA_DIR);
 
 const DB_PATH = path.join(DATA_DIR, 'assessment.db');
 
@@ -223,8 +222,30 @@ export async function initDb(): Promise<void> {
 
   // domain_eval.excel_col → score 마이그레이션
   await ensureRenameColumn('domain_eval', 'excel_col', 'score');
+  await migrateStoredUploadPaths();
 
   initialized = true;
+}
+
+async function migrateStoredUploadPaths(): Promise<void> {
+  const legacy = LEGACY_UPLOADS_DIR;
+  if (path.resolve(legacy) === path.resolve(UPLOADS_DIR)) return;
+
+  const db = getClient();
+  const pairs = [
+    ['classes', 'scoring_filepath'],
+    ['classes', 'setech_filepath'],
+    ['artifacts', 'filepath'],
+  ] as const;
+
+  for (const [table, column] of pairs) {
+    await db.execute({
+      sql: `UPDATE ${table}
+            SET ${column} = replace(${column}, ?, ?)
+            WHERE ${column} LIKE ?`,
+      args: [legacy, UPLOADS_DIR, `${legacy}%`],
+    });
+  }
 }
 
 async function ensureColumn(table: string, column: string, definition: string): Promise<void> {
