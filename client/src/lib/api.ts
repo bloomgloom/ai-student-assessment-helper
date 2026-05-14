@@ -43,6 +43,11 @@ export const criteriaApi = {
     form.append('domainName', domainName);
     return api.post('/criteria/domain-config/upload', form);
   },
+  importDomainConfigFile: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/criteria/domain-config/upload', form);
+  },
   sourceUrl: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
     `/api/criteria/${kind}/source-file?year=${year}&semester=${semester}&grade=${grade}&subject=${encodeURIComponent(subject)}`,
   deleteSource: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>

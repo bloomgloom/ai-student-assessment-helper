@@ -929,15 +929,30 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
 
 router.post('/domain-config/upload', upload.single('file'), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
-  const year = Number(req.body.year);
-  const semester = Number(req.body.semester);
-  const grade = Number(req.body.grade);
-  const subject = String(req.body.subject || '');
-  const domainName = String(req.body.domainName || '__SUBJECT_COMPREHENSIVE__');
 
   try {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(req.file.path);
+
+    const metaSheet = wb.getWorksheet('기본정보');
+    const meta: Record<string, string> = {};
+    if (metaSheet) {
+      metaSheet.eachRow((row) => {
+        const key = cellText(row.getCell(1).value);
+        if (!key) return;
+        meta[key] = cellText(row.getCell(2).value);
+      });
+    }
+
+    const year = Number(req.body.year || meta['학년도']);
+    const semester = Number(req.body.semester || meta['학기']);
+    const grade = Number(req.body.grade || meta['학년']);
+    const subject = String(req.body.subject || meta['과목'] || '').trim();
+    const domainName = String(req.body.domainName || meta['영역'] || '__SUBJECT_COMPREHENSIVE__').trim();
+
+    if (!year || !semester || !grade || !subject) {
+      return res.status(400).json({ error: '기본정보 시트에서 학년도, 학기, 학년, 과목을 찾을 수 없습니다.' });
+    }
 
     const standardRows: { domain_name_ref: string; code: string; content: string; sort_order: number }[] = [];
     const standards = wb.getWorksheet('성취평가기준');
@@ -1013,6 +1028,41 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
       await execute('DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
       await execute('DELETE FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
 
+      const existingSubject = await queryOne(
+        `SELECT 1 as found FROM (
+           SELECT 1 FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=?
+           UNION ALL
+           SELECT 1 FROM custom_domains WHERE year=? AND semester=? AND grade=? AND subject=?
+         ) LIMIT 1`,
+        [year, semester, grade, subject, year, semester, grade, subject]
+      );
+      if (!existingSubject && domainName === '__SUBJECT_COMPREHENSIVE__') {
+        await execute(
+          `INSERT INTO subject_domains(year, semester, grade, subject, credit, eval_type, name, reflected, ratio, max_score, sort_order, source_filename)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [year, semester, grade, subject, 0, '', '', 'X', 0, 0, -1, '']
+        );
+      }
+
+      if (domainName !== '__SUBJECT_COMPREHENSIVE__') {
+        const existingDomain = await queryOne(
+          `SELECT 1 as found FROM (
+             SELECT 1 FROM subject_domains
+             WHERE year=? AND semester=? AND grade=? AND subject=? AND name=?
+             UNION ALL
+             SELECT 1 FROM custom_domains
+             WHERE year=? AND semester=? AND grade=? AND subject=? AND name=?
+           ) LIMIT 1`,
+          [year, semester, grade, subject, domainName, year, semester, grade, subject, domainName]
+        );
+        if (!existingDomain) {
+          await execute(
+            'INSERT INTO custom_domains(year, semester, grade, subject, name) VALUES(?,?,?,?,?)',
+            [year, semester, grade, subject, domainName]
+          );
+        }
+      }
+
       for (const [index, row] of standardRows.entries()) {
         const extensions = JSON.stringify({
           domain_name_ref: row.domain_name_ref,
@@ -1044,7 +1094,7 @@ router.post('/domain-config/upload', upload.single('file'), async (req: Request,
       }
     });
 
-    res.json({ ok: true, standards: standardRows.length, comments: commentsRows.length, eval: evalRows.length, prompts: aiPromptRows.length });
+    res.json({ ok: true, year, semester, grade, subject, domainName, standards: standardRows.length, comments: commentsRows.length, eval: evalRows.length, prompts: aiPromptRows.length });
   } catch (e: unknown) {
     res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
   } finally {

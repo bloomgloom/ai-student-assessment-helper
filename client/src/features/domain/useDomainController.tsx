@@ -85,10 +85,11 @@ export function useDomainController() {
   const loadSubjects = useCallback(async () => {
     const r = await criteriaApi.getSubjects();
     setSubjects(r.data);
+    return r.data as SubjectItem[];
   }, []);
   const domainsUpload = useDomainDomainsUpload({
     inputRef: domainsFileRef,
-    reloadSubjects: loadSubjects,
+    reloadSubjects: async () => { await loadSubjects(); },
   });
 
   useEffect(() => { loadSubjects(); }, [loadSubjects]);
@@ -334,24 +335,57 @@ export function useDomainController() {
   };
 
   const handleUploadConfig = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedSubject || !e.target.files?.length) return;
+    if (!e.target.files?.length) return;
     const file = e.target.files[0];
-    const domainName = selectedDomain || SUBJECT_COMPREHENSIVE_DOMAIN;
-    if (!confirm('현재 화면의 기준을 업로드한 엑셀 내용으로 덮어씁니다. 계속하시겠습니까?')) {
+    const domainName = selectedSubject ? selectedDomain || SUBJECT_COMPREHENSIVE_DOMAIN : SUBJECT_COMPREHENSIVE_DOMAIN;
+    const confirmMessage = selectedSubject
+      ? '현재 화면의 기준을 업로드한 엑셀 내용으로 덮어씁니다. 계속하시겠습니까?'
+      : '엑셀 파일의 기본정보에 있는 과목/영역으로 작업 내용을 업로드합니다. 계속하시겠습니까?';
+    if (!confirm(confirmMessage)) {
       e.target.value = '';
       return;
     }
     setUploadingConfig(true);
     try {
-      const r = await criteriaApi.importDomainConfig(
-        selectedSubject.year,
-        selectedSubject.semester,
-        selectedSubject.grade,
-        selectedSubject.subject,
-        domainName,
-        file
+      const r = selectedSubject
+        ? await criteriaApi.importDomainConfig(
+          selectedSubject.year,
+          selectedSubject.semester,
+          selectedSubject.grade,
+          selectedSubject.subject,
+          domainName,
+          file
+        )
+        : await criteriaApi.importDomainConfigFile(file);
+      const imported = r.data as {
+        year: number;
+        semester: number;
+        grade: number;
+        subject: string;
+        domainName: string;
+        standards: number;
+        eval: number;
+        comments: number;
+        prompts?: number;
+      };
+      const refreshedSubjects = await loadSubjects();
+      const targetSubject = refreshedSubjects.find(sub =>
+        sub.year === imported.year &&
+        sub.semester === imported.semester &&
+        sub.grade === imported.grade &&
+        sub.subject === imported.subject
       );
-      await loadCriteria(selectedSubject, domainName, isCustomDomain || !selectedDomain);
+      if (targetSubject) {
+        const importedDomain = imported.domainName || domainName;
+        if (importedDomain === SUBJECT_COMPREHENSIVE_DOMAIN) {
+          await handleSelectSubject(targetSubject);
+        } else {
+          const custom = targetSubject.customDomains.some(d => d.name === importedDomain);
+          handleSelectDomain(targetSubject, importedDomain, custom);
+        }
+      } else if (selectedSubject) {
+        await loadCriteria(selectedSubject, domainName, isCustomDomain || !selectedDomain);
+      }
       alert(`업로드 완료: 성취 기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 기록 기준 ${r.data.comments}개, AI 요청 ${r.data.prompts ?? 0}개`);
     } catch (err: any) {
       alert(`기준 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
@@ -368,7 +402,7 @@ export function useDomainController() {
     onSelectDomain: handleSelectDomain,
     onSelectSubject: handleSelectSubject,
     onClearSelection: clearDomainSelection,
-    reloadSubjects: loadSubjects,
+    reloadSubjects: async () => { await loadSubjects(); },
   });
 
   const subjectHasUploadedFile = !!selectedSubject?.has_source;

@@ -1,5 +1,5 @@
 export const CRITERIA_SELECTION_KEY = 'criteriaPage_lastSelection';
-export const CRITERIA_GUIDE_KEY = 'hideCriteriaGuide';
+export const CRITERIA_GUIDE_KEY = 'hideCriteriaGuide.v2';
 export const CRITERIA_SOURCE_TYPE = 'standards';
 
 export const CRITERIA_TREE_KEY_PREFIXES = {

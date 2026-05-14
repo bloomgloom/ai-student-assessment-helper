@@ -21,15 +21,15 @@ export function useDomainPage() {
     { ...DOMAIN_TAB_TEXT.subjectTabs.ratio, icon: <ClipboardCheck size={14} /> },
     { ...DOMAIN_TAB_TEXT.subjectTabs.comments, icon: <BookOpen size={14} /> },
   ];
-  const headerActions: PageHeaderAction[] = domain.selectedSubject ? [
-    {
+  const headerActions: PageHeaderAction[] = [
+    ...(domain.selectedSubject ? [{
       key: 'save',
-      variant: 'primary',
+      variant: 'primary' as const,
       label: domain.saving ? DOMAIN_PAGE_TEXT.savingLabel : DOMAIN_PAGE_TEXT.saveLabel,
       icon: <Save size={14} />,
       onClick: domain.handleSave,
       disabled: domain.saving,
-    },
+    }] : []),
     {
       key: 'upload-config',
       type: 'file',
@@ -42,14 +42,14 @@ export function useDomainPage() {
       title: DOMAIN_PAGE_TEXT.uploadConfigTitle,
       ariaLabel: DOMAIN_PAGE_TEXT.uploadConfigTitle,
     },
-    {
+    ...(domain.selectedSubject ? [{
       key: 'download-config',
       icon: <Download size={14} />,
       onClick: domain.handleDownloadConfig,
       title: DOMAIN_PAGE_TEXT.downloadConfigTitle,
       ariaLabel: DOMAIN_PAGE_TEXT.downloadConfigTitle,
-    },
-  ] : [];
+    }] : []),
+  ];
 
   return {
     sidebar: {
@@ -92,13 +92,17 @@ export function useDomainPage() {
         node: domain.domainTree.nodeConfig,
       },
     },
-    header: domain.selectedSubject ? {
-      eyebrow: domain.selectedDomain
-        ? `${domain.selectedSubject.year}학년도 ${domain.selectedSubject.semester}학기 ${domain.selectedSubject.grade}학년 > ${domain.selectedSubject.subject}`
-        : `${domain.selectedSubject.year}학년도 ${domain.selectedSubject.semester}학기 ${domain.selectedSubject.grade}학년`,
-      title: domain.selectedDomain ? domain.selectedDomain : domain.selectedSubject.subject,
+    header: {
+      eyebrow: domain.selectedSubject
+        ? domain.selectedDomain
+          ? `${domain.selectedSubject.year}학년도 ${domain.selectedSubject.semester}학기 ${domain.selectedSubject.grade}학년 > ${domain.selectedSubject.subject}`
+          : `${domain.selectedSubject.year}학년도 ${domain.selectedSubject.semester}학기 ${domain.selectedSubject.grade}학년`
+        : undefined,
+      title: domain.selectedSubject
+        ? domain.selectedDomain ? domain.selectedDomain : domain.selectedSubject.subject
+        : DOMAIN_PAGE_TEXT.sidebarTitle,
       actions: headerActions,
-    } : undefined,
+    },
     tabs: domain.selectedSubject ? {
       value: domain.activeTab,
       tabs: domain.selectedDomain ? domainTabs : subjectTabs,

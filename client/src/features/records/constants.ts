@@ -1,4 +1,4 @@
-export const RECORDS_GUIDE_KEY = 'hideRecordsGuide';
+export const RECORDS_GUIDE_KEY = 'hideRecordsGuide.v2';
 export const RECORDS_TREE_COLLAPSED_KEY = 'recordsTreeCollapsed';
 export const RECORDS_LAST_CLASS_KEY = 'recordsPage_lastClassId';
 export const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
