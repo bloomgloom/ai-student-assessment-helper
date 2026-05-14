@@ -7,6 +7,7 @@ export function AiGlobalOverlay() {
   const overlay = useAiOverlayStore();
   const batchJob = useAiBatchStore(state => state.currentJob);
   const stopBatch = useAiBatchStore(state => state.stopBatch);
+  const clearFinishedBatch = useAiBatchStore(state => state.clearFinished);
 
   const batchRunning = batchJob?.status === 'running' || batchJob?.status === 'stopping';
   const batchFinished = batchJob && !batchRunning;
@@ -28,7 +29,7 @@ export function AiGlobalOverlay() {
   if (!batchRunning && !batchFinished) return null;
 
   const job = batchJob!;
-  const failed = job.status === 'error';
+  const failed = job.status === 'error' || job.errorCount > 0;
   const completed = job.status === 'completed';
   const percent = (job.completed / Math.max(job.total, 1)) * 100;
 
@@ -38,9 +39,10 @@ export function AiGlobalOverlay() {
       message={job.message}
       detail={`${job.completed}/${job.total}`}
       progress={percent}
-      running={batchRunning}
+      running={batchRunning || failed}
       stopping={job.status === 'stopping'}
-      onStop={stopBatch}
+      onStop={batchRunning ? stopBatch : clearFinishedBatch}
+      stopLabel={batchRunning ? '중단' : '닫기'}
       tone={failed ? 'red' : completed ? 'green' : 'blue'}
       backdrop={batchRunning ? 'strong' : 'soft'}
       icon={batchRunning

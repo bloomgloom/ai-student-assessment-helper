@@ -48,6 +48,7 @@ export function useRecordsPage() {
   const [spellcheckStopping, setSpellcheckStopping] = useState(false);
   const [showScoring, setShowScoring] = useState(true);
   const [showComments, setShowComments] = useState(true);
+  const [showComprehensive, setShowComprehensive] = useState(true);
   const [domainFilter, setDomainFilter] = useState<string>('all');
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
@@ -207,10 +208,25 @@ export function useRecordsPage() {
     const hasScoring = !!c.scoring_filename;
     const hasComments = !!c.comments_filename;
     setShowScoring(hasScoring);
-    setShowComments(hasComments || !hasScoring); // 채점만 있어도 세특은 숨김
-    if (hasScoring && !hasComments) { setShowScoring(true); setShowComments(false); }
-    else if (!hasScoring && hasComments) { setShowScoring(false); setShowComments(true); }
-    else { setShowScoring(true); setShowComments(true); }
+    setShowComments(hasComments);
+    setShowComprehensive(hasComments || !hasScoring);
+    if (hasScoring && !hasComments) {
+      setShowScoring(true);
+      setShowComments(false);
+      setShowComprehensive(false);
+    } else if (!hasScoring && hasComments) {
+      setShowScoring(false);
+      setShowComments(true);
+      setShowComprehensive(true);
+    } else if (hasScoring && hasComments) {
+      setShowScoring(true);
+      setShowComments(true);
+      setShowComprehensive(true);
+    } else {
+      setShowScoring(false);
+      setShowComments(false);
+      setShowComprehensive(false);
+    }
     localStorage.setItem(RECORDS_LAST_CLASS_KEY, String(c.id));
     await loadDomainData(c);
   }, [loadDomainData]);
@@ -264,6 +280,7 @@ export function useRecordsPage() {
         setSelectedClass(prev => prev ? { ...prev, scoring_filename: '' } : prev);
         setShowScoring(false);
         setShowComments(!!selectedClass.comments_filename);
+        setShowComprehensive(!!selectedClass.comments_filename);
       }
       await loadData();
     } catch (err: any) {
@@ -279,6 +296,7 @@ export function useRecordsPage() {
       if (selectedClass?.id === c.id) {
         setSelectedClass(prev => prev ? { ...prev, comments_filename: '' } : prev);
         setShowComments(false);
+        setShowComprehensive(false);
         setShowScoring(!!selectedClass.scoring_filename);
       }
       await loadData();
@@ -440,12 +458,28 @@ export function useRecordsPage() {
     setSaving(true);
     try {
       const promises = [];
-      const types = ['scoring', 'comments'];
+      const enabledDomainTypes = [
+        ...(showScoring ? ['scoring'] : []),
+        ...(showComments ? ['comments'] : []),
+      ];
+      const subj = subjects.find(sub =>
+        sub.year === selectedClass.year &&
+        sub.semester === selectedClass.semester &&
+        sub.grade === selectedClass.grade &&
+        sub.subject === selectedClass.subject
+      );
+      const domainPool = [
+        ...(subj?.fixedDomains || []),
+        ...(showComments ? (subj?.customDomains || []) : []),
+      ];
+      const domainsToSave = domainFilter === 'all'
+        ? domainPool
+        : domainPool.filter((d: any) => d.name === domainFilter);
 
       for (const s of students) {
         // Save comprehensive comments
         const compKey = `${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`;
-        if (contents[compKey]) {
+        if (showComprehensive && contents[compKey]) {
           promises.push(
             recordsApi.saveStudentContent(s.id, {
               content_type: 'comments',
@@ -456,10 +490,8 @@ export function useRecordsPage() {
         }
 
         // Save other domains
-        const subj = subjects.find(sub => sub.year === selectedClass.year && sub.subject === selectedClass.subject);
-        const allDomains = [...(subj?.fixedDomains || []), ...(subj?.customDomains || [])];
-        for (const d of allDomains) {
-          for (const type of types) {
+        for (const d of domainsToSave) {
+          for (const type of enabledDomainTypes) {
             const key = `${s.id}_${type}_${d.name}`;
             if (contents[key]) {
               promises.push(
@@ -488,25 +520,60 @@ export function useRecordsPage() {
     const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
     if (targetStudents.length === 0) return;
 
-    const contentTypes = [];
-    if (showScoring) contentTypes.push('scoring');
-    if (showComments) contentTypes.push('comments');
-    if (contentTypes.length === 0) return;
+    const enabledDomainTypes = [
+      ...(showScoring ? ['scoring'] : []),
+      ...(showComments ? ['comments'] : []),
+    ];
+    if (enabledDomainTypes.length === 0 && !showComprehensive) return;
 
-    const domainLabel = domainFilter === 'all' ? '전체 영역' : (domainFilter === SUBJECT_COMPREHENSIVE_DOMAIN ? '세특' : domainFilter);
-    const typeLabel = contentTypes.includes('scoring') && contentTypes.includes('comments') ? '채점 및 기록/세특' : (contentTypes.includes('scoring') ? '채점' : '기록/세특');
+    const subj = subjects.find(sub =>
+      sub.year === selectedClass.year &&
+      sub.semester === selectedClass.semester &&
+      sub.grade === selectedClass.grade &&
+      sub.subject === selectedClass.subject
+    );
+    const domainPool = [
+      ...(subj?.fixedDomains || []),
+      ...(showComments ? (subj?.customDomains || []) : []),
+    ];
+    const domainsToDelete = domainFilter === 'all'
+      ? domainPool.map((d: any) => d.name)
+      : domainPool.filter((d: any) => d.name === domainFilter).map((d: any) => d.name);
+
+    const domainLabel = domainFilter === 'all' ? '전체 영역' : domainFilter;
+    const typeLabels = [
+      ...(showScoring ? ['채점'] : []),
+      ...(showComments ? ['기록'] : []),
+      ...(showComprehensive ? ['종합'] : []),
+    ];
+    const typeLabel = typeLabels.join(', ');
     const targetLabel = selectedStudents.length > 0 ? `선택한 ${targetStudents.length}명` : `${targetStudents.length}명 전체`;
 
     if (!confirm(`${targetLabel}의 "${domainLabel}" ${typeLabel} 기록 데이터를 정말 삭제하시겠습니까?\n(학생 명단은 유지되며 생성된 기록 내용만 삭제됩니다)`)) return;
 
     setDeleting(true);
     try {
-      await recordsApi.deleteStudentContent({
-        classId: selectedClass.id,
-        studentIds: selectedStudents.length > 0 ? selectedStudents.map(s => s.id) : undefined,
-        domain: domainFilter !== 'all' ? domainFilter : undefined,
-        contentTypes
-      });
+      const studentIds = selectedStudents.length > 0 ? selectedStudents.map(s => s.id) : undefined;
+      const requests = [];
+      if (enabledDomainTypes.length > 0) {
+        for (const domain of domainsToDelete) {
+          requests.push(recordsApi.deleteStudentContent({
+            classId: selectedClass.id,
+            studentIds,
+            domain,
+            contentTypes: enabledDomainTypes,
+          }));
+        }
+      }
+      if (showComprehensive) {
+        requests.push(recordsApi.deleteStudentContent({
+          classId: selectedClass.id,
+          studentIds,
+          domain: SUBJECT_COMPREHENSIVE_DOMAIN,
+          contentTypes: ['comments'],
+        }));
+      }
+      await Promise.all(requests);
 
       await loadDomainData(selectedClass);
       alert('삭제되었습니다.');
@@ -539,9 +606,9 @@ export function useRecordsPage() {
 
     const domainLabel = domainsToProcess.length > 1
       ? `전체 ${domainsToProcess.length}개 영역`
-      : (domainsToProcess[0] === SUBJECT_COMPREHENSIVE_DOMAIN ? '세특' : domainsToProcess[0]);
+      : (domainsToProcess[0] === SUBJECT_COMPREHENSIVE_DOMAIN ? '종합' : domainsToProcess[0]);
     const typeLabel = type === 'comments'
-      ? (explicitDomain === SUBJECT_COMPREHENSIVE_DOMAIN ? '세특' : '기록')
+      ? (explicitDomain === SUBJECT_COMPREHENSIVE_DOMAIN ? '종합' : '기록')
       : '채점';
     const targetLabel = selectedStudents.length > 0 ? `선택한 ${targetStudents.length}명` : `${targetStudents.length}명 전체`;
     if (!confirm(`${targetLabel} "${domainLabel}" ${typeLabel} 일괄 생성하시겠습니까?`)) return;
@@ -691,8 +758,8 @@ export function useRecordsPage() {
       }
       domainCols.set(d.name, cols);
     }
-    return { visibleDomains, domainCols, compCommentsColIdx: showComments ? fi : -1 };
-  }, [selectedClass, subjects, domainFilter, evalItemsMap, commentsItemsMap, showScoring, showComments]);
+    return { visibleDomains, domainCols, compCommentsColIdx: showComprehensive ? fi : -1 };
+  }, [selectedClass, subjects, domainFilter, evalItemsMap, commentsItemsMap, showScoring, showComments, showComprehensive]);
 
   // ── Frozen column widths & sticky left offsets ─────────────────────────────
   const cw = {
@@ -716,7 +783,7 @@ export function useRecordsPage() {
         return colWidths[wk] ?? getDomainColumnDefaultWidth(c.type);
       });
     }),
-    ...(showComments ? [compWidth, compCountWidth, compSpellWidth] : []),
+    ...(showComprehensive ? [compWidth, compCountWidth, compSpellWidth] : []),
   ];
   const tableTotalWidth = tableColumnWidths.reduce((sum, width) => sum + width, 0);
   const sl = {
@@ -727,15 +794,31 @@ export function useRecordsPage() {
   };
   const separatorShadow = '2px 0 5px rgba(0,0,0,0.08)';
   const selectedSubject = selectedClass
-    ? subjects.find(s => s.subject === selectedClass.subject)
+    ? subjects.find(s =>
+      s.year === selectedClass.year &&
+      s.semester === selectedClass.semester &&
+      s.grade === selectedClass.grade &&
+      s.subject === selectedClass.subject
+    )
     : undefined;
+  useEffect(() => {
+    if (!selectedSubject || domainFilter === 'all') return;
+    const allowedDomains = [
+      ...(selectedSubject.fixedDomains || []),
+      ...(showComments ? (selectedSubject.customDomains || []) : []),
+    ].map((d: any) => d.name);
+    if (!allowedDomains.includes(domainFilter)) setDomainFilter('all');
+  }, [selectedSubject, showComments, domainFilter]);
+
   const recordsHeader = useRecordsHeader({
     selectedClass,
     selectedSubject,
     showScoring,
     showComments,
+    showComprehensive,
     setShowScoring,
     setShowComments,
+    setShowComprehensive,
     domainFilter,
     setDomainFilter,
     uploadingZip,
@@ -923,7 +1006,7 @@ export function useRecordsPage() {
                     })}
 
                     {/* Comp comments header */}
-                    {showComments && (
+                    {showComprehensive && (
                       <>
                         <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 select-none"
                           style={{ width: compWidth, minWidth: compWidth }}>
@@ -1074,11 +1157,14 @@ export function useRecordsPage() {
                               const locked = selectedClass
                                 ? isAiCellLocked(selectedClass.id, s.id, 'comments', d.name)
                                 : false;
+                              const itemValue = commentsData[c.itemTitle!]
+                                ?? (c.id === 'comments_0' ? commentsData.text : '')
+                                ?? '';
                               return (
                                 <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
                                   <textarea className="textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed" style={{ minHeight: 80 }}
-                                    value={commentsData[c.itemTitle!] || ''}
+                                    value={itemValue}
                                     onChange={ev => updateContent(s.id, 'comments', c.itemTitle!, ev.target.value, d.name)}
                                     disabled={locked}
                                     data-row={rowIdx} data-col={c.fi}
@@ -1093,7 +1179,7 @@ export function useRecordsPage() {
                         })}
 
                         {/* Comp comments */}
-                        {showComments && (
+                        {showComprehensive && (
                           <>
                             <td className="align-top p-1 border-r"
                               style={{ width: compWidth, minWidth: compWidth }}>

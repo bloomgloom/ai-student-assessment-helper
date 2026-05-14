@@ -19,6 +19,7 @@ export interface BatchJob {
   studentIds: number[];
   completed: number;
   total: number;
+  errorCount: number;
   message: string;
   status: BatchStatus;
   startedAt: number;
@@ -80,6 +81,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
         studentIds,
         completed: 0,
         total: domains.length * studentIds.length,
+        errorCount: 0,
         message: `[${domains[0]}] 준비 중...`,
         status: 'running',
         startedAt: Date.now(),
@@ -87,6 +89,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
     });
 
     let aggregateCompleted = 0;
+    let aggregateErrors = 0;
 
     try {
       for (const domain of domains) {
@@ -137,6 +140,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
 
                 if (event.type === 'progress' || event.type === 'error') {
                   aggregateCompleted = domainStartCompleted + Number(event.completed || 0);
+                  if (event.type === 'error') aggregateErrors++;
                   const update = isGeneratedContentUpdate({
                     studentId: event.studentId,
                     contentType: event.contentType || contentType,
@@ -158,6 +162,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
                       currentJob: {
                         ...state.currentJob,
                         completed: aggregateCompleted,
+                        errorCount: aggregateErrors,
                         message: event.type === 'error'
                           ? `[${domain}] ${event.name || '학생'} 오류: ${event.error || '생성 실패'}`
                           : `[${domain}] ${event.name} 완료`,
@@ -170,7 +175,10 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
                     currentJob: {
                       ...state.currentJob,
                       completed: aggregateCompleted,
-                      message: `[${domain}] 완료`,
+                      errorCount: aggregateErrors,
+                      message: aggregateErrors > 0
+                        ? `[${domain}] 완료, 오류 ${aggregateErrors}건`
+                        : `[${domain}] 완료`,
                     },
                   } : {});
                 } else if (event.type === 'fatal') {
@@ -193,13 +201,20 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
         currentJob: {
           ...state.currentJob,
           status: stopped ? 'stopped' : 'completed',
-          message: stopped ? '중단되었습니다.' : 'AI 생성이 완료되었습니다.',
+          errorCount: aggregateErrors,
+          message: stopped
+            ? '중단되었습니다.'
+            : aggregateErrors > 0
+              ? `AI 생성이 완료되었습니다. 오류 ${aggregateErrors}건은 작성하지 않았습니다.`
+              : 'AI 생성이 완료되었습니다.',
         },
       } : {});
 
-      clearTimer = window.setTimeout(() => {
-        if (get().currentJob?.id === jobId) get().clearFinished();
-      }, stopped ? 300 : 1200);
+      if (stopped || aggregateErrors === 0) {
+        clearTimer = window.setTimeout(() => {
+          if (get().currentJob?.id === jobId) get().clearFinished();
+        }, stopped ? 300 : 1200);
+      }
 
       return !stopped;
     } catch (e) {

@@ -44,6 +44,32 @@ function getArtifactExt(filename: string): string {
   return path.extname(filename.normalize('NFC')).toLowerCase();
 }
 
+/**
+ * 파일명에서 "5자리 학번 + 한글 이름(글자수 무제한)" 패턴을 찾아
+ * 주어진 학생 목록과 학번·이름 모두 일치하는 학생을 반환한다.
+ * - 학번과 이름은 반드시 붙여 써야 함 (사이에 공백·구분자 허용 안 함)
+ * - 학번/이름 각각의 내부는 붙여 씀
+ * - 순서는 반드시 학번 → 이름 순
+ */
+function matchStudentByFilename(
+  decodedName: string,
+  students: { id: number; student_num: number; name: string }[]
+): { id: number; student_num: number; name: string } | undefined {
+  // 학번(5자리) + 이름(한글 1자 이상, 붙여쓰기 필수) 패턴
+  // [가-힣]+ 탐욕 매칭이 모든 한글을 소비하므로 DB 이름과 정확 비교로 길이 제한 불필요
+  const pattern = /(?<![0-9])(\d{5})([가-힣]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(decodedName)) !== null) {
+    const numInFile = parseInt(match[1], 10);
+    const nameInFile = match[2];
+    const found = students.find(
+      s => s.student_num === numInFile && s.name === nameInFile
+    );
+    if (found) return found;
+  }
+  return undefined;
+}
+
 async function deleteArtifactRows(rows: { id: number; filepath: string }[]): Promise<void> {
   for (const row of rows) {
     try { if (fs.existsSync(row.filepath)) fs.unlinkSync(row.filepath); } catch {}
@@ -301,8 +327,8 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
     );
     if (!cls) throw new Error('수업을 찾을 수 없습니다.');
 
-    const students = await queryAll<{ id: number; student_num: number }>(
-      'SELECT id, student_num FROM class_students WHERE class_id=?', [classId]
+    const students = await queryAll<{ id: number; student_num: number; name: string }>(
+      'SELECT id, student_num, name FROM class_students WHERE class_id=?', [classId]
     );
 
     const baseUploadDir = path.join(
@@ -340,11 +366,8 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
         try { decodedName = Buffer.from(rawFileName, 'latin1').toString('utf8').normalize('NFC'); } catch {}
       }
 
-      // DB의 실제 학번과 매칭 (자릿수 무관)
-      const student = students.find(s => {
-        const numStr = String(s.student_num);
-        return new RegExp(`(?<![0-9])${numStr}(?![0-9])`).test(decodedName);
-      });
+      // 파일명에서 "학번(5자리) + 이름(한글 2~4자)" 패턴을 추출해 DB와 학번·이름 모두 매칭
+      const student = matchStudentByFilename(decodedName, students);
       if (!student) continue;
 
       // 파일 내용 읽기
@@ -372,7 +395,7 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
 
     let message = `총 ${count}개의 산출물 파일이 성공적으로 연동되었습니다.`;
     if (count === 0 && fileEntryCount > 0) {
-      message += ` (ZIP에서 ${fileEntryCount}개 파일 발견, DB 학번 ${students.length}명과 매칭 없음. 파일명 예시: ${sampleFilenames.join(', ')})`;
+      message += ` (ZIP에서 ${fileEntryCount}개 파일 발견, DB 학생 ${students.length}명과 매칭 없음. 파일명에 "학번(5자리)+이름(한글)" 패턴이 있어야 합니다. 파일명 예시: ${sampleFilenames.join(', ')})`;
     }
 
     res.json({ message, count });

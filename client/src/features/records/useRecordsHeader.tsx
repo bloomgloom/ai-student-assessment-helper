@@ -9,8 +9,10 @@ interface UseRecordsHeaderOptions {
   selectedSubject: any;
   showScoring: boolean;
   showComments: boolean;
+  showComprehensive: boolean;
   setShowScoring: (value: boolean) => void;
   setShowComments: (value: boolean) => void;
+  setShowComprehensive: (value: boolean) => void;
   domainFilter: string;
   setDomainFilter: (value: string) => void;
   uploadingZip: boolean;
@@ -38,8 +40,10 @@ export function useRecordsHeader({
   selectedSubject,
   showScoring,
   showComments,
+  showComprehensive,
   setShowScoring,
   setShowComments,
+  setShowComprehensive,
   domainFilter,
   setDomainFilter,
   uploadingZip,
@@ -61,6 +65,17 @@ export function useRecordsHeader({
   handleImportFullRecords,
   handleExportFullRecords,
 }: UseRecordsHeaderOptions) {
+  const showDomainControls = showScoring || showComments;
+  const toggleView = (target: 'scoring' | 'comments' | 'comprehensive') => {
+    const nextScoring = target === 'scoring' ? !showScoring : showScoring;
+    const nextComments = target === 'comments' ? !showComments : showComments;
+    const nextComprehensive = target === 'comprehensive' ? !showComprehensive : showComprehensive;
+    if (!nextScoring && !nextComments && !nextComprehensive) return;
+    if (target === 'scoring') setShowScoring(nextScoring);
+    if (target === 'comments') setShowComments(nextComments);
+    if (target === 'comprehensive') setShowComprehensive(nextComprehensive);
+  };
+
   const leading = selectedClass ? (
     <div className="flex min-w-0 items-center gap-2">
       <div className="flex shrink-0 bg-gray-100 p-1 rounded gap-1 border border-gray-200">
@@ -69,10 +84,7 @@ export function useRecordsHeader({
             showScoring ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
             }`}
           disabled={!selectedClass.scoring_filename}
-          onClick={() => {
-            if (showScoring && !showComments) { setShowScoring(false); setShowComments(true); }
-            else { setShowScoring(!showScoring); }
-          }}
+          onClick={() => toggleView('scoring')}
         >
           채점
         </button>
@@ -81,33 +93,41 @@ export function useRecordsHeader({
             showComments ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
             }`}
           disabled={!selectedClass.comments_filename}
-          onClick={() => {
-            if (showComments && !showScoring) { setShowComments(false); setShowScoring(true); }
-            else { setShowComments(!showComments); }
-          }}
+          onClick={() => toggleView('comments')}
         >
           세특
         </button>
+        <button
+          className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass.comments_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
+            showComprehensive ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          disabled={!selectedClass.comments_filename}
+          onClick={() => toggleView('comprehensive')}
+        >
+          종합
+        </button>
       </div>
 
-      <select
-        className="input w-[15rem] min-w-0 shrink text-xs py-1.5 px-2 bg-gray-50 font-medium text-gray-700"
-        value={domainFilter}
-        onChange={(e) => setDomainFilter(e.target.value)}
-      >
-        <option value="all">전체 영역 보기</option>
-        {selectedSubject?.fixedDomains.map((d: any) => (
-          <option key={d.name} value={d.name}>{d.name}</option>
-        ))}
-        {showComments && selectedSubject?.customDomains.map((d: any) => (
-          <option key={d.name} value={d.name}>{d.name} (세특)</option>
-        ))}
-      </select>
+      {showDomainControls && (
+        <select
+          className="input w-[15rem] min-w-0 shrink text-xs py-1.5 px-2 bg-gray-50 font-medium text-gray-700"
+          value={domainFilter}
+          onChange={(e) => setDomainFilter(e.target.value)}
+        >
+          <option value="all">전체 영역 보기</option>
+          {selectedSubject?.fixedDomains.map((d: any) => (
+            <option key={d.name} value={d.name}>{d.name}</option>
+          ))}
+          {showComments && selectedSubject?.customDomains.map((d: any) => (
+            <option key={d.name} value={d.name}>{d.name} (세특)</option>
+          ))}
+        </select>
+      )}
     </div>
   ) : undefined;
 
   const actions: PageHeaderAction[] = selectedClass ? [
-    ...(domainFilter !== 'all' ? [{
+    ...(showDomainControls && domainFilter !== 'all' ? [{
       key: 'bulk-zip-upload',
       type: 'file' as const,
       variant: 'primary' as const,
@@ -133,14 +153,14 @@ export function useRecordsHeader({
       onClick: () => handleBatchGenerate('comments'),
       disabled: batchGenerating,
     }] : []),
-    ...(showComments ? [{
+    ...(showComprehensive ? [{
       key: 'generate-comments',
       variant: 'rainbow' as const,
-      label: '세특',
+      label: '종합',
       onClick: () => handleBatchGenerate('comments', SUBJECT_COMPREHENSIVE_DOMAIN),
       disabled: batchGenerating,
     }] : []),
-    ...(showComments ? [{
+    ...(showComprehensive ? [{
       key: 'spellcheck',
       variant: 'rainbow' as const,
       label: '교정',
@@ -148,7 +168,7 @@ export function useRecordsHeader({
       disabled: !!spellcheckProgress || spellcheckingCount > 0,
       title: selectedStudentCount > 0 ? '선택한 행 맞춤법 검사' : '전체 행 맞춤법 검사',
     }] : []),
-    ...(showScoring !== showComments ? [{
+    ...((showScoring && !showComments && !showComprehensive) || (!showScoring && !showComments && showComprehensive) ? [{
       key: 'export-current',
       variant: 'success' as const,
       label: '다운로드',

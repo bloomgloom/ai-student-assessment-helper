@@ -158,14 +158,20 @@ async function getDomainCommentsCriteria(classContext: ClassContext | null, doma
 
 function buildScoringContent(result: string, criteria: EvalCriterion[]): string {
   const llmItems = criteria.filter((item) => item.item_type === 'llm');
-  const values = result.split(',').map((value) => value.trim()).filter(Boolean);
-  const numericFallback = result.match(/-?\d+(?:\.\d+)?/g) || [];
+  const values = result.split(',').map((value) => value.trim()).filter((value) => value.length > 0);
+  const numericPattern = /^-?\d+(?:\.\d+)?$/;
   const content: Record<string, string | number> = {};
 
+  if (llmItems.length > 0) {
+    const invalid = values.length !== llmItems.length || values.some((value) => !numericPattern.test(value));
+    if (invalid) {
+      const preview = result.replace(/\s+/g, ' ').trim().slice(0, 160);
+      throw new Error(`채점 결과가 항목 수(${llmItems.length})에 맞는 숫자로 제시되지 않아 작성하지 않았습니다. 출력: ${preview || '(빈 응답)'}`);
+    }
+  }
+
   llmItems.forEach((item, index) => {
-    content[item.name] = numericFallback.length >= llmItems.length
-      ? numericFallback[index] ?? ''
-      : values[index] ?? numericFallback[index] ?? '';
+    content[item.name] = values[index] ?? '';
   });
 
   const base = criteria
