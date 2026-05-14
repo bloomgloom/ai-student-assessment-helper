@@ -230,6 +230,117 @@ router.get('/export-full/:classId', async (req: Request, res: Response) => {
   res.send(buffer);
 });
 
+router.post('/import-full', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(req.file.path);
+
+    const metaSheet = wb.getWorksheet('기본정보');
+    const meta: Record<string, string> = {};
+    if (metaSheet) {
+      metaSheet.eachRow((row) => {
+        const key = cellText(row.getCell(1).value);
+        if (key) meta[key] = cellText(row.getCell(2).value);
+      });
+    }
+
+    const year = Number(meta['학년도']);
+    const semester = Number(meta['학기']);
+    const grade = Number(meta['학년']);
+    const subject = String(meta['과목'] || '').trim();
+    const room = String(meta['강의실'] || '').trim();
+    if (!year || !semester || !grade || !subject || !room) {
+      return res.status(400).json({ error: '기본정보 시트에서 학년도, 학기, 학년, 과목, 강의실을 찾을 수 없습니다.' });
+    }
+
+    const studentsSheet = wb.getWorksheet('학생');
+    if (!studentsSheet) return res.status(400).json({ error: '"학생" 시트를 찾을 수 없습니다.' });
+    const studentHeader = headerMap(studentsSheet.getRow(1));
+    const studentRows: { student_num: number; name: string }[] = [];
+    studentsSheet.eachRow((row, rowNum) => {
+      if (rowNum === 1) return;
+      const studentNum = Number(cellText(row.getCell(studentHeader.student_num).value));
+      const name = cellText(row.getCell(studentHeader.name).value);
+      if (!studentNum || !name) return;
+      studentRows.push({ student_num: studentNum, name });
+    });
+
+    let cls = await queryOne<{ id: number }>(
+      'SELECT id FROM classes WHERE year=? AND semester=? AND grade=? AND subject=? AND room=? ORDER BY id DESC LIMIT 1',
+      [year, semester, grade, subject, room]
+    );
+    if (!cls) {
+      const r = await execute(
+        'INSERT INTO classes(year, semester, grade, subject, room) VALUES(?,?,?,?,?)',
+        [year, semester, grade, subject, room]
+      );
+      cls = { id: Number(r.lastInsertRowid) };
+    }
+
+    for (const student of studentRows) {
+      const existing = await queryOne(
+        'SELECT 1 FROM class_students WHERE class_id=? AND student_num=? LIMIT 1',
+        [cls.id, student.student_num]
+      );
+      if (!existing) {
+        await execute(
+          'INSERT INTO class_students(class_id, student_num, name, excel_row) VALUES(?,?,?,?)',
+          [cls.id, student.student_num, student.name, student.student_num]
+        );
+      }
+    }
+
+    req.params.classId = String(cls.id);
+    const students = await queryAll<{ id: number; student_num: number }>(
+      'SELECT id, student_num FROM class_students WHERE class_id=?',
+      [cls.id]
+    );
+    const studentMap = new Map(students.map(student => [String(student.student_num), student.id]));
+    const sheet = wb.getWorksheet('내용');
+    if (!sheet) return res.status(400).json({ error: '"내용" 시트를 찾을 수 없습니다.' });
+    const h = headerMap(sheet.getRow(1));
+    const grouped = new Map<string, { studentId: number; contentType: string; domain: string; items: Record<string, string> }>();
+
+    sheet.eachRow((row, rowNum) => {
+      if (rowNum === 1) return;
+      const studentNum = cellText(row.getCell(h.student_num).value);
+      const studentId = studentMap.get(studentNum);
+      const contentType = cellText(row.getCell(h.content_type).value);
+      const domain = cellText(row.getCell(h.domain).value);
+      const item = cellText(row.getCell(h.item).value);
+      const value = cellText(row.getCell(h.value).value);
+      if (!studentId || !contentType || !domain || !item) return;
+      const key = `${studentId}||${contentType}||${domain}`;
+      const entry = grouped.get(key) || { studentId, contentType, domain, items: {} };
+      entry.items[item] = value;
+      grouped.set(key, entry);
+    });
+
+    let saved = 0;
+    await transaction(async () => {
+      for (const entry of grouped.values()) {
+        const content = entry.contentType === 'comments'
+          ? JSON.stringify({ text: entry.items.text ?? '' })
+          : JSON.stringify(entry.items);
+        await execute(`
+          INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
+          VALUES(?,?,?,?,datetime('now'))
+          ON CONFLICT(student_id, content_type, domain)
+          DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
+        `, [entry.studentId, entry.contentType, entry.domain, content]);
+        saved++;
+      }
+    });
+
+    res.json({ ok: true, classId: cls.id, saved });
+  } catch (e: unknown) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+  }
+});
+
 router.post('/import-full/:classId', upload.single('file'), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
   const classId = Number(req.params.classId);

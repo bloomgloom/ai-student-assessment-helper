@@ -37,6 +37,7 @@ export function useCriteriaTree() {
     const res = await criteriaApi.getStandardSubjects();
     setSubjects(res.data);
     setTree(buildCriteriaTree(res.data));
+    return res.data as CriteriaSubjectItem[];
   };
 
   const loadStandards = async (subject: CriteriaSubjectItem) => {
@@ -50,6 +51,18 @@ export function useCriteriaTree() {
     });
     const res = await criteriaApi.getStandards(subject.year, subject.semester, subject.grade, subject.subject);
     setStandards(res.data.filter((row: CriteriaStandardRow) => row.domain_name === subject.domain_name));
+  };
+
+  const selectImported = async (target: StoredCriteriaSelection) => {
+    const loaded = await loadSubjects();
+    const item = loaded.find(s =>
+      s.year === target.year &&
+      s.semester === target.semester &&
+      s.grade === target.grade &&
+      s.subject === target.subject &&
+      s.domain_name === target.domain_name
+    );
+    if (item) await loadStandards(item);
   };
 
   useEffect(() => { loadSubjects(); }, []);
@@ -168,6 +181,8 @@ export function useCriteriaTree() {
     selected,
     standards,
     reloadSubjects: loadSubjects,
+    loadStandards,
+    selectImported,
     clearSelection,
     tree: {
       nodes: criteriaTree.visibleTree,

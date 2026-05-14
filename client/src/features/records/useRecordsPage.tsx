@@ -121,6 +121,7 @@ export function useRecordsPage() {
     const [cr, sr] = await Promise.all([classesApi.getAll(), criteriaApi.getSubjects()]);
     setClasses(cr.data);
     setSubjects(sr.data);
+    return { classes: cr.data as ClassItem[], subjects: sr.data };
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -699,16 +700,24 @@ export function useRecordsPage() {
   };
 
   const handleImportFullRecords = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedClass || !e.target.files?.length) return;
+    if (!e.target.files?.length) return;
     const file = e.target.files[0];
-    if (!confirm('업로드한 엑셀 내용으로 현재 강의실의 저장된 AI 채점/활동/세특 내용을 덮어씁니다. 계속하시겠습니까?')) {
+    const confirmMessage = selectedClass
+      ? '업로드한 엑셀 내용으로 현재 강의실의 저장된 AI 채점/활동/세특 내용을 덮어씁니다. 계속하시겠습니까?'
+      : '엑셀 파일의 기본정보에 있는 강의실로 전체 기록을 업로드합니다. 강의실이 없으면 새로 만듭니다. 계속하시겠습니까?';
+    if (!confirm(confirmMessage)) {
       e.target.value = '';
       return;
     }
     setUploadingFullRecords(true);
     try {
-      const r = await recordsApi.importFull(selectedClass.id, file);
-      await loadDomainData(selectedClass);
+      const r = selectedClass
+        ? await recordsApi.importFull(selectedClass.id, file)
+        : await recordsApi.importFullFile(file);
+      const refreshed = await loadData();
+      const importedClassId = Number(r.data.classId || selectedClass?.id);
+      const targetClass = refreshed.classes.find(c => c.id === importedClassId);
+      if (targetClass) await handleSelectClass(targetClass);
       alert(`전체 기록 업로드 완료: ${r.data.saved}개 항목 저장`);
     } catch (err: any) {
       alert(`전체 기록 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
@@ -928,11 +937,11 @@ export function useRecordsPage() {
           }
         ),
       },
-    header: selectedClass ? {
+    header: {
         leading: recordsHeader.leading,
         actions: recordsHeader.actions,
         hideTitle: true,
-      } : undefined,
+      },
     contentProps: {
       selected: !!selectedClass,
       spellcheckProgress,

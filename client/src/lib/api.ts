@@ -59,6 +59,16 @@ export const criteriaApi = {
     form.append('file', file);
     return api.post(`/criteria/standards/upload${overwrite ? '?overwrite=true' : ''}`, form);
   },
+  exportStandardsConfig: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
+    api.get('/criteria/standards-config/export', {
+      params: { year, semester, grade, subject, domainName },
+      responseType: 'blob',
+    }),
+  importStandardsConfig: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/criteria/standards-config/upload', form);
+  },
   addManualStandardDomain: (data: {
     year: number;
     semester: number;
@@ -154,6 +164,11 @@ export const recordsApi = {
     const form = new FormData();
     form.append('file', file);
     return api.post(`/records/import-full/${classId}`, form);
+  },
+  importFullFile: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/records/import-full', form);
   },
   deleteStudentContent: (data: {
     classId: number;

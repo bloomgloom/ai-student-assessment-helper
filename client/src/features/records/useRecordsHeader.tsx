@@ -126,7 +126,20 @@ export function useRecordsHeader({
     </div>
   ) : undefined;
 
-  const actions: PageHeaderAction[] = selectedClass ? [
+  const actions: PageHeaderAction[] = [
+    {
+      key: 'import-full',
+      type: 'file',
+      icon: <Upload size={14} />,
+      loading: uploadingFullRecords,
+      inputRef: fullRecordsInputRef,
+      accept: '.xlsx,.xls',
+      onChange: handleImportFullRecords,
+      disabled: uploadingFullRecords,
+      title: '작업 내용 업로드',
+      ariaLabel: '작업 내용 업로드',
+    },
+    ...(!selectedClass ? [] : [
     ...(showDomainControls && domainFilter !== 'all' ? [{
       key: 'bulk-zip-upload',
       type: 'file' as const,
@@ -177,7 +190,7 @@ export function useRecordsHeader({
     }] : []),
     {
       key: 'save',
-      variant: 'primary',
+      variant: 'primary' as const,
       label: saving ? '저장 중...' : '저장',
       icon: <Save size={14} />,
       onClick: handleSaveAll,
@@ -185,23 +198,11 @@ export function useRecordsHeader({
     },
     {
       key: 'delete',
-      variant: 'danger',
+      variant: 'danger' as const,
       label: deleting ? '삭제 중...' : '삭제',
       icon: <Trash2 size={14} />,
       onClick: handleDeleteContent,
       disabled: deleting || saving || batchGenerating,
-    },
-    {
-      key: 'import-full',
-      type: 'file',
-      icon: <Upload size={14} />,
-      loading: uploadingFullRecords,
-      inputRef: fullRecordsInputRef,
-      accept: '.xlsx,.xls',
-      onChange: handleImportFullRecords,
-      disabled: uploadingFullRecords,
-      title: '작업 내용 업로드',
-      ariaLabel: '작업 내용 업로드',
     },
     {
       key: 'export-full',
@@ -210,7 +211,8 @@ export function useRecordsHeader({
       title: '작업 내용 다운로드',
       ariaLabel: '작업 내용 다운로드',
     },
-  ] : [];
+    ]),
+  ];
 
   return { leading, actions };
 }

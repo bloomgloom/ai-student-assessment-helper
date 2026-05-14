@@ -690,6 +690,121 @@ router.post('/standards/upload', upload.single('file'), async (req: Request, res
   }
 });
 
+router.get('/standards-config/export', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = Number(req.query.semester);
+  const grade = Number(req.query.grade);
+  const subject = String(req.query.subject || '');
+  const domainName = String(req.query.domainName || '');
+
+  const rows = await queryAll<{ code: string; content: string; level: string; description: string; sort_order: number }>(
+    `SELECT code, content, level, description, sort_order
+     FROM achievement_standards
+     WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?
+     ORDER BY sort_order, id`,
+    [year, semester, grade, subject, domainName]
+  );
+
+  const wb = new ExcelJS.Workbook();
+  const meta = wb.addWorksheet('기본정보');
+  meta.addRows([
+    ['학년도', year],
+    ['학기', semester],
+    ['학년', grade],
+    ['과목', subject],
+    ['영역', domainName],
+  ]);
+
+  const sheet = wb.addWorksheet('성취기준');
+  sheet.addRow(['sort_order', 'code', 'content', 'level', 'description']);
+  rows.forEach((row, index) => {
+    sheet.addRow([row.sort_order ?? index, row.code, row.content, row.level, row.description]);
+  });
+
+  for (const ws of wb.worksheets) {
+    ws.getRow(1).font = { bold: true };
+    ws.columns.forEach(col => {
+      const vals = (col.values as unknown[]).filter(v => v !== undefined && v !== null);
+      const maxLen = vals.length ? Math.max(...vals.map(v => String(v).length + 4)) : 14;
+      col.width = Math.max(14, Math.min(60, maxLen));
+      col.alignment = { vertical: 'top', wrapText: true };
+    });
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+
+  const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(`${year}_${semester}_${grade}_${subject}_${domainName}_성취기준.xlsx`)}`);
+  res.send(buffer);
+});
+
+router.post('/standards-config/upload', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
+
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(req.file.path);
+
+    const metaSheet = wb.getWorksheet('기본정보');
+    const meta: Record<string, string> = {};
+    if (metaSheet) {
+      metaSheet.eachRow((row) => {
+        const key = cellText(row.getCell(1).value);
+        if (key) meta[key] = cellText(row.getCell(2).value);
+      });
+    }
+
+    const year = Number(meta['학년도']);
+    const semester = Number(meta['학기']);
+    const grade = Number(meta['학년']);
+    const subject = String(meta['과목'] || '').trim();
+    const domainName = String(meta['영역'] || '').trim();
+    if (!year || !semester || !grade || !subject || !domainName) {
+      return res.status(400).json({ error: '기본정보 시트에서 학년도, 학기, 학년, 과목, 영역을 찾을 수 없습니다.' });
+    }
+
+    const sheet = wb.getWorksheet('성취기준');
+    if (!sheet) return res.status(400).json({ error: '"성취기준" 시트를 찾을 수 없습니다.' });
+    const h = headerMap(sheet.getRow(1));
+    const rows: { code: string; content: string; level: string; description: string; sort_order: number }[] = [];
+    sheet.eachRow((row, rowNum) => {
+      if (rowNum === 1) return;
+      const code = cellText(row.getCell(h.code).value);
+      const content = cellText(row.getCell(h.content).value);
+      const level = cellText(row.getCell(h.level).value);
+      const description = cellText(row.getCell(h.description).value);
+      if (!code && !content && !description) return;
+      rows.push({
+        sort_order: Number(cellText(row.getCell(h.sort_order).value)) || rows.length,
+        code,
+        content,
+        level,
+        description,
+      });
+    });
+
+    await transaction(async () => {
+      await execute(
+        'DELETE FROM achievement_standards WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?',
+        [year, semester, grade, subject, domainName]
+      );
+      for (const [index, row] of rows.entries()) {
+        await execute(
+          `INSERT INTO achievement_standards(year, semester, grade, subject, credit, domain_name, code, content, level, description, sort_order, source_filename)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [year, semester, grade, subject, 0, domainName, row.code, row.content, row.level, row.description, row.sort_order ?? index, '']
+        );
+      }
+    });
+
+    res.json({ ok: true, year, semester, grade, subject, domain_name: domainName, standards: rows.length });
+  } catch (e: unknown) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+  }
+});
+
 // --- 커스텀 수행평가 영역 (세특 전용) ---
 router.post('/custom-domains', async (req: Request, res: Response) => {
   const { year, semester, grade, subject, name } = req.body;

@@ -1,9 +1,9 @@
-import { BookOpen } from 'lucide-react';
+import { BookOpen, Download, Upload } from 'lucide-react';
 import { CRITERIA_PAGE_TEXT } from './constants';
 import { useCriteriaController } from './useCriteriaController';
 
 export function useCriteriaPage() {
-  const { fileRef, guide, criteria, standardsUpload } = useCriteriaController();
+  const { fileRef, configFileRef, guide, criteria, standardsUpload, handleDownloadConfig, handleUploadConfig } = useCriteriaController();
 
   return {
     sidebar: {
@@ -46,10 +46,29 @@ export function useCriteriaPage() {
         node: criteria.tree.node,
       },
     },
-    header: criteria.selected ? {
-      eyebrow: `${criteria.selected.year}학년도 ${criteria.selected.semester}학기 ${criteria.selected.grade}학년 > ${criteria.selected.subject}`,
-      title: criteria.selected.domain_name,
-    } : undefined,
+    header: {
+      eyebrow: criteria.selected ? `${criteria.selected.year}학년도 ${criteria.selected.semester}학기 ${criteria.selected.grade}학년 > ${criteria.selected.subject}` : undefined,
+      title: criteria.selected ? criteria.selected.domain_name : CRITERIA_PAGE_TEXT.sidebarTitle,
+      actions: [
+        {
+          key: 'upload-config',
+          type: 'file' as const,
+          icon: <Upload size={14} />,
+          inputRef: configFileRef,
+          accept: '.xlsx,.xls',
+          onChange: handleUploadConfig,
+          title: '작업 내용 업로드',
+          ariaLabel: '작업 내용 업로드',
+        },
+        ...(criteria.selected ? [{
+          key: 'download-config',
+          icon: <Download size={14} />,
+          onClick: handleDownloadConfig,
+          title: '작업 내용 다운로드',
+          ariaLabel: '작업 내용 다운로드',
+        }] : []),
+      ],
+    },
     contentProps: {
       selected: !!criteria.selected,
       standards: criteria.standards,
