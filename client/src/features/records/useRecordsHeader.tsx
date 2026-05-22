@@ -131,7 +131,6 @@ export function useRecordsHeader({
   const restoreAction: PageHeaderAction = {
     key: 'import-full',
     type: 'file',
-    label: '복원',
     icon: <Upload size={14} />,
     loading: uploadingFullRecords,
     inputRef: fullRecordsInputRef,
@@ -211,7 +210,6 @@ export function useRecordsHeader({
     restoreAction,
     {
       key: 'export-full',
-      label: '전체 내용 백업',
       icon: <Download size={14} />,
       onClick: handleExportFullRecords,
       title: '작업 내용 다운로드',
