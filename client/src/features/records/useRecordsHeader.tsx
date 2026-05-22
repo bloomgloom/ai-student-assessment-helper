@@ -126,20 +126,22 @@ export function useRecordsHeader({
     </div>
   ) : undefined;
 
+  const restoreAction: PageHeaderAction = {
+    key: 'import-full',
+    type: 'file',
+    label: '복원',
+    icon: <Upload size={14} />,
+    loading: uploadingFullRecords,
+    inputRef: fullRecordsInputRef,
+    accept: '.xlsx,.xls',
+    onChange: handleImportFullRecords,
+    disabled: uploadingFullRecords,
+    title: '작업 내용 업로드',
+    ariaLabel: '작업 내용 업로드',
+  };
+
   const actions: PageHeaderAction[] = [
-    {
-      key: 'import-full',
-      type: 'file',
-      icon: <Upload size={14} />,
-      loading: uploadingFullRecords,
-      inputRef: fullRecordsInputRef,
-      accept: '.xlsx,.xls',
-      onChange: handleImportFullRecords,
-      disabled: uploadingFullRecords,
-      title: '작업 내용 업로드',
-      ariaLabel: '작업 내용 업로드',
-    },
-    ...(!selectedClass ? [] : [
+    ...(!selectedClass ? [restoreAction] : [
     ...(showDomainControls && domainFilter !== 'all' ? [{
       key: 'bulk-zip-upload',
       type: 'file' as const,
@@ -189,14 +191,6 @@ export function useRecordsHeader({
       onClick: () => handleExport(showScoring ? 'scoring' : 'comments'),
     }] : []),
     {
-      key: 'save',
-      variant: 'primary' as const,
-      label: saving ? '저장 중...' : '저장',
-      icon: <Save size={14} />,
-      onClick: handleSaveAll,
-      disabled: saving,
-    },
-    {
       key: 'delete',
       variant: 'danger' as const,
       label: deleting ? '삭제 중...' : '삭제',
@@ -205,7 +199,17 @@ export function useRecordsHeader({
       disabled: deleting || saving || batchGenerating,
     },
     {
+      key: 'save',
+      variant: 'primary' as const,
+      label: saving ? '저장 중...' : '저장',
+      icon: <Save size={14} />,
+      onClick: handleSaveAll,
+      disabled: saving,
+    },
+    restoreAction,
+    {
       key: 'export-full',
+      label: '전체 내용 백업',
       icon: <Download size={14} />,
       onClick: handleExportFullRecords,
       title: '작업 내용 다운로드',
