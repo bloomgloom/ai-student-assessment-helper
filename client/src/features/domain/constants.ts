@@ -47,6 +47,8 @@ export const DOMAIN_TREE_TEXT = {
 } as const;
 
 export const DOMAIN_UPLOAD_TEXT = {
+  conflictConfirm: (data: { year: number; semester: number; grade: number; subject: string }) =>
+    `${data.year}학년도 ${data.semester}학기 ${data.grade}학년 ${data.subject}의 데이터가 이미 있습니다. 평가 영역 데이터를 덮어씌우시겠습니까?`,
   successMessage: (data: {
     year: number;
     semester: number;

@@ -574,14 +574,13 @@ router.post('/domains/upload', upload.single('file'), async (req: Request, res: 
   const originalName = decodeUploadFilename(req.file.originalname);
   try {
     const parsed = await parseAreaManagementExcel(req.file.path);
-    // Check if subject already exists in either table (unless overwrite is requested)
+    // Only existing real domain rows should block a domain upload.
+    // Standards for the same subject can legitimately be uploaded separately.
     if (!req.query.overwrite) {
       const existing = await queryOne(
-        `SELECT 1 as found FROM (
-          SELECT year, semester, grade, subject FROM subject_domains
-          UNION ALL
-          SELECT year, semester, grade, subject FROM achievement_standards
-        ) WHERE year=? AND semester=? AND grade=? AND subject=? LIMIT 1`,
+        `SELECT 1 as found FROM subject_domains
+         WHERE year=? AND semester=? AND grade=? AND subject=? AND sort_order >= 0
+         LIMIT 1`,
         [parsed.info.year, parsed.info.semester, parsed.info.grade, parsed.info.subject]
       );
       if (existing) {
@@ -653,11 +652,9 @@ router.post('/standards/upload', upload.single('file'), async (req: Request, res
     const parsed = await parseAchievementStandardsExcel(req.file.path);
     if (!req.query.overwrite) {
       const existing = await queryOne(
-        `SELECT 1 as found FROM (
-          SELECT year, semester, grade, subject FROM achievement_standards
-          UNION ALL
-          SELECT year, semester, grade, subject FROM subject_domains
-        ) WHERE year=? AND semester=? AND grade=? AND subject=? LIMIT 1`,
+        `SELECT 1 as found FROM achievement_standards
+         WHERE year=? AND semester=? AND grade=? AND subject=? AND sort_order >= 0
+         LIMIT 1`,
         [parsed.info.year, parsed.info.semester, parsed.info.grade, parsed.info.subject]
       );
       if (existing) {
