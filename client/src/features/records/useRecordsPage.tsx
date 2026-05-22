@@ -25,6 +25,18 @@ function getDomainColumnDefaultWidth(type: string) {
   return 80;
 }
 
+function hasScoringCriteria(items: EvalItem[] | undefined) {
+  return !!items?.some(item => item.item_type !== 'formula');
+}
+
+function normalizeRecordCriteriaTitles(items: any[]) {
+  const recordItems = items.filter(item => item.type === '항목');
+  const sourceItems = recordItems.length > 0 ? recordItems : [{ title: '기록' }];
+  return sourceItems.map((item, idx) => ({
+    title: String(item.title || '').trim() || (sourceItems.length === 1 ? '기록' : `기록 ${idx + 1}`),
+  }));
+}
+
 export function useRecordsPage() {
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [subjects, setSubjects] = useState<any[]>([]);
@@ -168,7 +180,7 @@ export function useRecordsPage() {
     setSelectedStudentIds(new Set());
 
     const subj = subjects.find(s => s.year === c.year && s.semester === c.semester && s.grade === c.grade && s.subject === c.subject);
-    if (!subj) return;
+    if (!subj) return { evalItemsMap: {}, commentsItemsMap: {} };
 
     // Load eval items for all fixed domains
     const eMap: Record<string, EvalItem[]> = {};
@@ -184,9 +196,7 @@ export function useRecordsPage() {
     await Promise.all(allDoms.map(async (d: any) => {
       try {
         const sr = await criteriaApi.getComments(c.year, c.semester, c.grade, c.subject, d.name);
-        siMap[d.name] = (sr.data as any[])
-          .filter(i => i.type === '항목' && i.title)
-          .map(i => ({ title: i.title }));
+        siMap[d.name] = normalizeRecordCriteriaTitles(sr.data as any[]);
       } catch { siMap[d.name] = []; }
     }));
     setCommentsItemsMap(siMap);
@@ -199,38 +209,25 @@ export function useRecordsPage() {
       map[`${item.student_id}_${item.content_type}_${item.domain}`] = parseContent(item.content);
     }
     setContents(map);
+    return { evalItemsMap: eMap, commentsItemsMap: siMap };
   }, [subjects]);
 
   const handleSelectClass = useCallback(async (c: ClassItem) => {
     setSelectedClass(c);
     setSelectedDomain('');
     setDomainFilter('all');
-    // 업로드된 파일 기준으로 토글 초기화
-    const hasScoring = !!c.scoring_filename;
-    const hasComments = !!c.comments_filename;
-    setShowScoring(hasScoring);
-    setShowComments(hasComments);
-    setShowComprehensive(hasComments || !hasScoring);
-    if (hasScoring && !hasComments) {
-      setShowScoring(true);
-      setShowComments(false);
-      setShowComprehensive(false);
-    } else if (!hasScoring && hasComments) {
-      setShowScoring(false);
-      setShowComments(true);
-      setShowComprehensive(true);
-    } else if (hasScoring && hasComments) {
-      setShowScoring(true);
-      setShowComments(true);
-      setShowComprehensive(true);
-    } else {
-      setShowScoring(false);
-      setShowComments(false);
-      setShowComprehensive(false);
-    }
+    setShowScoring(false);
+    setShowComments(false);
+    setShowComprehensive(true);
     localStorage.setItem(RECORDS_LAST_CLASS_KEY, String(c.id));
-    await loadDomainData(c);
-  }, [loadDomainData]);
+    const loaded = await loadDomainData(c);
+    const subj = subjects.find(s => s.year === c.year && s.semester === c.semester && s.grade === c.grade && s.subject === c.subject);
+    const fixedDomains = subj?.fixedDomains || [];
+    const allDomains = [...fixedDomains, ...(subj?.customDomains || [])];
+    setShowScoring(fixedDomains.some((d: any) => hasScoringCriteria(loaded.evalItemsMap[d.name])));
+    setShowComments(allDomains.some((d: any) => (loaded.commentsItemsMap[d.name] || []).length > 0));
+    setShowComprehensive(true);
+  }, [loadDomainData, subjects]);
 
   // 마지막 선택 강의실 복원
   useEffect(() => {
@@ -545,7 +542,7 @@ export function useRecordsPage() {
     const typeLabels = [
       ...(showScoring ? ['채점'] : []),
       ...(showComments ? ['기록'] : []),
-      ...(showComprehensive ? ['종합'] : []),
+      ...(showComprehensive ? ['세특'] : []),
     ];
     const typeLabel = typeLabels.join(', ');
     const targetLabel = selectedStudents.length > 0 ? `선택한 ${targetStudents.length}명` : `${targetStudents.length}명 전체`;
@@ -607,9 +604,9 @@ export function useRecordsPage() {
 
     const domainLabel = domainsToProcess.length > 1
       ? `전체 ${domainsToProcess.length}개 영역`
-      : (domainsToProcess[0] === SUBJECT_COMPREHENSIVE_DOMAIN ? '종합' : domainsToProcess[0]);
+      : (domainsToProcess[0] === SUBJECT_COMPREHENSIVE_DOMAIN ? '세특' : domainsToProcess[0]);
     const typeLabel = type === 'comments'
-      ? (explicitDomain === SUBJECT_COMPREHENSIVE_DOMAIN ? '종합' : '기록')
+      ? (explicitDomain === SUBJECT_COMPREHENSIVE_DOMAIN ? '세특' : '기록')
       : '채점';
     const targetLabel = selectedStudents.length > 0 ? `선택한 ${targetStudents.length}명` : `${targetStudents.length}명 전체`;
     if (!confirm(`${targetLabel} "${domainLabel}" ${typeLabel} 일괄 생성하시겠습니까?`)) return;
@@ -810,6 +807,38 @@ export function useRecordsPage() {
       s.subject === selectedClass.subject
     )
     : undefined;
+
+  const domainsInFilter = useMemo(() => {
+    if (!selectedSubject) return [] as any[];
+    const allDomains = [
+      ...(selectedSubject.fixedDomains || []),
+      ...(selectedSubject.customDomains || []),
+    ];
+    return domainFilter === 'all'
+      ? allDomains
+      : allDomains.filter((d: any) => d.name === domainFilter);
+  }, [selectedSubject, domainFilter]);
+
+  const canShowScoring = useMemo(() => {
+    if (!selectedSubject) return false;
+    const fixedDomains = selectedSubject.fixedDomains || [];
+    const targetDomains = domainFilter === 'all'
+      ? fixedDomains
+      : fixedDomains.filter((d: any) => d.name === domainFilter);
+    return targetDomains.some((d: any) => hasScoringCriteria(evalItemsMap[d.name]));
+  }, [selectedSubject, domainFilter, evalItemsMap]);
+
+  const canShowComments = useMemo(() => {
+    return domainsInFilter.some((d: any) => (commentsItemsMap[d.name] || []).length > 0);
+  }, [domainsInFilter, commentsItemsMap]);
+
+  useEffect(() => {
+    if (!selectedClass) return;
+    if (!canShowScoring && showScoring) setShowScoring(false);
+    if (!canShowComments && showComments) setShowComments(false);
+    if (!showScoring && !showComments && !showComprehensive) setShowComprehensive(true);
+  }, [selectedClass, canShowScoring, canShowComments, showScoring, showComments, showComprehensive]);
+
   useEffect(() => {
     if (!selectedSubject || domainFilter === 'all') return;
     const allowedDomains = [
@@ -825,6 +854,8 @@ export function useRecordsPage() {
     showScoring,
     showComments,
     showComprehensive,
+    canShowScoring,
+    canShowComments,
     setShowScoring,
     setShowComments,
     setShowComprehensive,
@@ -1019,7 +1050,7 @@ export function useRecordsPage() {
                       <>
                         <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 select-none"
                           style={{ width: compWidth, minWidth: compWidth }}>
-                          세특 (과목 공통)
+                          과목별세부능력및특기사항
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
                             onMouseDown={e => handleResizeStart(e, '_comp', 320)} />
                         </th>

@@ -10,6 +10,8 @@ interface UseRecordsHeaderOptions {
   showScoring: boolean;
   showComments: boolean;
   showComprehensive: boolean;
+  canShowScoring: boolean;
+  canShowComments: boolean;
   setShowScoring: (value: boolean) => void;
   setShowComments: (value: boolean) => void;
   setShowComprehensive: (value: boolean) => void;
@@ -41,6 +43,8 @@ export function useRecordsHeader({
   showScoring,
   showComments,
   showComprehensive,
+  canShowScoring,
+  canShowComments,
   setShowScoring,
   setShowComments,
   setShowComprehensive,
@@ -66,6 +70,11 @@ export function useRecordsHeader({
   handleExportFullRecords,
 }: UseRecordsHeaderOptions) {
   const showDomainControls = showScoring || showComments;
+  const toggleButtonClassName = (active: boolean, enabled = true) =>
+    `px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!enabled ? 'opacity-40 cursor-not-allowed text-gray-400' :
+      active ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
+      }`;
+
   const toggleView = (target: 'scoring' | 'comments' | 'comprehensive') => {
     const nextScoring = target === 'scoring' ? !showScoring : showScoring;
     const nextComments = target === 'comments' ? !showComments : showComments;
@@ -80,31 +89,24 @@ export function useRecordsHeader({
     <div className="flex min-w-0 items-center gap-2">
       <div className="flex shrink-0 bg-gray-100 p-1 rounded gap-1 border border-gray-200">
         <button
-          className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass.scoring_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
-            showScoring ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          disabled={!selectedClass.scoring_filename}
+          className={toggleButtonClassName(showScoring, canShowScoring)}
+          disabled={!canShowScoring}
           onClick={() => toggleView('scoring')}
         >
           채점
         </button>
         <button
-          className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass.comments_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
-            showComments ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          disabled={!selectedClass.comments_filename}
+          className={toggleButtonClassName(showComments, canShowComments)}
+          disabled={!canShowComments}
           onClick={() => toggleView('comments')}
         >
-          세특
+          기록
         </button>
         <button
-          className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!selectedClass.comments_filename ? 'opacity-40 cursor-not-allowed text-gray-400' :
-            showComprehensive ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          disabled={!selectedClass.comments_filename}
+          className={toggleButtonClassName(showComprehensive)}
           onClick={() => toggleView('comprehensive')}
         >
-          종합
+          세특
         </button>
       </div>
 
@@ -119,7 +121,7 @@ export function useRecordsHeader({
             <option key={d.name} value={d.name}>{d.name}</option>
           ))}
           {showComments && selectedSubject?.customDomains.map((d: any) => (
-            <option key={d.name} value={d.name}>{d.name} (세특)</option>
+            <option key={d.name} value={d.name}>{d.name} (기록)</option>
           ))}
         </select>
       )}
@@ -171,7 +173,7 @@ export function useRecordsHeader({
     ...(showComprehensive ? [{
       key: 'generate-comments',
       variant: 'rainbow' as const,
-      label: '종합',
+      label: '세특',
       onClick: () => handleBatchGenerate('comments', SUBJECT_COMPREHENSIVE_DOMAIN),
       disabled: batchGenerating,
     }] : []),

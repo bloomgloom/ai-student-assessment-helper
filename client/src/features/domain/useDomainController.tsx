@@ -36,6 +36,10 @@ function compactPromptRows(rows: AiPromptRow[]) {
   return rows.filter(item => item.prompt_key && item.prompt.trim());
 }
 
+function createDefaultCommentsItem(sortOrder = 0): CommentsItem {
+  return { type: '항목', title: '기록', prompt: '', extensions: '', sort_order: sortOrder };
+}
+
 function parseAiJson<T>(value: string): T {
   return JSON.parse(value.replace(/```json/g, '').replace(/```/g, '').trim());
 }
@@ -104,7 +108,12 @@ export function useDomainController() {
       .filter(i => i.type === '성취기준')
       .map(i => { try { return JSON.parse(i.extensions || '{}'); } catch { return { domain_name_ref: '', code: '', content: '' }; } });
     setStandardRefs(refs);
-    setCommentsItems(allItems.filter(i => i.type !== '성취기준' && i.type !== '활동공통'));
+    const editableComments = allItems.filter(i => i.type !== '성취기준' && i.type !== '활동공통');
+    const hasRecordItem = editableComments.some(i => i.type === '항목');
+    setCommentsItems(domainName !== SUBJECT_COMPREHENSIVE_DOMAIN && !hasRecordItem
+      ? [...editableComments, createDefaultCommentsItem(editableComments.length)]
+      : editableComments
+    );
 
     // 성취기준 관리 데이터 로드 (과목/영역 자동 생성 모두 성취기준을 참조)
     try {
@@ -456,7 +465,7 @@ export function useDomainController() {
   };
 
   const addDomainCommentsItem = () => {
-    setCommentsItems(p => [...p, { type: '항목', title: '', prompt: '', extensions: '', sort_order: p.length }]);
+    setCommentsItems(p => [...p, createDefaultCommentsItem(p.length)]);
     setIsDirty(true);
   };
 
