@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, WheelEvent, useRef } from 'react';
 import { Loader2, Square } from 'lucide-react';
 
 type OverlayTone = 'blue' | 'green' | 'red';
@@ -17,6 +17,7 @@ interface AiProgressOverlayProps {
   tone?: OverlayTone;
   backdrop?: 'strong' | 'soft';
   icon?: ReactNode;
+  allowBackgroundScroll?: boolean;
 }
 
 const toneClasses: Record<OverlayTone, { icon: string; track: string; bar: string }> = {
@@ -39,12 +40,36 @@ export function AiProgressOverlay({
   tone = 'blue',
   backdrop = 'strong',
   icon,
+  allowBackgroundScroll = false,
 }: AiProgressOverlayProps) {
+  const overlayRef = useRef<HTMLDivElement>(null);
   const colors = toneClasses[tone];
   const percent = Math.max(0, Math.min(100, progress));
 
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (!allowBackgroundScroll) return;
+
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+
+    overlay.style.pointerEvents = 'none';
+    const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
+    overlay.style.pointerEvents = '';
+
+    const scrollable = target?.closest<HTMLElement>('.overflow-auto, .overflow-y-auto, .overflow-x-auto');
+    if (!scrollable) return;
+
+    scrollable.scrollBy({ left: event.deltaX, top: event.deltaY });
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   return (
-    <div className={`fixed inset-0 z-[100] ${backdrop === 'strong' ? 'bg-black/50' : 'bg-black/30'} flex items-center justify-center`}>
+    <div
+      ref={overlayRef}
+      className={`fixed inset-0 z-[100] ${backdrop === 'strong' ? 'bg-black/50' : 'bg-black/30'} flex items-center justify-center`}
+      onWheel={handleWheel}
+    >
       <div className="bg-white rounded-2xl shadow-2xl w-96 p-6 flex flex-col gap-5">
         <div className="text-center">
           <div className="flex items-center justify-center gap-2 mb-1">

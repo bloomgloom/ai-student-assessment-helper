@@ -45,6 +45,7 @@ export function AiGlobalOverlay() {
       stopLabel={batchRunning ? '중단' : '닫기'}
       tone={failed ? 'red' : completed ? 'green' : 'blue'}
       backdrop={batchRunning ? 'strong' : 'soft'}
+      allowBackgroundScroll={batchRunning}
       icon={batchRunning
         ? <Loader2 size={18} className="animate-spin text-blue-600" />
         : failed
