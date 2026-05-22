@@ -45,27 +45,37 @@ function getArtifactExt(filename: string): string {
 }
 
 /**
- * 파일명에서 "5자리 학번 + 한글 이름(글자수 무제한)" 패턴을 찾아
+ * 파일명에서 "5자리 학번 + 이름" 패턴을 찾아
  * 주어진 학생 목록과 학번·이름 모두 일치하는 학생을 반환한다.
- * - 학번과 이름은 반드시 붙여 써야 함 (사이에 공백·구분자 허용 안 함)
- * - 학번/이름 각각의 내부는 붙여 씀
+ * - 파일명 앞/중간/뒤에 다른 문자열이 있어도 허용
+ * - 학번은 5자리 숫자이며, 이름보다 앞에 있어야 함
+ * - 이름은 2~5자 학생명만 대상으로 함
  * - 순서는 반드시 학번 → 이름 순
  */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function matchStudentByFilename(
   decodedName: string,
   students: { id: number; student_num: number; name: string }[]
 ): { id: number; student_num: number; name: string } | undefined {
-  // 학번(5자리) + 이름(한글 1자 이상, 붙여쓰기 필수) 패턴
-  // [가-힣]+ 탐욕 매칭이 모든 한글을 소비하므로 DB 이름과 정확 비교로 길이 제한 불필요
-  const pattern = /(?<![0-9])(\d{5})([가-힣]+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(decodedName)) !== null) {
-    const numInFile = parseInt(match[1], 10);
-    const nameInFile = match[2];
-    const found = students.find(
-      s => s.student_num === numInFile && s.name === nameInFile
-    );
-    if (found) return found;
+  const normalizedName = decodedName.normalize('NFC');
+  const candidates = [...students]
+    .filter(student => student.name.length >= 2 && student.name.length <= 5)
+    .sort((a, b) => b.name.length - a.name.length);
+
+  for (const student of candidates) {
+    const numberPattern = new RegExp(`(?<![0-9])${student.student_num}(?![0-9])`, 'g');
+    const namePattern = new RegExp(escapeRegExp(student.name), 'g');
+
+    const numberPositions = [...normalizedName.matchAll(numberPattern)].map(match => match.index ?? -1);
+    if (numberPositions.length === 0) continue;
+
+    for (const nameMatch of normalizedName.matchAll(namePattern)) {
+      const nameIndex = nameMatch.index ?? -1;
+      if (numberPositions.some(numberIndex => numberIndex >= 0 && numberIndex < nameIndex)) return student;
+    }
   }
   return undefined;
 }
