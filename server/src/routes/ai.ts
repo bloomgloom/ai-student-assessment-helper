@@ -230,7 +230,12 @@ function extractIpynbInputText(buffer: Buffer): string {
   if (!Array.isArray(notebook.cells)) return '';
 
   const chunks: string[] = [];
+  let skippedFirstMarkdown = false;
   notebook.cells.forEach((cell, index) => {
+    if (cell.cell_type === 'markdown' && !skippedFirstMarkdown) {
+      skippedFirstMarkdown = true;
+      return;
+    }
     const source = normalizeNotebookSource(cell.source).trim();
     if (!source) return;
     if (cell.cell_type === 'markdown') {
