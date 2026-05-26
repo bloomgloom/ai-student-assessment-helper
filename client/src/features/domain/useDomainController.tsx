@@ -625,7 +625,7 @@ export function useDomainController() {
     setIsDirty(true);
   };
   const removeEvalItem = (idx: number) => {
-    setEvalItems(p => p.filter((_, i) => i !== idx && p[i].item_type !== 'formula'));
+    setEvalItems(p => p.filter((item, i) => i !== idx || item.item_type === 'formula'));
     setIsDirty(true);
   };
 
