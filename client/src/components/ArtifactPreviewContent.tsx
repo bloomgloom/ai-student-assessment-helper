@@ -5,6 +5,8 @@ import { artifactsApi } from '../lib/api';
 const CodeArtifactPreview = lazy(() => import('./preview/CodeArtifactPreview'));
 const PdfArtifactPreview = lazy(() => import('./preview/PdfArtifactPreview'));
 const HwpxArtifactPreview = lazy(() => import('./preview/HwpxArtifactPreview'));
+const CsvArtifactPreview = lazy(() => import('./preview/CsvArtifactPreview'));
+const IpynbArtifactPreview = lazy(() => import('./preview/IpynbArtifactPreview'));
 
 interface Artifact {
   id: number;
@@ -27,6 +29,8 @@ function isCodeFile(f: string) { return ['js','jsx','ts','tsx','py','c','cpp','h
 function isHtmlFile(f: string) { return getExt(f) === 'html'; }
 function isPdfFile(f: string) { return getExt(f) === 'pdf'; }
 function isHwpxFile(f: string) { return getExt(f) === 'hwpx'; }
+function isCsvFile(f: string) { return getExt(f) === 'csv'; }
+function isIpynbFile(f: string) { return getExt(f) === 'ipynb'; }
 
 function PreviewFallback() {
   return (
@@ -56,6 +60,14 @@ export default function ArtifactPreviewContent({
       ) : isHwpxFile(artifact.filename) ? (
         <Suspense fallback={<PreviewFallback />}>
           <HwpxArtifactPreview fileUrl={artifactsApi.fileUrl(artifact.id)} />
+        </Suspense>
+      ) : isCsvFile(artifact.filename) ? (
+        <Suspense fallback={<PreviewFallback />}>
+          <CsvArtifactPreview fileUrl={artifactsApi.fileUrl(artifact.id)} />
+        </Suspense>
+      ) : isIpynbFile(artifact.filename) ? (
+        <Suspense fallback={<PreviewFallback />}>
+          <IpynbArtifactPreview fileUrl={artifactsApi.fileUrl(artifact.id)} />
         </Suspense>
       ) : isHtmlFile(artifact.filename) ? (
         <iframe

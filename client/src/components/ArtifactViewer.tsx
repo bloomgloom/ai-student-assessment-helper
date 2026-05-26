@@ -30,6 +30,8 @@ function extBadgeClass(filename: string): string {
     case 'pdf':  return 'bg-red-100 text-red-700 border-red-300';
     case 'html': return 'bg-orange-100 text-orange-700 border-orange-300';
     case 'hwpx': return 'bg-teal-100 text-teal-700 border-teal-300';
+    case 'csv':  return 'bg-emerald-100 text-emerald-700 border-emerald-300';
+    case 'ipynb': return 'bg-indigo-100 text-indigo-700 border-indigo-300';
     case 'java': return 'bg-red-100 text-red-800 border-red-300';
     case 'js':
     case 'ts':

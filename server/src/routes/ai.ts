@@ -207,6 +207,45 @@ function buildArtifactPromptLabel(index: number, ext: string): string {
   return `산출물 ${index + 1}${normalizedExt}`;
 }
 
+function decodeTextBuffer(buffer: Buffer): string {
+  const encodings = ['utf-8', 'euc-kr', 'utf-16le'];
+  for (const encoding of encodings) {
+    try {
+      const decoded = new TextDecoder(encoding, { fatal: encoding === 'utf-8' }).decode(buffer);
+      if (!decoded.includes('\uFFFD')) return decoded;
+    } catch { /* try next encoding */ }
+  }
+  return buffer.toString('utf8');
+}
+
+function normalizeNotebookSource(source: unknown): string {
+  if (Array.isArray(source)) return source.join('');
+  return typeof source === 'string' ? source : '';
+}
+
+function extractIpynbInputText(buffer: Buffer): string {
+  const notebook = JSON.parse(decodeTextBuffer(buffer)) as {
+    cells?: { cell_type?: string; source?: unknown }[];
+  };
+  if (!Array.isArray(notebook.cells)) return '';
+
+  const chunks: string[] = [];
+  notebook.cells.forEach((cell, index) => {
+    const source = normalizeNotebookSource(cell.source).trim();
+    if (!source) return;
+    if (cell.cell_type === 'markdown') {
+      chunks.push(`[Markdown Cell ${index + 1}]\n${source}`);
+    } else if (cell.cell_type === 'code') {
+      chunks.push(`[Code Cell ${index + 1}]\n\`\`\`python\n${source}\n\`\`\``);
+    }
+  });
+  return chunks.join('\n\n');
+}
+
+function extractCsvInputText(buffer: Buffer): string {
+  return decodeTextBuffer(buffer).trim();
+}
+
 async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[]): Promise<boolean> {
   let hasContent = false;
   const codeExts: Record<string, string> = {
@@ -222,6 +261,22 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
         const text = await extractHwpxText(fs.readFileSync(artifact.filepath), { skipFirstTableRow: true });
         if (text) {
           parts.push(`[${promptLabel}]\n[HWPX XML 텍스트 추출: 개인정보 표 첫 행 제외]\n${text}\n---`);
+          hasContent = true;
+        }
+      } catch { /* skip */ }
+    } else if (ext === 'ipynb') {
+      try {
+        const text = extractIpynbInputText(fs.readFileSync(artifact.filepath));
+        if (text) {
+          parts.push(`[${promptLabel}]\n[Jupyter Notebook 입력 추출: 파일명 및 실행 결과 제외]\n${text}\n---`);
+          hasContent = true;
+        }
+      } catch { /* skip */ }
+    } else if (ext === 'csv') {
+      try {
+        const text = extractCsvInputText(fs.readFileSync(artifact.filepath));
+        if (text) {
+          parts.push(`[${promptLabel}]\n[CSV 데이터: 파일명 제외]\n\`\`\`csv\n${text}\n\`\`\`\n---`);
           hasContent = true;
         }
       } catch { /* skip */ }
