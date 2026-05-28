@@ -50,16 +50,6 @@ function safePathSegment(value: string): string {
     .trim() || '_';
 }
 
-function formatRoomSegment(room: string): string {
-  const normalizedRoom = room.normalize('NFC').trim();
-  if (!normalizedRoom) return '강의실_';
-  return normalizedRoom.includes('강의실') ? normalizedRoom : `${normalizedRoom}강의실`;
-}
-
-function getClassNum(studentNum: number): number {
-  return Math.floor((studentNum % 10000) / 100);
-}
-
 function uniqueArtifactPath(baseDir: string, filename: string, index: number): string {
   const normalizedName = safePathSegment(path.basename(filename.normalize('NFC')));
   const candidate = path.join(baseDir, `${Date.now()}_${index}_${normalizedName}`);
@@ -313,14 +303,12 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
 
   const baseUploadDir = path.join(
     UPLOAD_DIR,
-    safePathSegment(`${student.year}학년도`),
-    safePathSegment(`${student.semester}학기`),
-    safePathSegment(`${student.grade}학년`),
+    String(student.year),
+    String(student.semester),
+    String(student.grade),
     safePathSegment(student.subject),
-    safePathSegment(formatRoomSegment(student.room)),
-    safePathSegment(`${getClassNum(student.student_num)}반`),
-    safePathSegment(domain),
-    safePathSegment(`${student.student_num}_${student.name}`)
+    safePathSegment(student.room),
+    safePathSegment(domain)
   );
   fs.mkdirSync(baseUploadDir, { recursive: true });
 
