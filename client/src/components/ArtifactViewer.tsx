@@ -8,6 +8,7 @@ const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
 interface Artifact {
   id: number;
   filename: string;
+  filepath?: string;
   mime_type: string;
   domain: string;
   uploaded_at: string;
@@ -86,8 +87,15 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
     if (!e.target.files?.length) return;
     setUploading(true);
     try {
-      await artifactsApi.upload(studentId, domain, e.target.files);
+      const r = await artifactsApi.upload(studentId, domain, e.target.files);
       await loadArtifacts();
+      const storageDir = r.data?.storageDir;
+      const uploaded = r.data?.uploaded ?? e.target.files.length;
+      if (storageDir) {
+        alert(`${uploaded}개 파일 업로드 완료\n저장 위치: ${storageDir}`);
+      }
+    } catch (err: any) {
+      alert(`파일 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
     } finally {
       setUploading(false);
       e.target.value = '';
@@ -122,7 +130,7 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
           <button
             className={`px-2 py-0.5 text-[11px] font-bold rounded border cursor-pointer whitespace-nowrap ${extBadgeClass(a.filename)}`}
             onClick={() => handleView(a)}
-            title={a.filename}
+            title={a.filepath ? `${a.filename}\n저장 위치: ${a.filepath}` : a.filename}
           >
             {getExtLabel(a.filename)}
           </button>
@@ -148,7 +156,14 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="bg-white rounded-lg shadow-xl w-[85vw] h-[85vh] flex flex-col">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
-              <span className="font-medium text-sm text-gray-800 truncate max-w-[60%]">{viewing.filename}</span>
+              <div className="min-w-0 max-w-[60%]">
+                <div className="font-medium text-sm text-gray-800 truncate">{viewing.filename}</div>
+                {viewing.filepath && (
+                  <div className="text-[11px] text-gray-500 truncate" title={viewing.filepath}>
+                    저장 위치: {viewing.filepath}
+                  </div>
+                )}
+              </div>
               <div className="flex gap-2 shrink-0">
                 <a href={artifactsApi.viewerUrl(viewing.id)} target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs py-1">
                   <Eye size={13} /> 새 탭

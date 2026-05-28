@@ -42,8 +42,29 @@ function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function getArtifactExt(filename: string): string {
-  return path.extname(filename.normalize('NFC')).toLowerCase();
+function safePathSegment(value: string): string {
+  return value
+    .normalize('NFC')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim() || '_';
+}
+
+function formatRoomSegment(room: string): string {
+  const normalizedRoom = room.normalize('NFC').trim();
+  if (!normalizedRoom) return '강의실_';
+  return normalizedRoom.includes('강의실') ? normalizedRoom : `${normalizedRoom}강의실`;
+}
+
+function getClassNum(studentNum: number): number {
+  return Math.floor((studentNum % 10000) / 100);
+}
+
+function uniqueArtifactPath(baseDir: string, filename: string, index: number): string {
+  const normalizedName = safePathSegment(path.basename(filename.normalize('NFC')));
+  const candidate = path.join(baseDir, `${Date.now()}_${index}_${normalizedName}`);
+  if (!fs.existsSync(candidate)) return candidate;
+  return path.join(baseDir, `${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}_${normalizedName}`);
 }
 
 /**
@@ -87,25 +108,6 @@ async function deleteArtifactRows(rows: { id: number; filepath: string }[]): Pro
     try { if (fs.existsSync(row.filepath)) fs.unlinkSync(row.filepath); } catch {}
     await execute('DELETE FROM artifacts WHERE id=?', [row.id]);
   }
-}
-
-async function deleteArtifactsByStudentDomainExt(studentId: number | string, domain: string, ext: string): Promise<void> {
-  const normalizedExt = ext.toLowerCase();
-  if (!normalizedExt) return;
-
-  const existing = await queryAll<{ id: number; filename: string; filepath: string }>(
-    'SELECT id, filename, filepath FROM artifacts WHERE student_id=? AND domain=?',
-    [studentId, domain]
-  );
-  await deleteArtifactRows(existing.filter(row => getArtifactExt(row.filename) === normalizedExt));
-}
-
-async function deleteArtifactByStudentDomainFilename(studentId: number | string, domain: string, filename: string): Promise<void> {
-  const existing = await queryAll<{ id: number; filepath: string }>(
-    'SELECT id, filepath FROM artifacts WHERE student_id=? AND domain=? AND filename=?',
-    [studentId, domain, filename]
-  );
-  await deleteArtifactRows(existing);
 }
 
 async function clearArtifactsForClassDomain(classId: number | string, domain: string): Promise<void> {
@@ -284,36 +286,84 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
   if (!files?.length) return res.status(400).json({ error: '파일이 없습니다.' });
 
   const domain = (req.body.domain as string) || '';
-  const inserted: number[] = [];
+  const student = await queryOne<{
+    id: number;
+    student_num: number;
+    name: string;
+    year: number;
+    semester: number;
+    grade: number;
+    subject: string;
+    room: string;
+  }>(
+    `SELECT cs.id, cs.student_num, cs.name, c.year, c.semester, c.grade, c.subject, c.room
+     FROM class_students cs
+     JOIN classes c ON c.id = cs.class_id
+     WHERE cs.id=?`,
+    [req.params.studentId]
+  );
+  if (!student) {
+    for (const file of files) {
+      try { if (file.path) fs.unlinkSync(file.path); } catch {}
+    }
+    return res.status(404).json({ error: '학생을 찾을 수 없습니다.' });
+  }
+
+  const uploadNames = files.map(file => decodeUploadFilename(file.originalname).normalize('NFC'));
+
+  const baseUploadDir = path.join(
+    UPLOAD_DIR,
+    safePathSegment(`${student.year}학년도`),
+    safePathSegment(`${student.semester}학기`),
+    safePathSegment(`${student.grade}학년`),
+    safePathSegment(student.subject),
+    safePathSegment(formatRoomSegment(student.room)),
+    safePathSegment(`${getClassNum(student.student_num)}반`),
+    safePathSegment(domain),
+    safePathSegment(`${student.student_num}_${student.name}`)
+  );
+  fs.mkdirSync(baseUploadDir, { recursive: true });
+
+  const inserted: Array<{ id: number; filename: string; filepath: string }> = [];
+  const movedPaths: string[] = [];
 
   try {
-    for (const file of files) {
-      let origName = decodeUploadFilename(file.originalname);
+    for (const [index, file] of files.entries()) {
+      const origName = uploadNames[index];
       const ext = path.extname(origName).toLowerCase();
 
-      let finalPath = file.path;
-      let finalName = origName;
+      const finalPath = uniqueArtifactPath(baseUploadDir, origName, index);
+      const finalName = origName;
       let mimeType = file.mimetype;
 
       if (ext === '.hwpx') {
         mimeType = TEXT_CONTENT_TYPES['.hwpx'];
-        await deleteArtifactByStudentDomainFilename(
-          req.params.studentId,
-          domain,
-          origName.replace(/\.hwpx$/i, '.html')
-        );
       }
 
-      // 기존 도구와 동일하게 같은 학생/영역의 같은 확장자 파일은 새 파일로 교체한다.
-      await deleteArtifactsByStudentDomainExt(req.params.studentId, domain, getArtifactExt(finalName));
+      fs.renameSync(file.path, finalPath);
+      movedPaths.push(finalPath);
       const r = await execute(
         'INSERT INTO artifacts(student_id, domain, filename, filepath, mime_type) VALUES(?,?,?,?,?)',
         [req.params.studentId, domain, finalName, finalPath, mimeType]
       );
-      inserted.push(Number(r.lastInsertRowid));
+      inserted.push({ id: Number(r.lastInsertRowid), filename: finalName, filepath: finalPath });
     }
-    res.json({ uploaded: inserted.length, ids: inserted });
+    res.json({
+      uploaded: inserted.length,
+      artifacts: inserted,
+      storageDir: baseUploadDir,
+      message: `${inserted.length}개 파일을 업로드했습니다.`,
+    });
   } catch (e: any) {
+    for (const row of inserted) {
+      try { await execute('DELETE FROM artifacts WHERE id=?', [row.id]); } catch {}
+    }
+    for (const file of files) {
+      try { if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
+    }
+    for (const movedPath of movedPaths) {
+      try { if (fs.existsSync(movedPath)) fs.unlinkSync(movedPath); } catch {}
+    }
     res.status(500).json({ error: e.message });
   }
 });
@@ -420,7 +470,7 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
 // ── 파일 서빙 ──────────────────────────────────────────────────────────────────
 router.get('/:id', async (req: Request, res: Response) => {
   const artifact = await queryOne(
-    'SELECT id, filename, mime_type, domain, uploaded_at FROM artifacts WHERE id=?',
+    'SELECT id, filename, filepath, mime_type, domain, uploaded_at FROM artifacts WHERE id=?',
     [req.params.id]
   );
   if (!artifact) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
