@@ -87,13 +87,8 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
     if (!e.target.files?.length) return;
     setUploading(true);
     try {
-      const r = await artifactsApi.upload(studentId, domain, e.target.files);
+      await artifactsApi.upload(studentId, domain, e.target.files);
       await loadArtifacts();
-      const storageDir = r.data?.storageDir;
-      const uploaded = r.data?.uploaded ?? e.target.files.length;
-      if (storageDir) {
-        alert(`${uploaded}개 파일 업로드 완료\n저장 위치: ${storageDir}`);
-      }
     } catch (err: any) {
       alert(`파일 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
     } finally {
