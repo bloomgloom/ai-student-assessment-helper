@@ -20,12 +20,14 @@ export function SettingsContent({
   resetConfirm,
   setResetConfirm,
   browsingStorage,
+  inputOptionsSaving,
   compatibleModels,
   fetchingModels,
   modelFetchError,
   handleProviderChange,
   handleFetchCompatibleModels,
   handleSave,
+  handleInputOptionChange,
   handleTest,
   handleReset,
   handleBrowseStoragePath,
@@ -40,6 +42,46 @@ export function SettingsContent({
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable">
       <div className="min-w-[720px] max-w-2xl p-6">
       {activeTab === 'ai' && (
+      <div className="space-y-6">
+      <div className="card p-6 space-y-5">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-800">AI 입력 옵션</h3>
+          <p className="text-xs text-gray-400 mt-1">체크하면 바로 적용됩니다.</p>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded"
+              checked={settings.loggingEnabled}
+              disabled={inputOptionsSaving}
+              onChange={(e) => handleInputOptionChange('loggingEnabled', e.target.checked)}
+            />
+            <span className="text-sm font-medium text-gray-700">LLM 요청/응답 로그 저장</span>
+          </label>
+          <p className="text-xs text-gray-400 mt-1 ml-6">
+            켜면 실행 단위별 입력과 출력을 <code>.log</code> 폴더에 저장합니다. 학생 산출물 내용이 포함될 수 있습니다.
+          </p>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded"
+              checked={settings.artifactStripIntroBlocks}
+              disabled={inputOptionsSaving}
+              onChange={(e) => handleInputOptionChange('artifactStripIntroBlocks', e.target.checked)}
+            />
+            <span className="text-sm font-medium text-gray-700">산출물 첫 설명 블록 제외</span>
+          </label>
+          <p className="text-xs text-gray-400 mt-1 ml-6">
+            켜면 HWPX 첫 표 행, IPYNB 첫 마크다운 셀, 코드 파일 맨 앞의 블록 주석이나 docstring을 AI 입력에서 제외합니다.
+          </p>
+        </div>
+      </div>
+
       <div className="card p-6 space-y-5">
 
         {/* Provider */}
@@ -193,38 +235,6 @@ export function SettingsContent({
           </p>
         </div>
 
-        {/* LLM 요청/응답 로그 */}
-        <div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              className="w-4 h-4 rounded"
-              checked={settings.loggingEnabled}
-              onChange={(e) => setSettings((s) => ({ ...s, loggingEnabled: e.target.checked }))}
-            />
-            <span className="text-sm font-medium text-gray-700">LLM 요청/응답 로그 저장</span>
-          </label>
-          <p className="text-xs text-gray-400 mt-1 ml-6">
-            켜면 실행 단위별 입력과 출력을 <code>.log</code> 폴더에 저장합니다. 학생 산출물 내용이 포함될 수 있습니다.
-          </p>
-        </div>
-
-        {/* 산출물 입력 전처리 */}
-        <div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              className="w-4 h-4 rounded"
-              checked={settings.artifactStripIntroBlocks}
-              onChange={(e) => setSettings((s) => ({ ...s, artifactStripIntroBlocks: e.target.checked }))}
-            />
-            <span className="text-sm font-medium text-gray-700">산출물 첫 설명 블록 제외</span>
-          </label>
-          <p className="text-xs text-gray-400 mt-1 ml-6">
-            켜면 HWPX 첫 표 행, IPYNB 첫 마크다운 셀, 코드 파일 맨 앞의 블록 주석이나 docstring을 AI 입력에서 제외합니다.
-          </p>
-        </div>
-
         {/* 저장 / 테스트 */}
         <div className="flex items-center gap-3 pt-2">
           <button className="btn-primary" onClick={handleSave} disabled={saving}>
@@ -241,6 +251,18 @@ export function SettingsContent({
             </span>
           )}
         </div>
+
+        <div className="border-t border-gray-100 pt-4">
+          <h3 className="text-sm font-semibold mb-2">공급자별 안내</h3>
+          <ul className="text-xs text-gray-600 space-y-1.5">
+            <li><span className="font-medium">Google Gemini:</span> Google AI Studio에서 API 키 발급 → gemini-2.5-flash 권장</li>
+            <li><span className="font-medium">OpenAI:</span> OpenAI 플랫폼에서 API 키 발급 → gpt-4o-mini 권장</li>
+            <li><span className="font-medium">Anthropic:</span> Anthropic Console에서 API 키 발급 → claude-sonnet-4-6 권장</li>
+            <li><span className="font-medium">Ollama:</span> 로컬 Ollama 서버 실행 후 사용</li>
+            <li><span className="font-medium">OpenAI 호환:</span> 기본 서버는 <code className="bg-gray-100 px-1 rounded">http://localhost:8000/v1</code>이며, 모델 가져오기로 목록을 불러올 수 있습니다.</li>
+          </ul>
+        </div>
+      </div>
       </div>
       )}
 
@@ -263,18 +285,6 @@ export function SettingsContent({
           </div>
         </div>
       )}
-
-      {/* 공급자별 안내 */}
-      {activeTab === 'ai' && <div className="mt-6 card p-4">
-        <h3 className="text-sm font-semibold mb-2">공급자별 안내</h3>
-        <ul className="text-xs text-gray-600 space-y-1.5">
-          <li><span className="font-medium">Google Gemini:</span> Google AI Studio에서 API 키 발급 → gemini-2.5-flash 권장</li>
-          <li><span className="font-medium">OpenAI:</span> OpenAI 플랫폼에서 API 키 발급 → gpt-4o-mini 권장</li>
-          <li><span className="font-medium">Anthropic:</span> Anthropic Console에서 API 키 발급 → claude-sonnet-4-6 권장</li>
-          <li><span className="font-medium">Ollama:</span> 로컬 Ollama 서버 실행 후 사용</li>
-          <li><span className="font-medium">OpenAI 호환:</span> 기본 서버는 <code className="bg-gray-100 px-1 rounded">http://localhost:8000/v1</code>이며, 모델 가져오기로 목록을 불러올 수 있습니다.</li>
-        </ul>
-      </div>}
 
       {activeTab === 'data' && (
       <div className="card p-6 space-y-6">

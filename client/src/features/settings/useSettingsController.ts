@@ -23,6 +23,7 @@ export function useSettingsController() {
   const [resetting, setResetting] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [browsingStorage, setBrowsingStorage] = useState(false);
+  const [inputOptionsSaving, setInputOptionsSaving] = useState(false);
 
   const [compatibleModels, setCompatibleModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
@@ -122,6 +123,27 @@ export function useSettingsController() {
     }
   };
 
+  const handleInputOptionChange = async (
+    key: 'loggingEnabled' | 'artifactStripIntroBlocks',
+    value: boolean,
+  ) => {
+    const previousValue = settings[key];
+    setSettings((s) => ({ ...s, [key]: value }));
+    setInputOptionsSaving(true);
+    try {
+      await settingsApi.update({ [key]: value });
+    } catch (e: unknown) {
+      setSettings((s) => ({ ...s, [key]: previousValue }));
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? ((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? String(e))
+          : String(e);
+      alert(`설정 저장 중 오류: ${msg}`);
+    } finally {
+      setInputOptionsSaving(false);
+    }
+  };
+
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
@@ -192,12 +214,14 @@ export function useSettingsController() {
     resetConfirm,
     setResetConfirm,
     browsingStorage,
+    inputOptionsSaving,
     compatibleModels,
     fetchingModels,
     modelFetchError,
     handleProviderChange,
     handleFetchCompatibleModels,
     handleSave,
+    handleInputOptionChange,
     handleTest,
     handleReset,
     handleBrowseStoragePath,
