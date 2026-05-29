@@ -6,9 +6,15 @@ storage/
 storage.config.json
 template/
 .log/
+.antigravitycli/
 *.env
 .env.local
 *.sqlite
 *.sqlite3
 *.db
+*.xls
+*.xlsx
+*.csv
+*.hwpx
+*.zip
 .DS_Store

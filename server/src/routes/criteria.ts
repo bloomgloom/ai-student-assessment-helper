@@ -10,12 +10,25 @@ import { parseAreaManagementExcel, parseAchievementStandardsExcel } from '../ser
 import informationCurriculumStandards from '../data/informationCurriculumStandards.json';
 
 const router = Router();
-const UPLOAD_DIR = path.join(UPLOADS_DIR, 'criteria');
-ensureDir(UPLOAD_DIR);
+const CRITERIA_UPLOAD_DIR = path.join(UPLOADS_DIR, 'criteria');
+const DOMAIN_UPLOAD_DIR = path.join(UPLOADS_DIR, 'domain');
+ensureDir(CRITERIA_UPLOAD_DIR);
+ensureDir(DOMAIN_UPLOAD_DIR);
 
-const upload = multer({
+function sourceUpload(dir: string) {
+  return multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, dir),
+      filename: (_req, file, cb) => cb(null, `${Date.now()}_${decodeUploadFilename(file.originalname)}`),
+    }),
+  });
+}
+
+const criteriaUpload = sourceUpload(CRITERIA_UPLOAD_DIR);
+const domainUpload = sourceUpload(DOMAIN_UPLOAD_DIR);
+const tempUpload = multer({
   storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+    destination: (_req, _file, cb) => cb(null, CRITERIA_UPLOAD_DIR),
     filename: (_req, file, cb) => cb(null, `${Date.now()}_${decodeUploadFilename(file.originalname)}`),
   }),
 });
@@ -36,7 +49,7 @@ function headerMap(row: ExcelJS.Row): Record<string, number> {
   return map;
 }
 
-function findUploadedCriteriaFile(originalName: string): string | null {
+function findUploadedSourceFile(originalName: string, preferredDir: string): string | null {
   const normalized = originalName.normalize('NFC');
   const basename = path.basename(normalized);
   const candidates = new Set([
@@ -48,20 +61,25 @@ function findUploadedCriteriaFile(originalName: string): string | null {
     basename.replace(/:/g, '/'),
   ]);
 
-  for (const candidate of candidates) {
-    const direct = path.isAbsolute(candidate) ? candidate : path.join(UPLOAD_DIR, candidate);
-    if (fs.existsSync(direct)) return direct;
-  }
+  const dirs = [preferredDir, CRITERIA_UPLOAD_DIR, DOMAIN_UPLOAD_DIR]
+    .filter((dir, index, list) => list.indexOf(dir) === index);
+  for (const dir of dirs) {
+    for (const candidate of candidates) {
+      const direct = path.isAbsolute(candidate) ? candidate : path.join(dir, candidate);
+      if (fs.existsSync(direct)) return direct;
+    }
 
-  const files = fs.readdirSync(UPLOAD_DIR).sort().reverse();
-  const found = files.find((file) => {
-    const normalizedFile = file.normalize('NFC');
-    return [...candidates].some((candidate) => (
-      normalizedFile.endsWith(`_${candidate}`) ||
-      normalizedFile.endsWith(`_${candidate.replace(/\//g, ':')}`)
-    ));
-  });
-  return found ? path.join(UPLOAD_DIR, found) : null;
+    const files = fs.existsSync(dir) ? fs.readdirSync(dir).sort().reverse() : [];
+    const found = files.find((file) => {
+      const normalizedFile = file.normalize('NFC');
+      return [...candidates].some((candidate) => (
+        normalizedFile.endsWith(`_${candidate}`) ||
+        normalizedFile.endsWith(`_${candidate.replace(/\//g, ':')}`)
+      ));
+    });
+    if (found) return path.join(dir, found);
+  }
+  return null;
 }
 
 async function getStandardsSource(year: number, semester: number, grade: number, subject: string) {
@@ -253,7 +271,7 @@ router.get('/standards/source-file', async (req: Request, res: Response) => {
   const subject = String(req.query.subject || '');
   const source = await getStandardsSource(year, semester, grade, subject);
   if (!source?.source_filename) return res.status(404).json({ error: '원본 파일 정보가 없습니다.' });
-  const filepath = findUploadedCriteriaFile(source.source_filename);
+  const filepath = findUploadedSourceFile(source.source_filename, CRITERIA_UPLOAD_DIR);
   if (!filepath) return res.status(404).json({ error: '원본 파일을 찾을 수 없습니다.' });
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(source.source_filename)}`);
   res.sendFile(filepath);
@@ -266,7 +284,7 @@ router.delete('/standards/source-file', async (req: Request, res: Response) => {
   const subject = String(req.query.subject || '');
   const source = await getStandardsSource(year, semester, grade, subject);
   if (source?.source_filename) {
-    const filepath = findUploadedCriteriaFile(source.source_filename);
+    const filepath = findUploadedSourceFile(source.source_filename, CRITERIA_UPLOAD_DIR);
     if (filepath) try { fs.unlinkSync(filepath); } catch {}
   }
   await transaction(async () => {
@@ -429,7 +447,7 @@ router.get('/domains/source-file', async (req: Request, res: Response) => {
   const subject = String(req.query.subject || '');
   const source = await getDomainsSource(year, semester, grade, subject);
   if (!source?.source_filename) return res.status(404).json({ error: '원본 파일 정보가 없습니다.' });
-  const filepath = findUploadedCriteriaFile(source.source_filename);
+  const filepath = findUploadedSourceFile(source.source_filename, DOMAIN_UPLOAD_DIR);
   if (!filepath) return res.status(404).json({ error: '원본 파일을 찾을 수 없습니다.' });
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(source.source_filename)}`);
   res.sendFile(filepath);
@@ -442,7 +460,7 @@ router.delete('/domains/source-file', async (req: Request, res: Response) => {
   const subject = String(req.query.subject || '');
   const source = await getDomainsSource(year, semester, grade, subject);
   if (source?.source_filename) {
-    const filepath = findUploadedCriteriaFile(source.source_filename);
+    const filepath = findUploadedSourceFile(source.source_filename, DOMAIN_UPLOAD_DIR);
     if (filepath) try { fs.unlinkSync(filepath); } catch {}
   }
   await transaction(async () => {
@@ -569,7 +587,7 @@ router.post('/domains/anchor', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-router.post('/domains/upload', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/domains/upload', domainUpload.single('file'), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
   const originalName = decodeUploadFilename(req.file.originalname);
   try {
@@ -645,7 +663,7 @@ router.post('/standards/anchor', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-router.post('/standards/upload', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/standards/upload', criteriaUpload.single('file'), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
   const originalName = decodeUploadFilename(req.file.originalname);
   try {
@@ -735,7 +753,7 @@ router.get('/standards-config/export', async (req: Request, res: Response) => {
   res.send(buffer);
 });
 
-router.post('/standards-config/upload', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/standards-config/upload', tempUpload.single('file'), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
 
   try {
@@ -1039,7 +1057,7 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
   res.send(buffer);
 });
 
-router.post('/domain-config/upload', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/domain-config/upload', tempUpload.single('file'), async (req: Request, res: Response) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
 
   try {

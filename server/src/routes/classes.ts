@@ -7,17 +7,28 @@ import { UPLOADS_DIR, ensureDir } from '../services/storage';
 import { parseClassFilename, parseScoringExcel, parseCommentsFilename, parseCommentsExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
-const UPLOAD_DIR = path.join(UPLOADS_DIR, 'scoring');
-ensureDir(UPLOAD_DIR);
+const SCORING_UPLOAD_DIR = path.join(UPLOADS_DIR, 'scoring');
+const RECORDS_UPLOAD_DIR = path.join(UPLOADS_DIR, 'records');
+ensureDir(SCORING_UPLOAD_DIR);
+ensureDir(RECORDS_UPLOAD_DIR);
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const name = decodeUploadFilename(file.originalname);
-    cb(null, `${Date.now()}_${name}`);
-  },
-});
-const upload = multer({ storage });
+function classUpload(defaultDir: string) {
+  return multer({
+    storage: multer.diskStorage({
+      destination: (_req, file, cb) => {
+        const dir = file.fieldname === 'commentsFile' ? RECORDS_UPLOAD_DIR : defaultDir;
+        cb(null, dir);
+      },
+      filename: (_req, file, cb) => {
+        const name = decodeUploadFilename(file.originalname);
+        cb(null, `${Date.now()}_${name}`);
+      },
+    }),
+  });
+}
+
+const scoringUpload = classUpload(SCORING_UPLOAD_DIR);
+const commentsUpload = classUpload(RECORDS_UPLOAD_DIR);
 
 const router = Router();
 
@@ -64,7 +75,7 @@ router.get('/:id/domains', async (req: Request, res: Response) => {
 });
 
 // ── 채점 파일 업로드 → 수업 생성 ─────────────────────────────────────────
-router.post('/upload', upload.fields([
+router.post('/upload', scoringUpload.fields([
   { name: 'file', maxCount: 1 },
   { name: 'scoringFile', maxCount: 1 },
   { name: 'commentsFile', maxCount: 1 },
@@ -216,7 +227,7 @@ router.post('/upload', upload.fields([
 });
 
 // ── 채점 파일 단독 업로드 (수업 생성/갱신) ───────────────────────────────
-router.post('/upload/scoring', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/upload/scoring', scoringUpload.single('file'), async (req: Request, res: Response) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: '채점 파일이 없습니다.' });
 
@@ -371,7 +382,7 @@ router.post('/upload/scoring', upload.single('file'), async (req: Request, res: 
 });
 
 // ── 세특 파일 단독 업로드 (수업 생성/갱신) ───────────────────────────────
-router.post('/upload/comments', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/upload/comments', commentsUpload.single('file'), async (req: Request, res: Response) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: '세특 파일이 없습니다.' });
 
