@@ -1236,7 +1236,7 @@ export function useRecordsPage() {
                     const stuNum = s.student_num % 100;
 
                     return (
-                      <tr key={s.id} className="hover:bg-blue-50/10 transition-colors">
+                      <tr key={s.id} className="records-table-row">
                         {/* Frozen: checkbox */}
                         <td className="sticky z-10 bg-white border-r text-center"
                           style={{ left: sl.chk, width: cw.chk, minWidth: cw.chk }}>

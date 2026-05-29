@@ -76,4 +76,10 @@
   .scrollbar-stable {
     scrollbar-gutter: stable;
   }
+  .records-table-row {
+    @apply transition-colors;
+  }
+  .records-table-row:hover > td {
+    @apply bg-blue-50;
+  }
 }
