@@ -287,8 +287,8 @@ export function SettingsContent({
       )}
 
       {activeTab === 'data' && (
-      <div className="card p-6 space-y-6">
-        <div>
+      <div className="space-y-6">
+        <div className="card p-6">
           <label className="label">데이터 저장 경로</label>
           <div className="flex gap-2">
             <input
@@ -331,47 +331,47 @@ export function SettingsContent({
           </div>
         </div>
 
-        <div className="border-t border-gray-100 pt-5">
-        <h3 className="text-sm font-semibold mb-1 text-red-700">데이터 초기화</h3>
-        <p className="text-xs text-gray-500 mb-3">
-          모든 수업·기준·기록 데이터와 업로드된 파일을 삭제합니다. LLM 설정은 유지됩니다.
-        </p>
+        <div className="card p-6">
+          <h3 className="text-sm font-semibold mb-1 text-red-700">데이터 초기화</h3>
+          <p className="text-xs text-gray-500 mb-3">
+            모든 수업·기준·기록 데이터와 업로드된 파일을 삭제합니다. LLM 설정은 유지됩니다.
+          </p>
 
-        {!resetConfirm ? (
-          <button
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded hover:bg-red-100 transition-colors"
-            onClick={() => setResetConfirm(true)}
-          >
-            <Trash2 size={13} /> 전체 초기화
-          </button>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded text-xs text-red-800">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-500" />
-              <div>
-                <p className="font-semibold">정말 초기화하시겠습니까?</p>
-                <p className="mt-0.5">성취 기준 관리, 평가 영역 관리, 채점 기록 관리의 모든 데이터와 업로드 파일이 영구 삭제됩니다. 이 작업은 되돌릴 수 없습니다.</p>
+          {!resetConfirm ? (
+            <button
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded hover:bg-red-100 transition-colors"
+              onClick={() => setResetConfirm(true)}
+            >
+              <Trash2 size={13} /> 전체 초기화
+            </button>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded text-xs text-red-800">
+                <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-500" />
+                <div>
+                  <p className="font-semibold">정말 초기화하시겠습니까?</p>
+                  <p className="mt-0.5">성취 기준 관리, 평가 영역 관리, 채점 기록 관리의 모든 데이터와 업로드 파일이 영구 삭제됩니다. 이 작업은 되돌릴 수 없습니다.</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-red-600 rounded hover:bg-red-700 transition-colors disabled:opacity-50"
+                  onClick={handleReset}
+                  disabled={resetting}
+                >
+                  {resetting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                  {resetting ? '초기화 중...' : '확인, 모두 삭제'}
+                </button>
+                <button
+                  className="px-3 py-2 text-xs font-medium text-gray-600 bg-gray-100 rounded hover:bg-gray-200 transition-colors"
+                  onClick={() => setResetConfirm(false)}
+                  disabled={resetting}
+                >
+                  취소
+                </button>
               </div>
             </div>
-            <div className="flex gap-2">
-              <button
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-red-600 rounded hover:bg-red-700 transition-colors disabled:opacity-50"
-                onClick={handleReset}
-                disabled={resetting}
-              >
-                {resetting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-                {resetting ? '초기화 중...' : '확인, 모두 삭제'}
-              </button>
-              <button
-                className="px-3 py-2 text-xs font-medium text-gray-600 bg-gray-100 rounded hover:bg-gray-200 transition-colors"
-                onClick={() => setResetConfirm(false)}
-                disabled={resetting}
-              >
-                취소
-              </button>
-            </div>
-          </div>
-        )}
+          )}
         </div>
       </div>
       )}
