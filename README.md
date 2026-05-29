@@ -11,7 +11,7 @@
 먼저 아래 프로그램이 설치되어 있어야 합니다.
 
 - Git
-- Node.js 20 이상 권장
+- Node.js 20.19 이상 권장
 - npm
 
 터미널에서 설치 여부를 확인합니다.
@@ -316,7 +316,7 @@ git ls-files storage server/data server/uploads template .log '*.db' '*.xlsx' '*
 
 ### `npm install`이 실패하는 경우
 
-Node.js 버전을 확인한 뒤 Node.js 20 이상으로 다시 시도하세요.
+Node.js 버전을 확인한 뒤 Node.js 20.19 이상으로 다시 시도하세요.
 
 ```bash
 node --version

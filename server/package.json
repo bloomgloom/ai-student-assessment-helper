@@ -15,8 +15,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.18.3",
     "multer": "^1.4.5-lts.1",
-    "unzipper": "^0.10.14",
-    "uuid": "^9.0.1"
+    "unzipper": "^0.10.14"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
@@ -26,7 +25,6 @@
     "@types/multer": "^1.4.11",
     "@types/node": "^20.11.30",
     "@types/unzipper": "^0.10.11",
-    "@types/uuid": "^9.0.8",
     "tsx": "^4.7.1",
     "typescript": "^5.4.3"
   }
