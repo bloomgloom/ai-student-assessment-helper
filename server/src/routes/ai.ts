@@ -202,9 +202,57 @@ function buildDefaultScoringContent(criteria: EvalCriterion[]): string {
   return JSON.stringify(content);
 }
 
-function buildArtifactPromptLabel(index: number, ext: string): string {
-  const normalizedExt = ext ? `.${ext}` : '';
-  return `산출물 ${index + 1}${normalizedExt}`;
+const FILE_REFERENCE_EXTENSIONS = [
+  'csv', 'tsv', 'xlsx', 'xls', 'json', 'txt', 'md', 'ipynb', 'py', 'js', 'ts', 'html', 'css',
+  'xml', 'sql', 'pkl', 'pickle', 'parquet', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf', 'hwpx',
+];
+const FILE_REFERENCE_EXT_PATTERN = FILE_REFERENCE_EXTENSIONS.join('|');
+const UNQUOTED_FILE_REFERENCE_PATTERN = new RegExp(
+  `(?<![\\p{L}\\p{N}_./\\\\'"\\\`"-])((?:\\.{1,2}[/\\\\])?(?:[^\\s'"\\\`<>(){}\\[\\],;:]+[/\\\\])*[^\\s'"\\\`<>(){}\\[\\],;:]+\\s*\\.(${FILE_REFERENCE_EXT_PATTERN}))(?![\\p{L}\\p{N}_./\\\\'"\\\`"-])`,
+  'giu'
+);
+const QUOTED_TEXT_PATTERN = /(['"`])([^'"`\r\n]{0,300})\1/g;
+
+interface ArtifactPrivacyMapper {
+  artifactName(artifact: ArtifactRow): string;
+  sanitizeText(text: string): string;
+}
+
+function createArtifactPrivacyMapper(artifacts: ArtifactRow[]): ArtifactPrivacyMapper {
+  const mapping = new Map<string, string>();
+  let nextFileIndex = 1;
+
+  const anonymize = (rawReference: string): string => {
+    const key = rawReference.normalize('NFC');
+    const existing = mapping.get(key);
+    if (existing) return existing;
+
+    const ext = key.match(/\.([A-Za-z0-9]+)\s*$/)?.[1]?.toLowerCase();
+    const anonymized = `file_${String(nextFileIndex).padStart(3, '0')}${ext ? `.${ext}` : ''}`;
+    nextFileIndex += 1;
+    mapping.set(key, anonymized);
+    return anonymized;
+  };
+
+  for (const artifact of artifacts) anonymize(artifact.filename);
+
+  return {
+    artifactName(artifact: ArtifactRow): string {
+      return anonymize(artifact.filename);
+    },
+    sanitizeText(text: string): string {
+      return text
+        .replace(QUOTED_TEXT_PATTERN, (_match, quote: string, content: string) => {
+          const sanitizedContent = content.replace(UNQUOTED_FILE_REFERENCE_PATTERN, (_contentMatch, reference: string) => {
+            return anonymize(reference);
+          });
+          return `${quote}${sanitizedContent}${quote}`;
+        })
+        .replace(UNQUOTED_FILE_REFERENCE_PATTERN, (_match, reference: string) => {
+          return anonymize(reference);
+        });
+    },
+  };
 }
 
 function decodeTextBuffer(buffer: Buffer): string {
@@ -253,6 +301,7 @@ function extractCsvInputText(buffer: Buffer): string {
 
 async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[]): Promise<boolean> {
   let hasContent = false;
+  const privacyMapper = createArtifactPrivacyMapper(artifacts);
   const codeExts: Record<string, string> = {
     py: 'python', js: 'javascript', ts: 'typescript', jsx: 'javascript', tsx: 'typescript',
     c: 'c', cpp: 'cpp', h: 'c', java: 'java', html: 'html', css: 'css', sql: 'sql', json: 'json',
@@ -260,10 +309,12 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
 
   for (const [index, artifact] of artifacts.entries()) {
     const ext = artifact.filename.split('.').pop()?.toLowerCase() || '';
-    const promptLabel = buildArtifactPromptLabel(index, ext);
+    const promptLabel = `산출물 ${index + 1}: ${privacyMapper.artifactName(artifact)}`;
     if (ext === 'hwpx') {
       try {
-        const text = await extractHwpxText(fs.readFileSync(artifact.filepath), { skipFirstTableRow: true });
+        const text = privacyMapper.sanitizeText(
+          await extractHwpxText(fs.readFileSync(artifact.filepath), { skipFirstTableRow: true })
+        );
         if (text) {
           parts.push(`[${promptLabel}]\n[HWPX XML 텍스트 추출: 개인정보 표 첫 행 제외]\n${text}\n---`);
           hasContent = true;
@@ -271,7 +322,7 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
       } catch { /* skip */ }
     } else if (ext === 'ipynb') {
       try {
-        const text = extractIpynbInputText(fs.readFileSync(artifact.filepath));
+        const text = privacyMapper.sanitizeText(extractIpynbInputText(fs.readFileSync(artifact.filepath)));
         if (text) {
           parts.push(`[${promptLabel}]\n[Jupyter Notebook 입력 추출: 파일명 및 실행 결과 제외]\n${text}\n---`);
           hasContent = true;
@@ -279,7 +330,7 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
       } catch { /* skip */ }
     } else if (ext === 'csv') {
       try {
-        const text = extractCsvInputText(fs.readFileSync(artifact.filepath));
+        const text = privacyMapper.sanitizeText(extractCsvInputText(fs.readFileSync(artifact.filepath)));
         if (text) {
           parts.push(`[${promptLabel}]\n[CSV 데이터: 파일명 제외]\n\`\`\`csv\n${text}\n\`\`\`\n---`);
           hasContent = true;
@@ -287,7 +338,7 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
       } catch { /* skip */ }
     } else if (codeExts[ext]) {
       try {
-        const code = fs.readFileSync(artifact.filepath, 'utf-8');
+        const code = privacyMapper.sanitizeText(fs.readFileSync(artifact.filepath, 'utf-8'));
         parts.push(`[${promptLabel}]\n\`\`\`${codeExts[ext]}\n${code}\n\`\`\`\n---`);
         hasContent = true;
       } catch { /* skip */ }
@@ -299,6 +350,7 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
         } catch {
           text = fs.readFileSync(artifact.filepath, 'utf16le');
         }
+        text = privacyMapper.sanitizeText(text);
         parts.push(`[${promptLabel}]\n${text}\n---`);
         hasContent = true;
       } catch { /* skip */ }
