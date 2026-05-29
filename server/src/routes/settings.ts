@@ -47,7 +47,7 @@ router.get('/', async (_req: Request, res: Response) => {
 });
 
 router.put('/', async (req: Request, res: Response) => {
-  const { provider, apiKeys, model, baseUrl, maxConcurrency, loggingEnabled, storageRoot } = req.body;
+  const { provider, apiKeys, model, baseUrl, maxConcurrency, loggingEnabled, storageRoot, providerSettings } = req.body;
   const concurrency = maxConcurrency != null ? Math.max(1, parseInt(String(maxConcurrency), 10) || 1) : undefined;
   
   const pairs: [string, string][] = [
@@ -59,6 +59,25 @@ router.put('/', async (req: Request, res: Response) => {
   if (concurrency != null) {
     pairs.push(['llm_max_concurrency', String(concurrency)]);
     pairs.push(['llm_sequential_mode', String(concurrency <= 1)]);
+  }
+
+  if (provider && typeof provider === 'string') {
+    if (model !== undefined) pairs.push([`llm_model_${provider}`, String(model)]);
+    if (baseUrl !== undefined) pairs.push([`llm_base_url_${provider}`, String(baseUrl)]);
+    if (concurrency != null) pairs.push([`llm_max_concurrency_${provider}`, String(concurrency)]);
+  }
+
+  if (providerSettings && typeof providerSettings === 'object') {
+    for (const [p, value] of Object.entries(providerSettings)) {
+      if (!value || typeof value !== 'object') continue;
+      const item = value as { model?: unknown; baseUrl?: unknown; maxConcurrency?: unknown };
+      if (item.model !== undefined) pairs.push([`llm_model_${p}`, String(item.model)]);
+      if (item.baseUrl !== undefined) pairs.push([`llm_base_url_${p}`, String(item.baseUrl)]);
+      if (item.maxConcurrency !== undefined) {
+        const providerConcurrency = Math.max(1, parseInt(String(item.maxConcurrency), 10) || 1);
+        pairs.push([`llm_max_concurrency_${p}`, String(providerConcurrency)]);
+      }
+    }
   }
   
   if (loggingEnabled != null) {

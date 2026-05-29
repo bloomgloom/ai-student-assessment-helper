@@ -11,6 +11,7 @@ export function useSettingsController() {
     model: '',
     baseUrl: '',
     maxConcurrency: 5,
+    providerSettings: {},
     loggingEnabled: true,
     storageRoot: '',
   });
@@ -31,6 +32,7 @@ export function useSettingsController() {
       const data = r.data as SettingsState;
       setSettings({
         ...data,
+        providerSettings: data.providerSettings || {},
         storageRoot: data.storage?.configuredRoot || data.storage?.currentRoot || '',
       });
     });
@@ -41,13 +43,33 @@ export function useSettingsController() {
       ...s,
       provider,
       apiKey: s.apiKeys?.[provider] || '',
-      model: DEFAULT_MODELS[provider] ?? '',
-      baseUrl: DEFAULT_URLS[provider] ?? '',
-      maxConcurrency: provider === 'openai-compatible' ? 1 : 5,
+      providerSettings: {
+        ...s.providerSettings,
+        [s.provider]: {
+          model: s.model,
+          baseUrl: s.baseUrl,
+          maxConcurrency: s.maxConcurrency,
+        },
+      },
+      model: s.providerSettings?.[provider]?.model ?? DEFAULT_MODELS[provider] ?? '',
+      baseUrl: s.providerSettings?.[provider]?.baseUrl ?? DEFAULT_URLS[provider] ?? '',
+      maxConcurrency: s.providerSettings?.[provider]?.maxConcurrency ?? (provider === 'openai-compatible' ? 1 : 5),
     }));
     setCompatibleModels([]);
     setModelFetchError(null);
   };
+
+  const withCurrentProviderSettings = (value: SettingsState): SettingsState => ({
+    ...value,
+    providerSettings: {
+      ...value.providerSettings,
+      [value.provider]: {
+        model: value.model,
+        baseUrl: value.baseUrl,
+        maxConcurrency: value.maxConcurrency,
+      },
+    },
+  });
 
   const handleFetchCompatibleModels = async () => {
     setFetchingModels(true);
@@ -59,7 +81,18 @@ export function useSettingsController() {
       setCompatibleModels(models);
       // 자동으로 첫 번째 모델 선택
       if (models.length > 0 && !settings.model) {
-        setSettings((s) => ({ ...s, model: models[0] }));
+        setSettings((s) => ({
+          ...s,
+          model: models[0],
+          providerSettings: {
+            ...s.providerSettings,
+            [s.provider]: {
+              model: models[0],
+              baseUrl: s.baseUrl,
+              maxConcurrency: s.maxConcurrency,
+            },
+          },
+        }));
       }
     } catch (e: unknown) {
       const msg =
@@ -76,9 +109,10 @@ export function useSettingsController() {
     setSaving(true);
     setSaved(false);
     try {
-      const r = await settingsApi.update(settings as unknown as Record<string, unknown>);
+      const payload = withCurrentProviderSettings(settings);
+      const r = await settingsApi.update(payload as unknown as Record<string, unknown>);
       const storage = r.data?.storage ?? settings.storage;
-      setSettings((s) => ({ ...s, storage }));
+      setSettings((s) => ({ ...withCurrentProviderSettings(s), storage }));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } finally {
@@ -90,7 +124,7 @@ export function useSettingsController() {
     setTesting(true);
     setTestResult(null);
     try {
-      await settingsApi.update(settings as unknown as Record<string, unknown>);
+      await settingsApi.update(withCurrentProviderSettings(settings) as unknown as Record<string, unknown>);
       const r = await settingsApi.test();
       setTestResult({ ok: true, message: r.data.response });
     } catch (e: unknown) {

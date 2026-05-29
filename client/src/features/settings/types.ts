@@ -7,6 +7,7 @@ export interface SettingsState {
   model: string;
   baseUrl: string;
   maxConcurrency: number;
+  providerSettings: Record<string, { model: string; baseUrl: string; maxConcurrency: number }>;
   loggingEnabled: boolean;
   storageRoot: string;
   storage?: {

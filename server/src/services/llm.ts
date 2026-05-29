@@ -10,9 +10,16 @@ export interface LLMSettings {
   model: string;
   baseUrl: string;
   maxConcurrency: number;
+  providerSettings: Record<string, { model: string; baseUrl: string; maxConcurrency: number }>;
   // 호환용 필드: maxConcurrency <= 1이면 true
   sequentialMode: boolean;
   loggingEnabled: boolean;
+}
+
+const LLM_PROVIDERS = ['gemini', 'openai', 'anthropic', 'ollama', 'openai-compatible'] as const;
+
+function providerSettingKey(provider: string) {
+  return provider === 'openai-compatible' ? ['openai-compatible', 'omlx'] : [provider];
 }
 
 export interface LLMLogSession {
@@ -42,15 +49,35 @@ export async function getLLMSettings(): Promise<LLMSettings> {
     anthropic: map['llm_api_key_anthropic'] || '',
     'openai-compatible': map['llm_api_key_openai-compatible'] || map['llm_api_key_omlx'] || '',
   };
+  const providerSettings = Object.fromEntries(LLM_PROVIDERS.map((p) => {
+    const keys = providerSettingKey(p);
+    const model = keys.map((key) => map[`llm_model_${key}`]).find((value) => value !== undefined) ?? '';
+    const baseUrl = keys.map((key) => map[`llm_base_url_${key}`]).find((value) => value !== undefined) ?? '';
+    const providerConcurrency = keys
+      .map((key) => map[`llm_max_concurrency_${key}`])
+      .find((value) => value !== undefined);
+    return [p, {
+      model,
+      baseUrl,
+      maxConcurrency: providerConcurrency !== undefined
+        ? (parseInt(providerConcurrency, 10) || 1)
+        : (p === provider ? maxConcurrency : p === 'openai-compatible' ? 1 : 5),
+    }];
+  }));
+  const activeProviderSettings = providerSettings[provider] || { model: '', baseUrl: '', maxConcurrency };
+  const model = activeProviderSettings.model || map['llm_model'] || '';
+  const baseUrl = activeProviderSettings.baseUrl || map['llm_base_url'] || '';
+  const activeMaxConcurrency = parseInt(String(activeProviderSettings.maxConcurrency || ''), 10) || maxConcurrency;
 
   return {
     provider,
     apiKey: apiKeys[provider] || '',
     apiKeys,
-    model: map['llm_model'] || '',
-    baseUrl: map['llm_base_url'] || '',
-    maxConcurrency,
-    sequentialMode: maxConcurrency <= 1,
+    model,
+    baseUrl,
+    maxConcurrency: activeMaxConcurrency,
+    providerSettings,
+    sequentialMode: activeMaxConcurrency <= 1,
     loggingEnabled: map['llm_logging_enabled'] !== 'false',
   };
 }
