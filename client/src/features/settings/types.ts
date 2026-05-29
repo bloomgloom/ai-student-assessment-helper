@@ -9,6 +9,7 @@ export interface SettingsState {
   maxConcurrency: number;
   providerSettings: Record<string, { model: string; baseUrl: string; maxConcurrency: number }>;
   loggingEnabled: boolean;
+  artifactStripIntroBlocks: boolean;
   storageRoot: string;
   storage?: {
     currentRoot: string;

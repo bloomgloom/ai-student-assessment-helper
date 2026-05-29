@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import { queryAll, queryOne } from '../services/db';
-import { callLLM, createLLMLogSession, getLLMSettings, type LLMLogSession } from '../services/llm';
+import { callLLM, createLLMLogSession, getLLMSettings, type LLMLogSession, type LLMSettings } from '../services/llm';
 import { extractHwpxText } from '../services/hwpx';
 
 const router = Router();
@@ -309,7 +309,7 @@ function normalizeNotebookSource(source: unknown): string {
   return typeof source === 'string' ? source : '';
 }
 
-function extractIpynbInputText(buffer: Buffer): string {
+function extractIpynbInputText(buffer: Buffer, options: { skipFirstMarkdownCell?: boolean } = {}): string {
   const notebook = JSON.parse(decodeTextBuffer(buffer)) as {
     cells?: { cell_type?: string; source?: unknown }[];
   };
@@ -317,7 +317,7 @@ function extractIpynbInputText(buffer: Buffer): string {
 
   const chunks: string[] = [];
   notebook.cells.forEach((cell, index) => {
-    if (index === 0 && cell.cell_type === 'markdown') {
+    if (options.skipFirstMarkdownCell && index === 0 && cell.cell_type === 'markdown') {
       return;
     }
     const source = normalizeNotebookSource(cell.source).trim();
@@ -335,7 +335,30 @@ function extractCsvInputText(buffer: Buffer): string {
   return decodeTextBuffer(buffer).trim();
 }
 
-async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[]): Promise<boolean> {
+function stripLeadingCStyleBlockComment(code: string): string {
+  return code.replace(/^(\uFEFF?\s*)\/\*[\s\S]*?\*\/[ \t]*(?:\r?\n)?/, '$1');
+}
+
+function stripLeadingPythonDocstring(code: string): string {
+  return code.replace(/^(\uFEFF?\s*)("""|''')[\s\S]*?\2[ \t]*(?:\r?\n)?/, '$1');
+}
+
+function stripLeadingCodeIntroBlock(code: string, ext: string): string {
+  if (ext === 'py') return stripLeadingPythonDocstring(code);
+
+  const cStyleBlockCommentExts = new Set([
+    'c', 'cpp', 'h', 'java', 'js', 'jsx', 'ts', 'tsx', 'css', 'sql',
+  ]);
+  if (cStyleBlockCommentExts.has(ext)) return stripLeadingCStyleBlockComment(code);
+
+  return code;
+}
+
+async function appendArtifactContents(
+  parts: string[],
+  artifacts: ArtifactRow[],
+  settings: Pick<LLMSettings, 'artifactStripIntroBlocks'>,
+): Promise<boolean> {
   let hasContent = false;
   const privacyMapper = createArtifactPrivacyMapper(artifacts);
   const codeExts: Record<string, string> = {
@@ -349,18 +372,30 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
     if (ext === 'hwpx') {
       try {
         const text = privacyMapper.sanitizeText(
-          await extractHwpxText(fs.readFileSync(artifact.filepath), { skipFirstTableRow: true })
+          await extractHwpxText(fs.readFileSync(artifact.filepath), {
+            skipFirstTableRow: settings.artifactStripIntroBlocks,
+          })
         );
         if (text) {
-          parts.push(`[${promptLabel}]\n[HWPX XML 텍스트 추출: 개인정보 표 첫 행 제외]\n${text}\n---`);
+          const note = settings.artifactStripIntroBlocks
+            ? 'HWPX XML 텍스트 추출: 첫 표 행 제외'
+            : 'HWPX XML 텍스트 추출';
+          parts.push(`[${promptLabel}]\n[${note}]\n${text}\n---`);
           hasContent = true;
         }
       } catch { /* skip */ }
     } else if (ext === 'ipynb') {
       try {
-        const text = privacyMapper.sanitizeText(extractIpynbInputText(fs.readFileSync(artifact.filepath)));
+        const text = privacyMapper.sanitizeText(
+          extractIpynbInputText(fs.readFileSync(artifact.filepath), {
+            skipFirstMarkdownCell: settings.artifactStripIntroBlocks,
+          })
+        );
         if (text) {
-          parts.push(`[${promptLabel}]\n[Jupyter Notebook 입력 추출: 파일명 및 실행 결과 제외]\n${text}\n---`);
+          const note = settings.artifactStripIntroBlocks
+            ? 'Jupyter Notebook 입력 추출: 첫 마크다운 셀 및 실행 결과 제외'
+            : 'Jupyter Notebook 입력 추출: 실행 결과 제외';
+          parts.push(`[${promptLabel}]\n[${note}]\n${text}\n---`);
           hasContent = true;
         }
       } catch { /* skip */ }
@@ -374,7 +409,10 @@ async function appendArtifactContents(parts: string[], artifacts: ArtifactRow[])
       } catch { /* skip */ }
     } else if (codeExts[ext]) {
       try {
-        const code = privacyMapper.sanitizeText(fs.readFileSync(artifact.filepath, 'utf-8'));
+        const rawCode = fs.readFileSync(artifact.filepath, 'utf-8');
+        const code = privacyMapper.sanitizeText(
+          settings.artifactStripIntroBlocks ? stripLeadingCodeIntroBlock(rawCode, ext) : rawCode
+        );
         parts.push(`[${promptLabel}]\n\`\`\`${codeExts[ext]}\n${code}\n\`\`\`\n---`);
         hasContent = true;
       } catch { /* skip */ }
@@ -471,7 +509,8 @@ router.post('/generate', async (req: Request, res: Response) => {
     }
   }
 
-  const hasContent = await appendArtifactContents(parts, artifacts);
+  const settings = await getLLMSettings();
+  const hasContent = await appendArtifactContents(parts, artifacts, settings);
 
   if (!hasContent && artifacts.length === 0) {
     if (contentType !== 'scoring') {
@@ -488,7 +527,6 @@ router.post('/generate', async (req: Request, res: Response) => {
   );
 
   try {
-    const settings = await getLLMSettings();
     const noArtifactScoring = contentType === 'scoring' && !hasContent;
     const result = noArtifactScoring ? '산출물 없음: 기본점수 적용' : await callLLM(parts.join('\n\n'), settings);
     const storedContent = noArtifactScoring
@@ -653,7 +691,8 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
           }
         }
 
-        const hasContent = await appendArtifactContents(parts, artifacts);
+        if (!settings) throw new Error('LLM 설정이 로드되지 않았습니다.');
+        const hasContent = await appendArtifactContents(parts, artifacts, settings);
 
         if (hasContent || artifacts.length > 0) {
           parts.push(criteriaSet.mode === '세특'
@@ -661,7 +700,6 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
             : '채점 기준에 따라 JSON 배열 텍스트만 반환해주세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 예시: [{"score":3,"reason":"핵심 요구 사항을 대부분 충족함"},{"score":0,"reason":"필수 구현이 확인되지 않음"}]'
           );
           try {
-            if (!settings) throw new Error('LLM 설정이 로드되지 않았습니다.');
             if (cancelled) return;
             result = await callLLM(parts.join('\n\n'), settings, abortController.signal, {
               session: logSession || undefined,

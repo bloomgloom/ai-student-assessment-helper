@@ -14,6 +14,7 @@ export interface LLMSettings {
   // 호환용 필드: maxConcurrency <= 1이면 true
   sequentialMode: boolean;
   loggingEnabled: boolean;
+  artifactStripIntroBlocks: boolean;
 }
 
 const LLM_PROVIDERS = ['gemini', 'openai', 'anthropic', 'ollama', 'openai-compatible'] as const;
@@ -79,6 +80,7 @@ export async function getLLMSettings(): Promise<LLMSettings> {
     providerSettings,
     sequentialMode: activeMaxConcurrency <= 1,
     loggingEnabled: map['llm_logging_enabled'] !== 'false',
+    artifactStripIntroBlocks: map['artifact_strip_intro_blocks'] !== 'false',
   };
 }
 

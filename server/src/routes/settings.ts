@@ -47,7 +47,17 @@ router.get('/', async (_req: Request, res: Response) => {
 });
 
 router.put('/', async (req: Request, res: Response) => {
-  const { provider, apiKeys, model, baseUrl, maxConcurrency, loggingEnabled, storageRoot, providerSettings } = req.body;
+  const {
+    provider,
+    apiKeys,
+    model,
+    baseUrl,
+    maxConcurrency,
+    loggingEnabled,
+    artifactStripIntroBlocks,
+    storageRoot,
+    providerSettings,
+  } = req.body;
   const concurrency = maxConcurrency != null ? Math.max(1, parseInt(String(maxConcurrency), 10) || 1) : undefined;
   
   const pairs: [string, string][] = [
@@ -82,6 +92,10 @@ router.put('/', async (req: Request, res: Response) => {
   
   if (loggingEnabled != null) {
     pairs.push(['llm_logging_enabled', String(loggingEnabled)]);
+  }
+
+  if (artifactStripIntroBlocks != null) {
+    pairs.push(['artifact_strip_intro_blocks', String(artifactStripIntroBlocks)]);
   }
 
   if (apiKeys && typeof apiKeys === 'object') {

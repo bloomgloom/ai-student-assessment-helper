@@ -13,6 +13,7 @@ export function useSettingsController() {
     maxConcurrency: 5,
     providerSettings: {},
     loggingEnabled: true,
+    artifactStripIntroBlocks: true,
     storageRoot: '',
   });
   const [saving, setSaving] = useState(false);
@@ -33,6 +34,7 @@ export function useSettingsController() {
       setSettings({
         ...data,
         providerSettings: data.providerSettings || {},
+        artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
         storageRoot: data.storage?.configuredRoot || data.storage?.currentRoot || '',
       });
     });

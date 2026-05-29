@@ -209,6 +209,22 @@ export function SettingsContent({
           </p>
         </div>
 
+        {/* 산출물 입력 전처리 */}
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded"
+              checked={settings.artifactStripIntroBlocks}
+              onChange={(e) => setSettings((s) => ({ ...s, artifactStripIntroBlocks: e.target.checked }))}
+            />
+            <span className="text-sm font-medium text-gray-700">산출물 첫 설명 블록 제외</span>
+          </label>
+          <p className="text-xs text-gray-400 mt-1 ml-6">
+            켜면 HWPX 첫 표 행, IPYNB 첫 마크다운 셀, 코드 파일 맨 앞의 블록 주석이나 docstring을 AI 입력에서 제외합니다.
+          </p>
+        </div>
+
         {/* 저장 / 테스트 */}
         <div className="flex items-center gap-3 pt-2">
           <button className="btn-primary" onClick={handleSave} disabled={saving}>
