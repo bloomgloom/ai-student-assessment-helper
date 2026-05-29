@@ -128,6 +128,7 @@ export function useRecordsPage() {
   const isAiCellLocked = useAiBatchStore(state => state.isCellLocked);
   const setHasUnsavedRecords = useRecordsUnsavedStore(state => state.setHasUnsavedChanges);
   const appliedUpdateCountRef = useRef(0);
+  const restoringViewPrefsRef = useRef(false);
   const batchGenerating = aiBatchJob?.status === 'running' || aiBatchJob?.status === 'stopping';
   const isDirty = useMemo(
     () => stableContentStringify(contents) !== stableContentStringify(savedContents),
@@ -283,6 +284,7 @@ export function useRecordsPage() {
 
   const handleSelectClass = useCallback(async (c: ClassItem) => {
     if (isDirty && !confirm('저장되지 않은 변경 사항이 있습니다. 이동하시겠습니까?')) return;
+    restoringViewPrefsRef.current = true;
     setSelectedClass(c);
     setSelectedDomain('');
     setDomainFilter('all');
@@ -316,6 +318,15 @@ export function useRecordsPage() {
     setShowScoring(finalShowScoring);
     setShowComments(finalShowComments);
     setShowComprehensive(finalShowComprehensive);
+    window.setTimeout(() => {
+      restoringViewPrefsRef.current = false;
+      writeRecordsViewPrefs(c, {
+        showScoring: finalShowScoring,
+        showComments: finalShowComments,
+        showComprehensive: finalShowComprehensive,
+        domainFilter: restoredDomain,
+      });
+    }, 0);
   }, [isDirty, loadDomainData, subjects]);
 
   // 마지막 선택 강의실 복원
@@ -961,6 +972,7 @@ export function useRecordsPage() {
 
   useEffect(() => {
     if (!selectedClass) return;
+    if (restoringViewPrefsRef.current) return;
     writeRecordsViewPrefs(selectedClass, {
       showScoring,
       showComments,
