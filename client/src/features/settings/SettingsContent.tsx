@@ -252,6 +252,25 @@ export function SettingsContent({
           )}
         </div>
 
+        {testResult && (
+          <div
+            className={`p-4 rounded-lg border text-sm ${testResult.ok
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+              }`}
+          >
+            <div className="flex items-start gap-2">
+              {testResult.ok
+                ? <CheckCircle size={16} className="mt-0.5 shrink-0" />
+                : <XCircle size={16} className="mt-0.5 shrink-0" />}
+              <div>
+                <p className="font-medium">{testResult.ok ? '연결 성공' : '연결 실패'}</p>
+                <p className="mt-1 text-xs whitespace-pre-wrap">{testResult.message}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="border-t border-gray-100 pt-4">
           <h3 className="text-sm font-semibold mb-2">공급자별 안내</h3>
           <ul className="text-xs text-gray-600 space-y-1.5">
@@ -264,26 +283,6 @@ export function SettingsContent({
         </div>
       </div>
       </div>
-      )}
-
-      {/* 테스트 결과 */}
-      {activeTab === 'ai' && testResult && (
-        <div
-          className={`mt-4 p-4 rounded-lg border text-sm ${testResult.ok
-              ? 'bg-green-50 border-green-200 text-green-800'
-              : 'bg-red-50 border-red-200 text-red-800'
-            }`}
-        >
-          <div className="flex items-start gap-2">
-            {testResult.ok
-              ? <CheckCircle size={16} className="mt-0.5 shrink-0" />
-              : <XCircle size={16} className="mt-0.5 shrink-0" />}
-            <div>
-              <p className="font-medium">{testResult.ok ? '연결 성공' : '연결 실패'}</p>
-              <p className="mt-1 text-xs whitespace-pre-wrap">{testResult.message}</p>
-            </div>
-          </div>
-        </div>
       )}
 
       {activeTab === 'data' && (

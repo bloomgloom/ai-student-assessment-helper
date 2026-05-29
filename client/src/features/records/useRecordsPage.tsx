@@ -1292,14 +1292,22 @@ export function useRecordsPage() {
                               return (
                                 <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <input type="text" className={`input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`}
-                                    value={scoreData[c.id] ?? ''}
-                                    onChange={ev => updateContent(s.id, 'scoring', c.id, ev.target.value, d.name)}
-                                    disabled={locked}
-                                    data-row={rowIdx} data-col={c.fi}
-                                    onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
-                                    title={locked ? 'AI 채점 진행 중이라 수정할 수 없습니다.' : reason || undefined}
-                                  />
+                                  <div className="group relative">
+                                    <input type="text" className={`input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`}
+                                      value={scoreData[c.id] ?? ''}
+                                      onChange={ev => updateContent(s.id, 'scoring', c.id, ev.target.value, d.name)}
+                                      disabled={locked}
+                                      data-row={rowIdx} data-col={c.fi}
+                                      onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
+                                      title={locked ? 'AI 채점 진행 중이라 수정할 수 없습니다.' : undefined}
+                                    />
+                                    {reason && !locked && (
+                                      <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-72 -translate-x-1/2 rounded-md border border-amber-200 bg-amber-50 p-3 text-left text-xs leading-relaxed text-amber-950 shadow-lg ring-1 ring-amber-100 group-hover:block group-focus-within:block">
+                                        <div className="mb-1 text-[11px] font-semibold text-amber-700">AI 판단 이유</div>
+                                        <div className="whitespace-pre-wrap">{reason}</div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </td>
                               );
                             }
