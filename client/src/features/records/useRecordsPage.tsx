@@ -3,7 +3,7 @@ import { recordsApi, criteriaApi, classesApi, aiApi } from '../../lib/api';
 import { useAiBatchStore } from '../../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
 import { Loader2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import { RECORDS_GUIDE_KEY, RECORDS_LAST_CLASS_KEY, RECORDS_PAGE_TEXT, SUBJECT_COMPREHENSIVE_DOMAIN } from './constants';
+import { RECORDS_GUIDE_KEY, RECORDS_LAST_CLASS_KEY, RECORDS_PAGE_TEXT, RECORDS_VIEW_PREFS_PREFIX, SUBJECT_COMPREHENSIVE_DOMAIN } from './constants';
 import { RecordsCollapsedTree } from './RecordsCollapsedTree';
 import { ClassItem, ContentItem, EvalItem, RecordsTreeNode, ScoringContent, SpellcheckResult, Student } from './types';
 import { useRecordsHeader } from './useRecordsHeader';
@@ -52,6 +52,36 @@ function stableContentStringify(value: unknown): string {
       .join(',')}}`;
   }
   return JSON.stringify(value ?? '');
+}
+
+interface RecordsViewPrefs {
+  showScoring?: boolean;
+  showComments?: boolean;
+  showComprehensive?: boolean;
+  domainFilter?: string;
+}
+
+function recordsViewPrefsKey(classItem: ClassItem) {
+  return [
+    RECORDS_VIEW_PREFS_PREFIX,
+    classItem.year,
+    classItem.semester,
+    classItem.grade,
+    classItem.subject,
+  ].join(':');
+}
+
+function readRecordsViewPrefs(classItem: ClassItem): RecordsViewPrefs | null {
+  try {
+    const raw = localStorage.getItem(recordsViewPrefsKey(classItem));
+    return raw ? JSON.parse(raw) as RecordsViewPrefs : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRecordsViewPrefs(classItem: ClassItem, prefs: RecordsViewPrefs) {
+  localStorage.setItem(recordsViewPrefsKey(classItem), JSON.stringify(prefs));
 }
 
 export function useRecordsPage() {
@@ -264,9 +294,28 @@ export function useRecordsPage() {
     const subj = subjects.find(s => s.year === c.year && s.semester === c.semester && s.grade === c.grade && s.subject === c.subject);
     const fixedDomains = subj?.fixedDomains || [];
     const allDomains = [...fixedDomains, ...(subj?.customDomains || [])];
-    setShowScoring(fixedDomains.some((d: any) => hasScoringCriteria(loaded.evalItemsMap[d.name])));
-    setShowComments(allDomains.some((d: any) => (loaded.commentsItemsMap[d.name] || []).length > 0));
-    setShowComprehensive(true);
+    const defaultShowScoring = fixedDomains.some((d: any) => hasScoringCriteria(loaded.evalItemsMap[d.name]));
+    const defaultShowComments = allDomains.some((d: any) => (loaded.commentsItemsMap[d.name] || []).length > 0);
+    const savedPrefs = readRecordsViewPrefs(c);
+    const restoredShowScoring = savedPrefs?.showScoring ?? defaultShowScoring;
+    const restoredShowComments = savedPrefs?.showComments ?? defaultShowComments;
+    const restoredShowComprehensive = savedPrefs?.showComprehensive ?? true;
+    const allowedDomains = [
+      ...fixedDomains,
+      ...(restoredShowComments ? (subj?.customDomains || []) : []),
+    ].map((d: any) => d.name);
+    const restoredDomain = savedPrefs?.domainFilter && (savedPrefs.domainFilter === 'all' || allowedDomains.includes(savedPrefs.domainFilter))
+      ? savedPrefs.domainFilter
+      : 'all';
+    const finalShowScoring = defaultShowScoring ? restoredShowScoring : false;
+    const finalShowComments = defaultShowComments ? restoredShowComments : false;
+    const finalShowComprehensive = !finalShowScoring && !finalShowComments && !restoredShowComprehensive
+      ? true
+      : restoredShowComprehensive;
+    setDomainFilter(restoredDomain);
+    setShowScoring(finalShowScoring);
+    setShowComments(finalShowComments);
+    setShowComprehensive(finalShowComprehensive);
   }, [isDirty, loadDomainData, subjects]);
 
   // 마지막 선택 강의실 복원
@@ -909,6 +958,16 @@ export function useRecordsPage() {
     ].map((d: any) => d.name);
     if (!allowedDomains.includes(domainFilter)) setDomainFilter('all');
   }, [selectedSubject, showComments, domainFilter]);
+
+  useEffect(() => {
+    if (!selectedClass) return;
+    writeRecordsViewPrefs(selectedClass, {
+      showScoring,
+      showComments,
+      showComprehensive,
+      domainFilter,
+    });
+  }, [selectedClass, showScoring, showComments, showComprehensive, domainFilter]);
 
   const recordsHeader = useRecordsHeader({
     selectedClass,
