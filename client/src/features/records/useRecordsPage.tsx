@@ -1,10 +1,11 @@
 import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { recordsApi, criteriaApi, classesApi, aiApi } from '../../lib/api';
 import { useAiBatchStore } from '../../stores/aiBatchStore';
+import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
 import { Loader2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { RECORDS_GUIDE_KEY, RECORDS_LAST_CLASS_KEY, RECORDS_PAGE_TEXT, SUBJECT_COMPREHENSIVE_DOMAIN } from './constants';
 import { RecordsCollapsedTree } from './RecordsCollapsedTree';
-import { ClassItem, ContentItem, EvalItem, RecordsTreeNode, SpellcheckResult, Student } from './types';
+import { ClassItem, ContentItem, EvalItem, RecordsTreeNode, ScoringContent, SpellcheckResult, Student } from './types';
 import { useRecordsHeader } from './useRecordsHeader';
 import { useRecordsTree } from './useRecordsTree';
 import { useRecordsUpload } from './useRecordsUpload';
@@ -37,6 +38,22 @@ function normalizeRecordCriteriaTitles(items: any[]) {
   }));
 }
 
+function normalizeStoredValue(value: unknown): string {
+  if (value == null) return '';
+  return String(value);
+}
+
+function stableContentStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableContentStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${stableContentStringify((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value ?? '');
+}
+
 export function useRecordsPage() {
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [subjects, setSubjects] = useState<any[]>([]);
@@ -47,6 +64,7 @@ export function useRecordsPage() {
   const [evalItems, setEvalItems] = useState<EvalItem[]>([]);
 
   const [contents, setContents] = useState<Record<string, any>>({});
+  const [savedContents, setSavedContents] = useState<Record<string, any>>({});
   const [evalItemsMap, setEvalItemsMap] = useState<Record<string, EvalItem[]>>({});
   const [commentsItemsMap, setCommentsItemsMap] = useState<Record<string, Array<{ title: string }>>>({});
 
@@ -78,8 +96,28 @@ export function useRecordsPage() {
   const aiBatchUpdates = useAiBatchStore(state => state.updates);
   const startAiBatch = useAiBatchStore(state => state.startBatch);
   const isAiCellLocked = useAiBatchStore(state => state.isCellLocked);
+  const setHasUnsavedRecords = useRecordsUnsavedStore(state => state.setHasUnsavedChanges);
   const appliedUpdateCountRef = useRef(0);
   const batchGenerating = aiBatchJob?.status === 'running' || aiBatchJob?.status === 'stopping';
+  const isDirty = useMemo(
+    () => stableContentStringify(contents) !== stableContentStringify(savedContents),
+    [contents, savedContents]
+  );
+
+  useEffect(() => {
+    setHasUnsavedRecords(isDirty);
+    return () => setHasUnsavedRecords(false);
+  }, [isDirty, setHasUnsavedRecords]);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty]);
 
   // ── Column resize ──────────────────────────────────────────────────────────
   const handleResizeStart = (e: React.MouseEvent, key: string, defW: number) => {
@@ -209,10 +247,12 @@ export function useRecordsPage() {
       map[`${item.student_id}_${item.content_type}_${item.domain}`] = parseContent(item.content);
     }
     setContents(map);
+    setSavedContents(map);
     return { evalItemsMap: eMap, commentsItemsMap: siMap };
   }, [subjects]);
 
   const handleSelectClass = useCallback(async (c: ClassItem) => {
+    if (isDirty && !confirm('저장되지 않은 변경 사항이 있습니다. 이동하시겠습니까?')) return;
     setSelectedClass(c);
     setSelectedDomain('');
     setDomainFilter('all');
@@ -227,7 +267,7 @@ export function useRecordsPage() {
     setShowScoring(fixedDomains.some((d: any) => hasScoringCriteria(loaded.evalItemsMap[d.name])));
     setShowComments(allDomains.some((d: any) => (loaded.commentsItemsMap[d.name] || []).length > 0));
     setShowComprehensive(true);
-  }, [loadDomainData, subjects]);
+  }, [isDirty, loadDomainData, subjects]);
 
   // 마지막 선택 강의실 복원
   useEffect(() => {
@@ -250,6 +290,7 @@ export function useRecordsPage() {
     setSelectedClass,
     setStudents,
     setContents,
+    setSavedContents,
     onSelectClass: handleSelectClass,
   });
 
@@ -262,6 +303,7 @@ export function useRecordsPage() {
         setSelectedClass(null);
         setStudents([]);
         setContents({});
+        setSavedContents({});
       }
       await loadData();
     } catch (err: any) {
@@ -314,6 +356,11 @@ export function useRecordsPage() {
       const obj = prev[key] || {};
 
       const newObj = { ...obj, [field]: value };
+      if (type === 'scoring' && field !== 'total' && newObj.__reasons) {
+        const nextReasons = { ...(newObj.__reasons as Record<string, string>) };
+        delete nextReasons[field];
+        newObj.__reasons = nextReasons;
+      }
 
       // Auto-calc total if evaluating scoring
       if (type === 'scoring' && explicitDomain && evalItemsMap[explicitDomain]) {
@@ -358,6 +405,18 @@ export function useRecordsPage() {
       [`${studentId}_${type}_${domain}`]: parseContent(content),
     }));
   };
+
+  const isContentFieldDirty = (key: string, field: string) => {
+    return normalizeStoredValue(contents[key]?.[field]) !== normalizeStoredValue(savedContents[key]?.[field]);
+  };
+
+  const isScoringReasonDirty = (key: string, field: string) => {
+    return normalizeStoredValue((contents[key] as ScoringContent | undefined)?.__reasons?.[field])
+      !== normalizeStoredValue((savedContents[key] as ScoringContent | undefined)?.__reasons?.[field]);
+  };
+
+  const dirtyControlClass = (dirty: boolean) =>
+    dirty ? 'bg-amber-50 border-amber-300 focus:border-amber-500 focus:ring-amber-400' : '';
 
   useEffect(() => {
     if (aiBatchUpdates.length < appliedUpdateCountRef.current) {
@@ -444,11 +503,6 @@ export function useRecordsPage() {
     const key = `${studentId}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`;
     const nextContent = { text: result.correctedText };
     setContents(prev => ({ ...prev, [key]: nextContent }));
-    await recordsApi.saveStudentContent(studentId, {
-      content_type: 'comments',
-      domain: SUBJECT_COMPREHENSIVE_DOMAIN,
-      content: JSON.stringify(nextContent),
-    });
   };
 
   const handleSaveAll = async () => {
@@ -456,6 +510,7 @@ export function useRecordsPage() {
     setSaving(true);
     try {
       const promises = [];
+      const savedKeys: string[] = [];
       const enabledDomainTypes = [
         ...(showScoring ? ['scoring'] : []),
         ...(showComments ? ['comments'] : []),
@@ -478,6 +533,7 @@ export function useRecordsPage() {
         // Save comprehensive comments
         const compKey = `${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`;
         if (showComprehensive && contents[compKey]) {
+          savedKeys.push(compKey);
           promises.push(
             recordsApi.saveStudentContent(s.id, {
               content_type: 'comments',
@@ -492,6 +548,7 @@ export function useRecordsPage() {
           for (const type of enabledDomainTypes) {
             const key = `${s.id}_${type}_${d.name}`;
             if (contents[key]) {
+              savedKeys.push(key);
               promises.push(
                 recordsApi.saveStudentContent(s.id, {
                   content_type: type,
@@ -504,6 +561,11 @@ export function useRecordsPage() {
         }
       }
       await Promise.all(promises);
+      setSavedContents(prev => {
+        const next = { ...prev };
+        for (const key of savedKeys) next[key] = contents[key];
+        return next;
+      });
       alert('저장되었습니다.');
     } catch (e) {
       alert('저장 중 오류가 발생했습니다.');
@@ -1153,23 +1215,28 @@ export function useRecordsPage() {
                               const locked = selectedClass
                                 ? isAiCellLocked(selectedClass.id, s.id, 'scoring', d.name)
                                 : false;
+                              const contentKey = `${s.id}_scoring_${d.name}`;
+                              const dirty = isContentFieldDirty(contentKey, c.id) || isScoringReasonDirty(contentKey, c.id);
+                              const reason = (scoreData as ScoringContent).__reasons?.[c.id] || '';
                               return (
                                 <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <input type="text" className="input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed"
-                                    value={scoreData[c.id] || ''}
+                                  <input type="text" className={`input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`}
+                                    value={scoreData[c.id] ?? ''}
                                     onChange={ev => updateContent(s.id, 'scoring', c.id, ev.target.value, d.name)}
                                     disabled={locked}
                                     data-row={rowIdx} data-col={c.fi}
                                     onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
-                                    title={locked ? 'AI 채점 진행 중이라 수정할 수 없습니다.' : undefined}
+                                    title={locked ? 'AI 채점 진행 중이라 수정할 수 없습니다.' : reason || undefined}
                                   />
                                 </td>
                               );
                             }
                             if (c.type === 'total') {
+                              const contentKey = `${s.id}_scoring_${d.name}`;
+                              const dirty = isContentFieldDirty(contentKey, 'total');
                               return (
-                                <td key={`${d.name}_total`} className="border-r text-center font-bold text-blue-600 bg-blue-50/30 align-middle p-2"
+                                <td key={`${d.name}_total`} className={`border-r text-center font-bold text-blue-600 align-middle p-2 ${dirty ? 'bg-amber-50' : 'bg-blue-50/30'}`}
                                   style={{ width: w, minWidth: w }}>
                                   {scoreData.total || 0}
                                 </td>
@@ -1179,10 +1246,12 @@ export function useRecordsPage() {
                               const locked = selectedClass
                                 ? isAiCellLocked(selectedClass.id, s.id, 'comments', d.name)
                                 : false;
+                              const contentKey = `${s.id}_comments_${d.name}`;
+                              const dirty = isContentFieldDirty(contentKey, 'text');
                               return (
                                 <td key={`${d.name}_comments`} className="border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <textarea className="textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed" style={{ minHeight: 80 }}
+                                  <textarea className={`textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: 80 }}
                                     value={commentsData.text || ''}
                                     onChange={ev => updateContent(s.id, 'comments', 'text', ev.target.value, d.name)}
                                     disabled={locked}
@@ -1200,10 +1269,12 @@ export function useRecordsPage() {
                               const itemValue = commentsData[c.itemTitle!]
                                 ?? (c.id === 'comments_0' ? commentsData.text : '')
                                 ?? '';
+                              const contentKey = `${s.id}_comments_${d.name}`;
+                              const dirty = isContentFieldDirty(contentKey, c.itemTitle!);
                               return (
                                 <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <textarea className="textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed" style={{ minHeight: 80 }}
+                                  <textarea className={`textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: 80 }}
                                     value={itemValue}
                                     onChange={ev => updateContent(s.id, 'comments', c.itemTitle!, ev.target.value, d.name)}
                                     disabled={locked}
@@ -1223,7 +1294,7 @@ export function useRecordsPage() {
                           <>
                             <td className="align-top p-1 border-r"
                               style={{ width: compWidth, minWidth: compWidth }}>
-                              <textarea className="textarea w-full text-sm resize-y bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed" style={{ minHeight: 80 }}
+                              <textarea className={`textarea w-full text-sm resize-y bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(isContentFieldDirty(`${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`, 'text'))}`} style={{ minHeight: 80 }}
                                 value={compCommentsText}
                                 onChange={ev => updateContent(s.id, 'comments', 'text', ev.target.value, SUBJECT_COMPREHENSIVE_DOMAIN)}
                                 disabled={selectedClass ? isAiCellLocked(selectedClass.id, s.id, 'comments', SUBJECT_COMPREHENSIVE_DOMAIN) : false}

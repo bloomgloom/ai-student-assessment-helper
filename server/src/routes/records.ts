@@ -35,7 +35,9 @@ function parseGeneratedContentValue(contentType: string, content: string): Array
   try {
     const parsed = JSON.parse(content || '{}');
     if (contentType === 'comments') return [{ item: 'text', value: String(parsed.text ?? '') }];
-    return Object.entries(parsed).map(([item, value]) => ({ item, value: String(value ?? '') }));
+    return Object.entries(parsed)
+      .filter(([item]) => !item.startsWith('__'))
+      .map(([item, value]) => ({ item, value: String(value ?? '') }));
   } catch {
     return [{ item: contentType === 'comments' ? 'text' : 'raw', value: content || '' }];
   }

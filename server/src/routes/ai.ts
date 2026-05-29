@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
-import { queryAll, queryOne, execute } from '../services/db';
+import { queryAll, queryOne } from '../services/db';
 import { callLLM, createLLMLogSession, getLLMSettings, type LLMLogSession } from '../services/llm';
 import { extractHwpxText } from '../services/hwpx';
 
@@ -156,23 +156,61 @@ async function getDomainCommentsCriteria(classContext: ClassContext | null, doma
   );
 }
 
+function extractJsonArrayText(text: string): string {
+  const stripped = text
+    .trim()
+    .replace(/^```(?:json|text)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  const start = stripped.indexOf('[');
+  const end = stripped.lastIndexOf(']');
+  if (start >= 0 && end > start) return stripped.slice(start, end + 1);
+  return stripped;
+}
+
+interface ScoringResultItem {
+  score?: unknown;
+  reason?: unknown;
+}
+
+function parseScoringResultItems(result: string): ScoringResultItem[] {
+  const parsed = JSON.parse(extractJsonArrayText(result)) as unknown;
+  if (!Array.isArray(parsed)) throw new Error('JSON 배열이 아닙니다.');
+  return parsed.map((item) => {
+    if (Array.isArray(item)) return { score: item[0], reason: item[1] };
+    if (item && typeof item === 'object') return item as ScoringResultItem;
+    return { score: undefined, reason: undefined };
+  });
+}
+
 function buildScoringContent(result: string, criteria: EvalCriterion[]): string {
   const llmItems = criteria.filter((item) => item.item_type === 'llm');
-  const values = result.split(',').map((value) => value.trim()).filter((value) => value.length > 0);
   const numericPattern = /^-?\d+(?:\.\d+)?$/;
-  const content: Record<string, string | number> = {};
+  let items: ScoringResultItem[] = [];
+  const content: Record<string, string | number | Record<string, string>> = {};
+  const reasons: Record<string, string> = {};
+
+  try {
+    items = parseScoringResultItems(result);
+  } catch (e) {
+    const preview = result.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`채점 결과가 JSON 배열 형식으로 제시되지 않아 작성하지 않았습니다. 출력: ${preview || '(빈 응답)'}`);
+  }
 
   if (llmItems.length > 0) {
-    const invalid = values.length !== llmItems.length || values.some((value) => !numericPattern.test(value));
+    const invalid = items.length !== llmItems.length || items.some((item) => !numericPattern.test(String(item.score ?? '').trim()));
     if (invalid) {
       const preview = result.replace(/\s+/g, ' ').trim().slice(0, 160);
-      throw new Error(`채점 결과가 항목 수(${llmItems.length})에 맞는 숫자로 제시되지 않아 작성하지 않았습니다. 출력: ${preview || '(빈 응답)'}`);
+      throw new Error(`채점 결과가 항목 수(${llmItems.length})에 맞는 JSON 배열 형식으로 제시되지 않아 작성하지 않았습니다. 출력: ${preview || '(빈 응답)'}`);
     }
   }
 
   llmItems.forEach((item, index) => {
-    content[item.name] = values[index] ?? '';
+    const resultItem = items[index] || {};
+    content[item.name] = String(resultItem.score ?? '').trim();
+    reasons[item.name] = String(resultItem.reason ?? '').trim();
   });
+  if (Object.values(reasons).some(Boolean)) content.__reasons = reasons;
 
   const base = criteria
     .filter((item) => item.item_type === 'formula')
@@ -208,7 +246,7 @@ const FILE_REFERENCE_EXTENSIONS = [
 ];
 const FILE_REFERENCE_EXT_PATTERN = FILE_REFERENCE_EXTENSIONS.join('|');
 const UNQUOTED_FILE_REFERENCE_PATTERN = new RegExp(
-  `(?<![\\p{L}\\p{N}_./\\\\'"\\\`"-])((?:\\.{1,2}[/\\\\])?(?:[^\\s'"\\\`<>(){}\\[\\],;:]+[/\\\\])*[^\\s'"\\\`<>(){}\\[\\],;:]+\\s*\\.(${FILE_REFERENCE_EXT_PATTERN}))(?![\\p{L}\\p{N}_./\\\\'"\\\`"-])`,
+  `(?<![\\p{L}\\p{N}_./\\\\'"\`"-])((?:\\.{1,2}[/\\\\])?(?:[^\\s'"\`<>(){}\\[\\],;:]+[/\\\\])*[^\\s'"\`<>(){}\\[\\],;:]+\\s*\\.(${FILE_REFERENCE_EXT_PATTERN}))(?![\\p{L}\\p{N}_./\\\\'"\`"-])`,
   'giu'
 );
 const QUOTED_TEXT_PATTERN = /(['"`])([^'"`\r\n]{0,300})\1/g;
@@ -418,7 +456,7 @@ router.post('/generate', async (req: Request, res: Response) => {
         "SELECT * FROM eval_items WHERE domain_id=? AND item_type='llm'", [evalDomain.id]
       );
       if (items.length) {
-        parts.push(`[채점 기준]\n각 항목의 점수를 어떠한 부연 설명 없이 콤마(,)로만 구분하여 반환하세요.`);
+        parts.push(`[채점 기준]\n반환값은 JSON 배열 텍스트만 작성하세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 배열의 각 원소는 {"score": 숫자, "reason": "짧은 이유"} 형식입니다. 평가 항목 순서와 배열 순서는 반드시 같아야 합니다.`);
         for (const item of items) {
           parts.push(`- ${item.name} (${item.excel_col}열): ${item.rubric}`);
         }
@@ -427,7 +465,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     }
     evalCriteria = await getDomainEvalCriteria(classContext, domain);
     if (!evalDomain && evalCriteria.length) {
-      parts.push(`[채점 기준]\n각 항목의 점수를 어떠한 부연 설명 없이 콤마(,)로만 구분하여 반환하세요.`);
+      parts.push(`[채점 기준]\n반환값은 JSON 배열 텍스트만 작성하세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 배열의 각 원소는 {"score": 숫자, "reason": "짧은 이유"} 형식입니다. 평가 항목 순서와 배열 순서는 반드시 같아야 합니다.`);
       for (const item of evalCriteria.filter((i) => i.item_type === 'llm')) {
         parts.push(`- ${item.name} (${item.score}): ${item.rubric}`);
       }
@@ -448,7 +486,7 @@ router.post('/generate', async (req: Request, res: Response) => {
   parts.push(
     criteriaSet.mode === '세특'
       ? '위 지시사항과 학생의 활동 내용을 종합하여 학생의 역량이 잘 드러나도록 기록을 작성해주세요.'
-      : '최종적으로 위 채점 기준에 따라 각 항목의 점수만 콤마(,)로 구분하여 한 줄로 반환해주세요. (어떠한 추가 설명, 제목, 이유도 작성하지 마세요. 오직 숫자와 콤마만 출력해야 합니다. 예시: 3,0,3,0,3,3,0,3,3,3)'
+      : '최종적으로 위 채점 기준에 따라 JSON 배열 텍스트만 반환해주세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 예시: [{"score":3,"reason":"핵심 요구 사항을 대부분 충족함"},{"score":0,"reason":"필수 구현이 확인되지 않음"}]'
   );
 
   try {
@@ -458,13 +496,6 @@ router.post('/generate', async (req: Request, res: Response) => {
     const storedContent = noArtifactScoring
       ? buildDefaultScoringContent(evalCriteria)
       : buildStoredContent(contentType, result, evalCriteria);
-
-    await execute(`
-      INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
-      VALUES(?,?,?,?,datetime('now'))
-      ON CONFLICT(student_id, content_type, domain)
-      DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
-    `, [studentId, contentType, domain, storedContent]);
 
     res.json({ ok: true, result, content: storedContent });
   } catch (e: unknown) {
@@ -619,7 +650,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
             for (const item of evalCriteria.filter((i) => i.item_type === 'llm')) {
               parts.push(`- ${item.name} (${item.score}): ${item.rubric}`);
             }
-            parts.push('각 항목의 점수를 위 순서대로 콤마(,)로 구분하여 한 줄로 반환해주세요. 절대로 부연 설명을 포함하지 마세요.');
+            parts.push('반환값은 JSON 배열 텍스트만 작성하세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 배열의 각 원소는 {"score": 숫자, "reason": "짧은 이유"} 형식입니다. 평가 항목 순서와 배열 순서는 반드시 같아야 합니다.');
             parts.push('---');
           }
         }
@@ -629,7 +660,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
         if (hasContent || artifacts.length > 0) {
           parts.push(criteriaSet.mode === '세특'
             ? '위 내용을 종합하여 학생의 역량이 잘 드러나도록 기록을 작성해주세요.'
-            : '채점 기준에 따라 각 항목의 점수를 콤마로 구분하여 반환해주세요. (어떠한 추가 설명, 제목, 이유도 작성하지 마세요. 오직 숫자와 콤마만 출력해야 합니다. 예시: 3,0,3,0,3,3,0,3,3,3)'
+            : '채점 기준에 따라 JSON 배열 텍스트만 반환해주세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 예시: [{"score":3,"reason":"핵심 요구 사항을 대부분 충족함"},{"score":0,"reason":"필수 구현이 확인되지 않음"}]'
           );
           try {
             if (!settings) throw new Error('LLM 설정이 로드되지 않았습니다.');
@@ -640,23 +671,11 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
             });
             if (cancelled) return;
             storedContent = buildStoredContent(contentType, result, evalCriteria);
-            await execute(`
-              INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
-              VALUES(?,?,?,?,datetime('now'))
-              ON CONFLICT(student_id, content_type, domain)
-              DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
-            `, [student.id, contentType, domain, storedContent]);
           } catch (e: unknown) {
             error = e instanceof Error ? e.message : String(e);
           }
         } else if (contentType === 'scoring') {
           storedContent = buildDefaultScoringContent(evalCriteria);
-          await execute(`
-            INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
-            VALUES(?,?,?,?,datetime('now'))
-            ON CONFLICT(student_id, content_type, domain)
-            DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
-          `, [student.id, contentType, domain, storedContent]);
         } else {
           error = '산출물 없음';
         }

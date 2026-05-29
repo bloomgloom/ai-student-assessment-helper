@@ -8,6 +8,7 @@ interface UseRecordsUploadOptions {
   setSelectedClass: (classItem: ClassItem | null) => void;
   setStudents: (students: Student[]) => void;
   setContents: (contents: Record<string, any>) => void;
+  setSavedContents: (contents: Record<string, any>) => void;
   onSelectClass: (classItem: ClassItem) => Promise<void>;
 }
 
@@ -17,6 +18,7 @@ export function useRecordsUpload({
   setSelectedClass,
   setStudents,
   setContents,
+  setSavedContents,
   onSelectClass,
 }: UseRecordsUploadOptions) {
   const classFilesRef = useRef<HTMLInputElement>(null);
@@ -66,6 +68,7 @@ export function useRecordsUpload({
           setSelectedClass(null);
           setStudents([]);
           setContents({});
+          setSavedContents({});
         }
       }
 

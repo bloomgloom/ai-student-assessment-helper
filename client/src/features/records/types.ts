@@ -25,6 +25,12 @@ export interface EvalItem {
   sort_order: number;
 }
 
+export interface ScoringContent {
+  [key: string]: string | number | Record<string, string> | undefined;
+  total?: string | number;
+  __reasons?: Record<string, string>;
+}
+
 export interface ContentItem {
   student_id: number;
   content_type: string;

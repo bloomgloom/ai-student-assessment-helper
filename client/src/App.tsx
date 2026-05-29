@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import {
   Settings, BookOpen, ClipboardList, ListChecks, Loader2, Menu
 } from 'lucide-react';
@@ -8,6 +8,7 @@ import CriteriaPage from './pages/CriteriaPage';
 import DomainPage from './pages/DomainPage';
 import RecordsPage from './pages/RecordsPage';
 import { AiGlobalOverlay } from './components/common/AiGlobalOverlay';
+import { useRecordsUnsavedStore } from './stores/recordsUnsavedStore';
 
 const ArtifactStandalonePage = lazy(() =>
   import('./components/ArtifactViewer').then((module) => ({ default: module.ArtifactStandalonePage }))
@@ -15,6 +16,8 @@ const ArtifactStandalonePage = lazy(() =>
 
 function Sidebar() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebarCollapsed') === '1');
+  const hasUnsavedRecords = useRecordsUnsavedStore(state => state.hasUnsavedChanges);
+  const location = useLocation();
   const links = [
     { to: '/criteria', label: '성취 기준 관리', icon: BookOpen },
     { to: '/domains', label: '평가 영역 관리', icon: ListChecks },
@@ -54,6 +57,11 @@ function Sidebar() {
             key={to}
             to={to}
             title={collapsed ? label : undefined}
+            onClick={(event) => {
+              if (hasUnsavedRecords && location.pathname !== to && !confirm('저장되지 않은 변경 사항이 있습니다. 이동하시겠습니까?')) {
+                event.preventDefault();
+              }
+            }}
             className={({ isActive }) =>
               `flex items-center ${collapsed ? 'justify-center px-2' : 'gap-2.5 px-4'} py-2.5 text-sm transition-colors ${isActive
                 ? 'bg-blue-600 text-white'
