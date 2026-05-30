@@ -32,6 +32,14 @@ const commentsUpload = classUpload(RECORDS_UPLOAD_DIR);
 
 const router = Router();
 
+function isScoringFilename(filename: string): boolean {
+  return filename.normalize('NFC').includes('수행평가 파일일괄등록');
+}
+
+function isCommentsFilename(filename: string): boolean {
+  return filename.normalize('NFC').includes('과목세특');
+}
+
 // ── 수업 목록 조회 (트리 구성용) ─────────────────────────────────────────
 router.get('/', async (_req: Request, res: Response) => {
   const classes = await queryAll<{
@@ -87,6 +95,18 @@ router.post('/upload', scoringUpload.fields([
 
   const originalName = decodeUploadFilename(scoringFile.originalname);
   const commentsOriginalName = commentsFile ? decodeUploadFilename(commentsFile.originalname) : '';
+  if (!isScoringFilename(originalName)) {
+    return res.status(400).json({
+      error: '채점 파일명에 "수행평가 파일일괄등록"이 포함되어야 합니다.',
+      hint: '나이스에서 내려받은 파일명을 유지하세요. 예: "수행평가 파일일괄등록 - 2026학년도 1학기 2 정보(3)_전체영역_1강의실.xlsx"',
+    });
+  }
+  if (commentsOriginalName && !isCommentsFilename(commentsOriginalName)) {
+    return res.status(400).json({
+      error: '세특 파일명에 "과목세특"이 포함되어야 합니다.',
+      hint: '나이스에서 내려받은 파일명을 유지하세요. 예: "2026_1학기_2학년_1_정보_과목세특_20251022132700.xlsx"',
+    });
+  }
 
   // 1. 파일명 파싱 (parseClassFilename 내부에서도 NFC 정규화하므로 이중 보호)
   let classInfo = parseClassFilename(originalName);
@@ -138,6 +158,9 @@ router.post('/upload', scoringUpload.fields([
     students = parsed.students;
   } catch (e: unknown) {
     return res.status(400).json({ error: `Excel 파싱 오류: ${e instanceof Error ? e.message : e}` });
+  }
+  if (!students.length) {
+    return res.status(400).json({ error: '채점 파일에서 학생 명단을 찾을 수 없습니다.' });
   }
 
   const managedDomains = await queryAll<{ name: string; max_score: number; sort_order: number }>(
@@ -232,6 +255,12 @@ router.post('/upload/scoring', scoringUpload.single('file'), async (req: Request
   if (!file) return res.status(400).json({ error: '채점 파일이 없습니다.' });
 
   const originalName = decodeUploadFilename(file.originalname);
+  if (!isScoringFilename(originalName)) {
+    return res.status(400).json({
+      error: '채점 파일명에 "수행평가 파일일괄등록"이 포함되어야 합니다.',
+      hint: '나이스에서 내려받은 파일명을 유지하세요. 예: "수행평가 파일일괄등록 - 2026학년도 1학기 2 정보(3)_전체영역_1강의실.xlsx"',
+    });
+  }
   const classInfo = parseClassFilename(originalName);
   if (!classInfo) {
     return res.status(400).json({
@@ -248,6 +277,9 @@ router.post('/upload/scoring', scoringUpload.single('file'), async (req: Request
     parsedStudents = p.students;
   } catch (e) {
     return res.status(400).json({ error: `Excel 파싱 오류: ${e instanceof Error ? e.message : e}` });
+  }
+  if (!parsedStudents.length) {
+    return res.status(400).json({ error: '채점 파일에서 학생 명단을 찾을 수 없습니다.' });
   }
 
   // 영역 관리에서 수행 반영 영역 조회
@@ -387,6 +419,12 @@ router.post('/upload/comments', commentsUpload.single('file'), async (req: Reque
   if (!file) return res.status(400).json({ error: '세특 파일이 없습니다.' });
 
   const originalName = decodeUploadFilename(file.originalname);
+  if (!isCommentsFilename(originalName)) {
+    return res.status(400).json({
+      error: '세특 파일명에 "과목세특"이 포함되어야 합니다.',
+      hint: '나이스에서 내려받은 파일명을 유지하세요. 예: "2026_1학기_2학년_1_정보_과목세특_20251022132700.xlsx"',
+    });
+  }
   const commentsInfo = parseCommentsFilename(originalName);
   if (!commentsInfo) {
     return res.status(400).json({
@@ -402,6 +440,9 @@ router.post('/upload/comments', commentsUpload.single('file'), async (req: Reque
     parsedStudents = await parseCommentsExcel(file.path);
   } catch (e) {
     return res.status(400).json({ error: `세특 파일 파싱 오류: ${e instanceof Error ? e.message : e}` });
+  }
+  if (!parsedStudents.length) {
+    return res.status(400).json({ error: '세특 파일에서 학생 명단을 찾을 수 없습니다.' });
   }
 
   const existingClass = await queryOne<{ id: number; scoring_filename: string }>(
