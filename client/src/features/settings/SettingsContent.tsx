@@ -40,7 +40,7 @@ export function SettingsContent({
 
   return (
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable">
-      <div className="min-w-[720px] max-w-2xl p-6">
+      <div className="min-w-[720px] max-w-2xl px-6 pt-6 pb-32">
       {activeTab === 'ai' && (
       <div className="space-y-6">
       <div className="card p-6 space-y-5">

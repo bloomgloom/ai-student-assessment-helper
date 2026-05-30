@@ -1117,7 +1117,7 @@ export function useRecordsPage() {
       children: selectedClass && (
           <>
           {/* 테이블 뷰 */}
-          <div className="flex-1 overflow-auto scrollbar-stable bg-white">
+          <div className="flex-1 overflow-auto scrollbar-stable bg-white pb-32">
             {students.length === 0 ? (
               <div className="py-20 text-center text-gray-400">학생 명단이 없습니다.</div>
             ) : (

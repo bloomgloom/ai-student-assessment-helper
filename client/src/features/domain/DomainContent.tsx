@@ -148,7 +148,7 @@ export function DomainContent({
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-auto scrollbar-stable p-6">
+    <div className="flex-1 min-h-0 overflow-auto scrollbar-stable px-6 pt-6 pb-32">
       <div className="min-w-[760px] space-y-8">
       {!selectedDomain && activeTab === 'ratio' && (
         <Section>

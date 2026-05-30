@@ -34,7 +34,7 @@ function CriteriaStandardsTable({ standards }: Pick<CriteriaContentProps, 'stand
   const spans = buildRowSpans(standards);
 
   return (
-    <div className="flex-1 min-h-0 overflow-auto scrollbar-stable p-6">
+    <div className="flex-1 min-h-0 overflow-auto scrollbar-stable px-6 pt-6 pb-32">
       <div className="min-w-[760px] bg-white border border-gray-200 rounded-md overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500">
