@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      APP_STORAGE_DIR: /app/storage
+      PORT: 3001
+    volumes:
+      - ./storage:/app/storage
+    restart: unless-stopped
