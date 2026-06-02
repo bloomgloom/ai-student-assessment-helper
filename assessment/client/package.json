@@ -20,7 +20,7 @@
     "@codemirror/theme-one-dark": "^6.1.2",
     "@rhwp/core": "^0.7.7",
     "@uiw/react-codemirror": "^4.21.25",
-    "axios": "^1.6.8",
+    "axios": "^1.16.1",
     "lucide-react": "^0.376.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
