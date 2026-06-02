@@ -2,9 +2,14 @@ node_modules/
 dist/
 server/data/
 server/uploads/
+assessment/server/data/
+assessment/server/uploads/
 storage/
+assessment/storage/
 storage.config.json
+assessment/storage.config.json
 template/
+assessment/template/
 .log/
 .antigravitycli/
 *.env
@@ -17,4 +22,5 @@ template/
 *.csv
 *.hwpx
 *.zip
+submission-server-security-plan.md
 .DS_Store
