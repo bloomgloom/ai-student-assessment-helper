@@ -35,7 +35,7 @@ docker compose up --build
 http://localhost:3001
 ```
 
-업로드 파일과 데이터베이스는 `assessment/storage/`에 저장됩니다.
+업로드 파일과 데이터베이스는 프로젝트 루트의 `storage/`에 저장됩니다.
 
 ## 2. 개발/수정용 실행: Git + Node.js/npm 사용
 
@@ -285,7 +285,7 @@ AI가 내용 읽기에 활용할 수 있는 산출물 파일 형식:
 
 앱을 다시 실행하면 저장된 데이터베이스를 기준으로 이전 작업을 이어서 볼 수 있습니다. 같은 과목 안에서는 채점 기록 관리의 `채점`, `기록`, `세특` 보기 선택과 영역 선택이 유지됩니다. 다른 과목은 과목별로 별도의 보기 상태를 사용합니다.
 
-다른 컴퓨터로 작업을 옮기거나 백업하려면 앱의 `작업 내용 다운로드`로 만든 엑셀 파일과 `assessment/storage/` 폴더의 데이터를 별도로 보관하세요. 개인정보가 포함될 수 있으므로 공유 저장소나 공개 저장소에 올리지 않도록 주의해야 합니다.
+다른 컴퓨터로 작업을 옮기거나 백업하려면 앱의 `작업 내용 다운로드`로 만든 엑셀 파일과 프로젝트 루트의 `storage/` 폴더 데이터를 별도로 보관하세요. 개인정보가 포함될 수 있으므로 공유 저장소나 공개 저장소에 올리지 않도록 주의해야 합니다.
 
 ## 화면 예시
 
@@ -307,14 +307,14 @@ AI가 내용 읽기에 활용할 수 있는 산출물 파일 형식:
 
 서버 실행 시 필요한 디렉터리는 자동으로 생성됩니다.
 
-- 기본 저장 루트: `storage/`
-- 데이터베이스: `storage/data/assessment.db`
-- 업로드 파일: `storage/uploads/`
+- 기본 저장 루트: 프로젝트 루트의 `storage/`
+- 데이터베이스: 프로젝트 루트의 `storage/data/assessment.db`
+- 업로드 파일: 프로젝트 루트의 `storage/uploads/`
   - 성취 기준 원본: `storage/uploads/criteria/`
   - 평가 영역 원본: `storage/uploads/domain/`
   - 채점 원본: `storage/uploads/scoring/`
   - 기록/세특 원본 및 작업 파일: `storage/uploads/records/`
-- LLM 요청/응답 로그: `storage/logs/`
+- LLM 요청/응답 로그: 프로젝트 루트의 `storage/logs/`
 
 앱의 `환경 설정` 화면에서 데이터 저장 경로를 바꿀 수 있습니다. `APP_STORAGE_DIR` 환경변수를 설정해 실행하면 해당 경로를 우선 사용하며, 이 경우 화면에서는 저장 경로를 변경할 수 없습니다.
 
@@ -350,12 +350,13 @@ git ls-files storage server/data server/uploads template .log '*.db' '*.xlsx' '*
 ├── client/              # React 프론트엔드
 ├── server/              # Express API 서버
 │   └── src/             # 서버 소스 코드
-├── storage/             # 로컬 DB, 업로드, 로그 저장 위치 (Git 제외)
 ├── Dockerfile           # Docker 실행용 이미지 정의
 ├── docker-compose.yml   # Docker 실행 설정
 ├── package.json         # 루트 workspace 및 실행 스크립트
 └── package-lock.json    # npm 의존성 잠금 파일
 ```
+
+운영 데이터는 이 `assessment` 폴더가 아니라 프로젝트 루트의 `storage/`에 저장됩니다.
 
 ## 기술 구성
 

@@ -17,7 +17,7 @@ FROM node:20.19-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3001
-ENV APP_STORAGE_DIR=/app/storage
+ENV APP_STORAGE_DIR=/workspace/storage
 
 COPY package.json package-lock.json ./
 COPY client/package.json ./client/package.json
@@ -27,7 +27,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/client/dist ./client/dist
 COPY --from=build /app/server/dist ./server/dist
 
-RUN mkdir -p /app/storage
+RUN mkdir -p /workspace/storage
 EXPOSE 3001
 
 CMD ["npm", "start"]

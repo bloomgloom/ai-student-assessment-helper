@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const PROJECT_ROOT = path.resolve(__dirname, '../../..');
+const PROJECT_ROOT = path.resolve(__dirname, '../../../..');
 const STORAGE_CONFIG_PATH = path.join(PROJECT_ROOT, 'storage.config.json');
 const DEFAULT_STORAGE_ROOT = path.join(PROJECT_ROOT, 'storage');
 

@@ -4,8 +4,8 @@ services:
     ports:
       - "127.0.0.1:3001:3001"
     environment:
-      APP_STORAGE_DIR: /app/storage
+      APP_STORAGE_DIR: /workspace/storage
       PORT: 3001
     volumes:
-      - ./storage:/app/storage
+      - ../storage:/workspace/storage
     restart: unless-stopped
