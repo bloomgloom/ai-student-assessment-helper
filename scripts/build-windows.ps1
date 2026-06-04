@@ -4,6 +4,7 @@ $RootDir = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RootDir
 
 npm install
+npm install --prefix assessment
 npm run build:windows
 
 Write-Host ""
