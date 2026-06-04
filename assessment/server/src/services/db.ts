@@ -16,6 +16,12 @@ export function getClient(): Client {
   return client;
 }
 
+export function closeDb(): void {
+  client?.close();
+  client = null;
+  initialized = false;
+}
+
 // 동기 인터페이스를 흉내낸 헬퍼들을 위해 초기화는 서버 시작 시 한 번 수행
 export async function initDb(): Promise<void> {
   if (initialized) return;

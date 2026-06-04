@@ -12,6 +12,7 @@ import aiRouter from './routes/ai';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || '127.0.0.1';
 
 app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:3001'], credentials: true }));
 app.use(express.json({ limit: '10mb' }));
@@ -45,8 +46,8 @@ app.get('*', (_req, res) => {
 
 async function main() {
   await initDb();
-  app.listen(PORT, () => {
-    console.log(`✅ Assessment server running at http://localhost:${PORT}`);
+  app.listen(Number(PORT), HOST, () => {
+    console.log(`✅ Assessment server running at http://${HOST}:${PORT}`);
   });
 }
 

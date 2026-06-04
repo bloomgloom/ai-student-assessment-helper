@@ -3,9 +3,11 @@ import { PageHeaderAction } from '../../components/common/PageHeaderActions';
 import { PageTab } from '../../components/common/PageTabs';
 import { DOMAIN_PAGE_TEXT, DOMAIN_TAB_TEXT, DomainTab } from './constants';
 import { useDomainController } from './useDomainController';
+import { useAiEnabled } from '../../hooks/useAiEnabled';
 
 export function useDomainPage() {
   const domain = useDomainController();
+  const aiEnabled = useAiEnabled();
 
   const domainTabs: PageTab<DomainTab>[] = [
     { ...DOMAIN_TAB_TEXT.domainTabs.standards, icon: <Award size={14} /> },
@@ -166,6 +168,7 @@ export function useDomainPage() {
       handleGenerateCommon: domain.handleGenerateCommon,
       updateSubjectCommentsMetaPrompt: domain.updateSubjectCommentsMetaPrompt,
       updateSubjectComments: domain.updateSubjectComments,
+      aiEnabled,
     },
   };
 }

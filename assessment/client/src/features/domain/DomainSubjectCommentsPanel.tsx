@@ -8,6 +8,7 @@ interface SubjectCommentsCardProps {
   onMetaPromptChange: (type: string, metaPrompt: string) => void;
   onPromptChange: (type: string, prompt: string) => void;
   onGenerate: (type: string, metaPrompt: string) => void;
+  aiDisabled?: boolean;
 }
 
 interface DomainSubjectCommentsPanelProps {
@@ -15,6 +16,7 @@ interface DomainSubjectCommentsPanelProps {
   onMetaPromptChange: (type: string, metaPrompt: string) => void;
   onPromptChange: (type: string, prompt: string) => void;
   onGenerate: (type: string, metaPrompt: string) => void;
+  aiDisabled?: boolean;
 }
 
 function getMetaPrompt(item?: CommentsItem) {
@@ -31,6 +33,7 @@ function SubjectCommentsCard({
   onMetaPromptChange,
   onPromptChange,
   onGenerate,
+  aiDisabled,
 }: SubjectCommentsCardProps) {
   const { type, label, description, instructionPlaceholder, promptPlaceholder } = template;
   const metaPrompt = getMetaPrompt(item);
@@ -52,11 +55,13 @@ function SubjectCommentsCard({
           placeholder={instructionPlaceholder}
           value={metaPrompt}
           onChange={(e) => onMetaPromptChange(type, e.target.value)}
+          disabled={aiDisabled}
         />
         <button
           className="btn-rainbow px-3 text-xs flex items-center justify-center gap-1 whitespace-nowrap"
           style={{ alignSelf: 'stretch' }}
           onClick={() => onGenerate(type, metaPrompt)}
+          disabled={aiDisabled}
           title={`AI로 ${label} 생성`}
         >
           ✨ 생성
@@ -78,6 +83,7 @@ export function DomainSubjectCommentsPanel({
   onMetaPromptChange,
   onPromptChange,
   onGenerate,
+  aiDisabled,
 }: DomainSubjectCommentsPanelProps) {
   return (
     <div className="space-y-4">
@@ -89,6 +95,7 @@ export function DomainSubjectCommentsPanel({
           onMetaPromptChange={onMetaPromptChange}
           onPromptChange={onPromptChange}
           onGenerate={onGenerate}
+          aiDisabled={aiDisabled}
         />
       ))}
     </div>

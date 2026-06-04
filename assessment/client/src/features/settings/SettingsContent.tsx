@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Save, TestTube, CheckCircle, XCircle, Loader2, RefreshCw, Trash2, AlertTriangle, FolderOpen, Eye, EyeOff } from 'lucide-react';
+import { Save, TestTube, CheckCircle, XCircle, Loader2, RefreshCw, Trash2, AlertTriangle, Eye, EyeOff, Download, Upload } from 'lucide-react';
 import { DEFAULT_MODELS, DEFAULT_URLS, PROVIDERS } from './constants';
 import { useSettingsController } from './useSettingsController';
 import { SettingsTab } from './types';
@@ -19,30 +19,52 @@ export function SettingsContent({
   resetting,
   resetConfirm,
   setResetConfirm,
-  browsingStorage,
+  backingUp,
+  restoring,
   inputOptionsSaving,
   compatibleModels,
   fetchingModels,
   modelFetchError,
+  canSave,
   handleProviderChange,
   handleFetchCompatibleModels,
   handleSave,
   handleInputOptionChange,
   handleTest,
   handleReset,
-  handleBrowseStoragePath,
+  handleBackup,
+  handleRestore,
   isOllama,
   isOpenAICompatible,
   needsKey,
   needsUrl,
 }: SettingsContentProps) {
   const [showApiKey, setShowApiKey] = useState(false);
+  const aiDisabled = !settings.aiEnabled;
+  const disabledPanelClass = aiDisabled ? 'opacity-45 grayscale select-none' : '';
 
   return (
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable">
       <div className="min-w-[720px] max-w-2xl px-6 pt-6 pb-32">
       {activeTab === 'ai' && (
       <div className="space-y-6">
+      <div className="card p-6 space-y-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            className="w-4 h-4 rounded"
+            checked={settings.aiEnabled}
+            disabled={inputOptionsSaving}
+            onChange={(e) => handleInputOptionChange('aiEnabled', e.target.checked)}
+          />
+          <span className="text-sm font-semibold text-gray-800">AI 기능 사용</span>
+        </label>
+        <p className="text-xs text-gray-400 ml-6">
+          끄면 평가 영역 관리와 채점 기록 관리의 AI 생성, 채점, 교정 기능이 비활성화됩니다.
+        </p>
+      </div>
+
+      <div className={disabledPanelClass} aria-disabled={aiDisabled}>
       <div className="card p-6 space-y-5">
         <div>
           <h3 className="text-sm font-semibold text-gray-800">AI 입력 옵션</h3>
@@ -55,7 +77,7 @@ export function SettingsContent({
               type="checkbox"
               className="w-4 h-4 rounded"
               checked={settings.loggingEnabled}
-              disabled={inputOptionsSaving}
+              disabled={inputOptionsSaving || aiDisabled}
               onChange={(e) => handleInputOptionChange('loggingEnabled', e.target.checked)}
             />
             <span className="text-sm font-medium text-gray-700">LLM 요청/응답 로그 저장</span>
@@ -71,7 +93,7 @@ export function SettingsContent({
               type="checkbox"
               className="w-4 h-4 rounded"
               checked={settings.artifactStripIntroBlocks}
-              disabled={inputOptionsSaving}
+              disabled={inputOptionsSaving || aiDisabled}
               onChange={(e) => handleInputOptionChange('artifactStripIntroBlocks', e.target.checked)}
             />
             <span className="text-sm font-medium text-gray-700">산출물 첫 설명 블록 제외</span>
@@ -81,8 +103,9 @@ export function SettingsContent({
           </p>
         </div>
       </div>
+      </div>
 
-      <div className="card p-6 space-y-5">
+      <div className="card p-6 space-y-5" aria-disabled={aiDisabled}>
 
         {/* Provider */}
         <div>
@@ -90,6 +113,7 @@ export function SettingsContent({
           <select
             className="select"
             value={settings.provider}
+            disabled={aiDisabled}
             onChange={(e) => handleProviderChange(e.target.value)}
           >
             {PROVIDERS.map((p) => (
@@ -106,6 +130,7 @@ export function SettingsContent({
               <input
                 type={showApiKey ? 'text' : 'password'}
                 className="input font-mono text-xs pr-10"
+                disabled={aiDisabled}
                 placeholder={isOpenAICompatible ? 'API 키가 필요 없는 로컬 서버면 비워두세요' : 'API 키를 입력하세요'}
                 value={settings.apiKeys?.[settings.provider] || ''}
                 onChange={(e) => setSettings((s) => ({
@@ -118,6 +143,7 @@ export function SettingsContent({
                 type="button"
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-700 rounded"
                 onClick={() => setShowApiKey((visible) => !visible)}
+                disabled={aiDisabled}
                 title={showApiKey ? 'API 키 숨기기' : 'API 키 보기'}
                 aria-label={showApiKey ? 'API 키 숨기기' : 'API 키 보기'}
               >
@@ -136,6 +162,7 @@ export function SettingsContent({
             <input
               type="text"
               className="input font-mono text-xs"
+              disabled={aiDisabled}
               placeholder={DEFAULT_URLS[settings.provider] || 'https://your-api-endpoint/v1'}
               value={settings.baseUrl}
               onChange={(e) => setSettings((s) => ({ ...s, baseUrl: e.target.value }))}
@@ -158,6 +185,7 @@ export function SettingsContent({
                 {compatibleModels.length > 0 ? (
                   <select
                     className="select flex-1"
+                    disabled={aiDisabled}
                     value={settings.model}
                     onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
                   >
@@ -170,6 +198,7 @@ export function SettingsContent({
                   <input
                     type="text"
                     className="input flex-1"
+                    disabled={aiDisabled}
                     placeholder="모델명 직접 입력"
                     value={settings.model}
                     onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
@@ -178,7 +207,7 @@ export function SettingsContent({
                 <button
                   className="btn-secondary shrink-0"
                   onClick={handleFetchCompatibleModels}
-                  disabled={fetchingModels}
+                  disabled={fetchingModels || aiDisabled}
                   title="OpenAI 호환 서버에서 모델 목록 가져오기"
                 >
                   {fetchingModels
@@ -204,6 +233,7 @@ export function SettingsContent({
               <input
                 type="text"
                 className="input"
+                disabled={aiDisabled}
                 placeholder={DEFAULT_MODELS[settings.provider] || '모델명 입력'}
                 value={settings.model}
                 onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
@@ -223,6 +253,7 @@ export function SettingsContent({
           <input
             type="number"
             className="input w-24"
+            disabled={aiDisabled}
             min={1}
             max={20}
             value={settings.maxConcurrency}
@@ -237,11 +268,11 @@ export function SettingsContent({
 
         {/* 저장 / 테스트 */}
         <div className="flex items-center gap-3 pt-2">
-          <button className="btn-primary" onClick={handleSave} disabled={saving}>
+          <button className="btn-primary" onClick={handleSave} disabled={saving || !canSave}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
             저장
           </button>
-          <button className="btn-secondary" onClick={handleTest} disabled={testing}>
+          <button className="btn-secondary" onClick={handleTest} disabled={testing || aiDisabled}>
             {testing ? <Loader2 size={14} className="animate-spin" /> : <TestTube size={14} />}
             연결 테스트
           </button>
@@ -251,6 +282,11 @@ export function SettingsContent({
             </span>
           )}
         </div>
+        {settings.aiEnabled && !canSave && (
+          <p className="text-xs text-amber-600">
+            AI 기능 사용 상태에서는 현재 설정으로 연결 테스트에 성공해야 저장할 수 있습니다.
+          </p>
+        )}
 
         {testResult && (
           <div
@@ -287,46 +323,45 @@ export function SettingsContent({
 
       {activeTab === 'data' && (
       <div className="space-y-6">
-        <div className="card p-6">
-          <label className="label">데이터 저장 경로</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              className="input font-mono text-xs flex-1"
-              value={settings.storageRoot}
-              disabled={settings.storage?.envLocked}
-              placeholder={settings.storage?.defaultRoot || 'storage 경로'}
-              onChange={(e) => setSettings((s) => ({ ...s, storageRoot: e.target.value }))}
-            />
-            <button
-              className="btn-secondary shrink-0"
-              onClick={handleBrowseStoragePath}
-              disabled={browsingStorage || settings.storage?.envLocked}
-              title="서버가 실행 중인 컴퓨터에서 폴더 선택"
-            >
-              {browsingStorage ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
-              찾아보기
-            </button>
+        <div className="card p-6 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-800">데이터 백업/복원</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              현재 데이터베이스, 업로드 파일, 로그를 ZIP 파일로 백업하거나 이전 백업을 복원합니다.
+            </p>
           </div>
-          <div className="mt-1 space-y-0.5 text-xs text-gray-400">
-            <p>현재 적용 경로: <code>{settings.storage?.currentRoot || '-'}</code></p>
-            <p>기본 경로: <code>{settings.storage?.defaultRoot || '-'}</code></p>
-            {settings.storage?.envLocked ? (
-              <p className="text-amber-600">APP_STORAGE_DIR 환경변수가 설정되어 있어 화면에서 변경할 수 없습니다.</p>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn-primary" onClick={handleBackup} disabled={backingUp || restoring}>
+              {backingUp ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              백업 다운로드
+            </button>
+
+            <label className={`btn-secondary cursor-pointer ${backingUp || restoring ? 'opacity-50 pointer-events-none' : ''}`}>
+              {restoring ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+              백업 복원
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                className="hidden"
+                disabled={backingUp || restoring}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.currentTarget.value = '';
+                  if (file) handleRestore(file);
+                }}
+              />
+            </label>
+          </div>
+
+          <div className="space-y-0.5 text-xs text-gray-400">
+            <p>현재 저장 위치: <code>{settings.storage?.currentRoot || '-'}</code></p>
+            {settings.storage?.source === 'env' ? (
+              <p>Electron 앱은 운영체제의 앱 데이터 폴더를 사용합니다.</p>
             ) : (
-              <p>변경한 저장 경로는 저장 후 서버를 재시작한 뒤 적용됩니다. 비우거나 기본 경로를 입력하면 기본값을 사용합니다.</p>
+              <p>개발 모드에서는 프로젝트 루트의 <code>storage/</code> 폴더를 사용합니다.</p>
             )}
-          </div>
-          <div className="flex items-center gap-3 pt-3">
-            <button className="btn-primary" onClick={handleSave} disabled={saving || settings.storage?.envLocked}>
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-              저장
-            </button>
-            {saved && (
-              <span className="text-sm text-green-600 flex items-center gap-1">
-                <CheckCircle size={14} /> 저장됨
-              </span>
-            )}
+            <p className="text-amber-600">복원하면 현재 데이터가 백업 ZIP 내용으로 교체됩니다.</p>
           </div>
         </div>
 

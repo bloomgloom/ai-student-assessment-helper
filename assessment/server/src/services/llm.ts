@@ -15,6 +15,7 @@ export interface LLMSettings {
   sequentialMode: boolean;
   loggingEnabled: boolean;
   artifactStripIntroBlocks: boolean;
+  aiEnabled: boolean;
 }
 
 const LLM_PROVIDERS = ['gemini', 'openai', 'anthropic', 'ollama', 'openai-compatible'] as const;
@@ -81,6 +82,7 @@ export async function getLLMSettings(): Promise<LLMSettings> {
     sequentialMode: activeMaxConcurrency <= 1,
     loggingEnabled: map['llm_logging_enabled'] !== 'false',
     artifactStripIntroBlocks: map['artifact_strip_intro_blocks'] !== 'false',
+    aiEnabled: map['ai_enabled'] === 'true',
   };
 }
 
@@ -208,6 +210,9 @@ function mergeSignals(...signals: Array<AbortSignal | undefined>): AbortSignal |
 
 export async function callLLM(prompt: string, settings?: LLMSettings, signal?: AbortSignal, log?: LLMLogOptions): Promise<string> {
   const cfg = settings || (await getLLMSettings());
+  if (!cfg.aiEnabled) {
+    throw new Error('AI 기능이 꺼져 있습니다. 환경 설정에서 AI 기능 사용을 켜세요.');
+  }
   const startedAt = new Date();
 
   try {

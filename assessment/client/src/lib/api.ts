@@ -8,9 +8,14 @@ export default api;
 export const settingsApi = {
   get: () => api.get('/settings'),
   update: (data: Record<string, unknown>) => api.put('/settings', data),
-  test: () => api.post('/settings/test'),
+  test: (data?: Record<string, unknown>) => api.post('/settings/test', data || {}),
   reset: () => api.post('/settings/reset'),
-  browseStoragePath: () => api.post('/settings/storage/browse'),
+  backup: () => api.get('/settings/backup', { responseType: 'blob' }),
+  restore: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/settings/restore', form);
+  },
   getCompatibleModels: (baseUrl: string, apiKey: string) =>
     api.get('/settings/compatible-models', { params: { baseUrl, apiKey } }),
 };

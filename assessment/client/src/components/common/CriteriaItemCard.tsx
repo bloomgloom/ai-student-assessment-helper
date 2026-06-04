@@ -20,6 +20,7 @@ interface CriteriaItemCardProps {
   onScoreChange?: (value: string) => void;
   onRemove: () => void;
   extraHeader?: ReactNode;
+  instructionDisabled?: boolean;
 }
 
 export function CriteriaItemCard({
@@ -41,6 +42,7 @@ export function CriteriaItemCard({
   onScoreChange,
   onRemove,
   extraHeader,
+  instructionDisabled,
 }: CriteriaItemCardProps) {
   return (
     <div className={`bg-white border rounded-lg p-4 shadow-sm ${checked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-gray-200'}`}>
@@ -87,6 +89,7 @@ export function CriteriaItemCard({
             placeholder={instructionPlaceholder}
             value={instruction}
             onChange={e => onInstructionChange(e.target.value)}
+            disabled={instructionDisabled}
           />
         </div>
         <div className="flex-1 flex flex-col gap-1">
@@ -103,4 +106,3 @@ export function CriteriaItemCard({
     </div>
   );
 }
-

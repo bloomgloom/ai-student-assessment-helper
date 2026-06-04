@@ -10,13 +10,11 @@ export interface SettingsState {
   providerSettings: Record<string, { model: string; baseUrl: string; maxConcurrency: number }>;
   loggingEnabled: boolean;
   artifactStripIntroBlocks: boolean;
-  storageRoot: string;
+  aiEnabled: boolean;
   storage?: {
     currentRoot: string;
-    configuredRoot: string;
     defaultRoot: string;
-    source: 'env' | 'config' | 'default';
+    source: 'env' | 'default';
     envLocked: boolean;
-    configPath: string;
   };
 }

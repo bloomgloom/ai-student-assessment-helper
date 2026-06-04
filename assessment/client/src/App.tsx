@@ -74,9 +74,6 @@ function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className={`border-t border-gray-700 py-3 text-xs text-gray-500 ${collapsed ? 'text-center' : 'px-4'}`}>
-        {collapsed ? 'v1' : 'v1.0.0'}
-      </div>
     </aside>
   );
 }

@@ -11,6 +11,7 @@ interface AiGenerateBoxProps {
   onGenerate: () => void;
   buttonClassName?: string;
   textareaClassName?: string;
+  disabled?: boolean;
 }
 
 export function AiGenerateBox({
@@ -23,6 +24,7 @@ export function AiGenerateBox({
   onGenerate,
   buttonClassName = 'px-3',
   textareaClassName = '',
+  disabled,
 }: AiGenerateBoxProps) {
   return (
     <div className="space-y-2">
@@ -36,11 +38,12 @@ export function AiGenerateBox({
           placeholder={placeholder}
           value={value}
           onChange={e => onChange(e.target.value)}
+          disabled={disabled}
         />
         <button
           className={`btn-rainbow text-xs py-2 flex items-center gap-1 whitespace-nowrap shrink-0 self-stretch ${buttonClassName}`}
           onClick={onGenerate}
-          disabled={generating}
+          disabled={generating || disabled}
         >
           {generating ? <><Loader2 size={12} className="animate-spin" /> 생성 중...</> : (buttonLabel || <>✨ 생성</>)}
         </button>
@@ -48,4 +51,3 @@ export function AiGenerateBox({
     </div>
   );
 }
-

@@ -2,42 +2,46 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import { queryAll, execute } from '../services/db';
-import { getStorageSettings, saveStorageSettings, UPLOADS_DIR } from '../services/storage';
+import AdmZip from 'adm-zip';
+import multer from 'multer';
+import { execute, closeDb, initDb } from '../services/db';
+import { getStorageSettings, STORAGE_ROOT, UPLOADS_DIR, ensureDir } from '../services/storage';
 import { callLLM, getLLMSettings, fetchOpenAICompatibleModels } from '../services/llm';
 
 const UPLOADS_ROOT = UPLOADS_DIR;
-const execFileAsync = promisify(execFile);
-
 const router = Router();
+const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024 * 1024 } });
 
-async function browseDirectory(): Promise<string> {
-  const platform = os.platform();
-  if (platform === 'darwin') {
-    const { stdout } = await execFileAsync('osascript', [
-      '-e',
-      'POSIX path of (choose folder with prompt "데이터 저장 경로를 선택하세요")',
-    ]);
-    return stdout.trim();
+function makeBackupFilename() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `assessment-backup-${stamp}.zip`;
+}
+
+function assertSafeZip(zip: AdmZip) {
+  for (const entry of zip.getEntries()) {
+    const name = entry.entryName;
+    if (!name || path.isAbsolute(name) || name.includes('\\')) {
+      throw new Error(`허용되지 않는 백업 항목입니다: ${name}`);
+    }
+
+    const normalized = path.posix.normalize(name);
+    if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
+      throw new Error(`백업 파일에 상위 경로 항목이 포함되어 있습니다: ${name}`);
+    }
   }
-  if (platform === 'win32') {
-    const script = [
-      'Add-Type -AssemblyName System.Windows.Forms',
-      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
-      '$dialog.Description = "데이터 저장 경로를 선택하세요"',
-      'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.SelectedPath }',
-    ].join('; ');
-    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script]);
-    return stdout.trim();
+}
+
+function removeDirContents(dir: string) {
+  ensureDir(dir);
+  for (const entry of fs.readdirSync(dir)) {
+    fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
   }
-  try {
-    const { stdout } = await execFileAsync('zenity', ['--file-selection', '--directory', '--title=데이터 저장 경로를 선택하세요']);
-    return stdout.trim();
-  } catch {
-    const { stdout } = await execFileAsync('kdialog', ['--getexistingdirectory', process.cwd()]);
-    return stdout.trim();
+}
+
+function copyDirContents(fromDir: string, toDir: string) {
+  ensureDir(toDir);
+  for (const entry of fs.readdirSync(fromDir)) {
+    fs.cpSync(path.join(fromDir, entry), path.join(toDir, entry), { recursive: true });
   }
 }
 
@@ -55,7 +59,7 @@ router.put('/', async (req: Request, res: Response) => {
     maxConcurrency,
     loggingEnabled,
     artifactStripIntroBlocks,
-    storageRoot,
+    aiEnabled,
     providerSettings,
   } = req.body;
   const concurrency = maxConcurrency != null ? Math.max(1, parseInt(String(maxConcurrency), 10) || 1) : undefined;
@@ -98,6 +102,10 @@ router.put('/', async (req: Request, res: Response) => {
     pairs.push(['artifact_strip_intro_blocks', String(artifactStripIntroBlocks)]);
   }
 
+  if (aiEnabled != null) {
+    pairs.push(['ai_enabled', String(aiEnabled)]);
+  }
+
   if (apiKeys && typeof apiKeys === 'object') {
     for (const [p, key] of Object.entries(apiKeys)) {
       if (typeof key === 'string') {
@@ -112,12 +120,7 @@ router.put('/', async (req: Request, res: Response) => {
     await execute('INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)', [key, value]);
   }
 
-  let storage = getStorageSettings();
-  if (typeof storageRoot === 'string' && !storage.envLocked) {
-    storage = saveStorageSettings(storageRoot);
-  }
-
-  res.json({ ok: true, storage });
+  res.json({ ok: true, storage: getStorageSettings() });
 });
 
 router.get('/compatible-models', async (req: Request, res: Response) => {
@@ -132,17 +135,49 @@ router.get('/compatible-models', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/storage/browse', async (_req: Request, res: Response) => {
+router.get('/backup', async (_req: Request, res: Response) => {
   try {
-    const selectedPath = await browseDirectory();
-    if (!selectedPath) return res.json({ cancelled: true });
-    res.json({ path: selectedPath });
+    await execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    ensureDir(STORAGE_ROOT);
+
+    const zip = new AdmZip();
+    zip.addLocalFolder(STORAGE_ROOT);
+    const buffer = zip.toBuffer();
+    const filename = makeBackupFilename();
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.send(buffer);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes('사용자가 취소') || msg.includes('User canceled') || msg.includes('cancelled') || msg.includes('canceled') || msg.includes('-128')) {
-      return res.json({ cancelled: true });
+    res.status(500).json({ ok: false, error: msg });
+  }
+});
+
+router.post('/restore', restoreUpload.single('file'), async (req: Request, res: Response) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'assessment-restore-'));
+  try {
+    if (!req.file?.buffer) {
+      return res.status(400).json({ ok: false, error: '복원할 ZIP 파일을 선택하세요.' });
     }
-    res.status(500).json({ error: `폴더 선택 창을 열 수 없습니다. 경로를 직접 입력하세요. (${msg})` });
+
+    const zip = new AdmZip(req.file.buffer);
+    assertSafeZip(zip);
+    zip.extractAllTo(tmpDir, true);
+
+    closeDb();
+    removeDirContents(STORAGE_ROOT);
+    copyDirContents(tmpDir, STORAGE_ROOT);
+    await initDb();
+
+    res.json({ ok: true, storage: getStorageSettings() });
+  } catch (e: unknown) {
+    try { await initDb(); } catch { /* keep original error */ }
+    const msg = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ ok: false, error: msg });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -184,9 +219,23 @@ router.post('/reset', async (_req: Request, res: Response) => {
   }
 });
 
-router.post('/test', async (_req: Request, res: Response) => {
+router.post('/test', async (req: Request, res: Response) => {
   try {
-    const result = await callLLM('안녕하세요! 테스트 메시지입니다. 한 문장으로 응답해주세요.');
+    const body = req.body && typeof req.body === 'object' ? req.body : undefined;
+    const hasTestSettings = body && typeof body.provider === 'string';
+    const result = await callLLM('안녕하세요! 테스트 메시지입니다. 한 문장으로 응답해주세요.', hasTestSettings ? {
+      provider: body.provider,
+      apiKey: body.apiKeys?.[body.provider] || body.apiKey || '',
+      apiKeys: body.apiKeys || {},
+      model: body.model || '',
+      baseUrl: body.baseUrl || '',
+      maxConcurrency: Math.max(1, parseInt(String(body.maxConcurrency), 10) || 1),
+      providerSettings: body.providerSettings || {},
+      sequentialMode: (parseInt(String(body.maxConcurrency), 10) || 1) <= 1,
+      loggingEnabled: body.loggingEnabled !== false,
+      artifactStripIntroBlocks: body.artifactStripIntroBlocks !== false,
+      aiEnabled: true,
+    } : undefined);
     res.json({ ok: true, response: result });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

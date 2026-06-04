@@ -7,6 +7,7 @@ import { RECORDS_GUIDE_KEY, RECORDS_LAST_CLASS_KEY, RECORDS_PAGE_TEXT, RECORDS_V
 import { RecordsCollapsedTree } from './RecordsCollapsedTree';
 import { ClassItem, ContentItem, EvalItem, RecordsTreeNode, ScoringContent, SpellcheckResult, Student } from './types';
 import { useRecordsHeader } from './useRecordsHeader';
+import { useAiEnabled } from '../../hooks/useAiEnabled';
 import { useRecordsTree } from './useRecordsTree';
 import { useRecordsUpload } from './useRecordsUpload';
 
@@ -85,6 +86,7 @@ function writeRecordsViewPrefs(classItem: ClassItem, prefs: RecordsViewPrefs) {
 }
 
 export function useRecordsPage() {
+  const aiEnabled = useAiEnabled();
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [subjects, setSubjects] = useState<any[]>([]);
   const [selectedClass, setSelectedClass] = useState<ClassItem | null>(null);
@@ -1012,6 +1014,7 @@ export function useRecordsPage() {
     fullRecordsInputRef,
     handleImportFullRecords,
     handleExportFullRecords,
+    aiEnabled,
   });
 
   return {
@@ -1392,7 +1395,7 @@ export function useRecordsPage() {
                                 type="button"
                                 className="mt-2 inline-flex h-6 w-6 items-center justify-center rounded border border-blue-200 bg-white text-sm font-bold text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
                                 onClick={() => applySpellcheckResult(s.id)}
-                                disabled={!spellcheckResult}
+                                disabled={!spellcheckResult || !aiEnabled}
                                 title="맞춤법 검사 결과를 종합세특에 반영"
                               >
                                 &lt;

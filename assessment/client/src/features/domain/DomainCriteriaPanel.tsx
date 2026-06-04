@@ -7,6 +7,7 @@ interface DomainCriteriaPromptConfig {
   placeholder: string;
   value: string;
   generating?: boolean;
+  disabled?: boolean;
   onChange: (value: string) => void;
   onGenerate: () => void;
 }
@@ -43,6 +44,7 @@ export function DomainCriteriaPromptView({ prompt }: { prompt: ReactNode | Domai
       onChange={prompt.onChange}
       onGenerate={prompt.onGenerate}
       generating={prompt.generating}
+      disabled={prompt.disabled}
     />
   );
 }

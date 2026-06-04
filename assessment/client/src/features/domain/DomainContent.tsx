@@ -66,6 +66,7 @@ interface DomainContentProps {
   handleGenerateCommon: (type: string, metaPrompt: string) => void;
   updateSubjectCommentsMetaPrompt: (type: string, metaPrompt: string) => void;
   updateSubjectComments: (type: string, prompt: string) => void;
+  aiEnabled: boolean;
 }
 
 function EmptySelection() {
@@ -142,6 +143,7 @@ export function DomainContent({
   handleGenerateCommon,
   updateSubjectCommentsMetaPrompt,
   updateSubjectComments,
+  aiEnabled,
 }: DomainContentProps) {
   if (!selectedSubject) {
     return <EmptySelection />;
@@ -163,6 +165,7 @@ export function DomainContent({
               }}
               onGenerate={handleGenerateSubjectDomains}
               generating={generatingSubjectDomains}
+              disabled={!aiEnabled}
             />
           </div>
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -314,6 +317,7 @@ export function DomainContent({
                 },
                 onGenerate: handleGenerateStandards,
                 generating: generatingStandards,
+                disabled: !aiEnabled,
               }
             )}
             items={{
@@ -406,12 +410,13 @@ export function DomainContent({
               },
               onGenerate: handleGenerateEvalItems,
               generating: generatingEval,
+              disabled: !aiEnabled,
             }}
             items={{
               title: '채점 기준 항목',
               addLabel: '항목 추가',
               generating: generatingEval,
-              generateDisabled: evalItems.filter(i => i.item_type !== 'formula').length === 0,
+              generateDisabled: !aiEnabled || evalItems.filter(i => i.item_type !== 'formula').length === 0,
               onGenerate: handleGenerateEvalRubrics,
               onAdd: addEvalItem,
               empty: evalItems.filter(i => i.item_type !== 'formula').length === 0 && (
@@ -442,6 +447,7 @@ export function DomainContent({
                       setEvalMetaPrompts(p => ({ ...p, [idx]: value }));
                       setIsDirty(true);
                     }}
+                    instructionDisabled={!aiEnabled}
                     onResultChange={(value) => updateEvalItem(idx, 'rubric', value)}
                     onScoreChange={(value) => updateEvalItem(idx, 'score', value)}
                     onRemove={() => removeEvalItem(idx)}
@@ -466,12 +472,13 @@ export function DomainContent({
               },
               onGenerate: handleGenerateCommentsItems,
               generating: generatingComments,
+              disabled: !aiEnabled,
             }}
             items={{
               title: '기록 기준 항목',
               addLabel: '항목 추가',
               generating: generatingComments,
-              generateDisabled: commentsItems.length === 0,
+              generateDisabled: !aiEnabled || commentsItems.length === 0,
               onGenerate: handleGenerateCommentsCriteria,
               onAdd: addDomainCommentsItem,
               empty: commentsItems.length === 0 && (
@@ -501,6 +508,7 @@ export function DomainContent({
                       setCommentsMetaPrompts(p => ({ ...p, [idx]: value }));
                       setIsDirty(true);
                     }}
+                    instructionDisabled={!aiEnabled}
                     onResultChange={(value) => updateCommentsItem(idx, 'prompt', value)}
                     onRemove={() => removeCommentsItem(idx)}
                   />
@@ -518,6 +526,7 @@ export function DomainContent({
             onMetaPromptChange={updateSubjectCommentsMetaPrompt}
             onPromptChange={updateSubjectComments}
             onGenerate={handleGenerateCommon}
+            aiDisabled={!aiEnabled}
           />
         </Section>
       )}

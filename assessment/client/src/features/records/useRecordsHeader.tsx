@@ -35,6 +35,7 @@ interface UseRecordsHeaderOptions {
   fullRecordsInputRef: RefObject<HTMLInputElement>;
   handleImportFullRecords: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleExportFullRecords: () => void;
+  aiEnabled: boolean;
 }
 
 export function useRecordsHeader({
@@ -68,6 +69,7 @@ export function useRecordsHeader({
   fullRecordsInputRef,
   handleImportFullRecords,
   handleExportFullRecords,
+  aiEnabled,
 }: UseRecordsHeaderOptions) {
   const showDomainControls = showScoring || showComments;
   const toggleButtonClassName = (active: boolean, enabled = true) =>
@@ -160,28 +162,28 @@ export function useRecordsHeader({
       variant: 'rainbow' as const,
       label: '채점',
       onClick: () => handleBatchGenerate('scoring'),
-      disabled: batchGenerating,
+      disabled: batchGenerating || !aiEnabled,
     }] : []),
     ...(showComments ? [{
       key: 'generate-record',
       variant: 'rainbow' as const,
       label: '기록',
       onClick: () => handleBatchGenerate('comments'),
-      disabled: batchGenerating,
+      disabled: batchGenerating || !aiEnabled,
     }] : []),
     ...(showComprehensive ? [{
       key: 'generate-comments',
       variant: 'rainbow' as const,
       label: '세특',
       onClick: () => handleBatchGenerate('comments', SUBJECT_COMPREHENSIVE_DOMAIN),
-      disabled: batchGenerating,
+      disabled: batchGenerating || !aiEnabled,
     }] : []),
     ...(showComprehensive ? [{
       key: 'spellcheck',
       variant: 'rainbow' as const,
       label: '교정',
       onClick: handleBatchSpellcheck,
-      disabled: !!spellcheckProgress || spellcheckingCount > 0,
+      disabled: !!spellcheckProgress || spellcheckingCount > 0 || !aiEnabled,
       title: selectedStudentCount > 0 ? '선택한 행 맞춤법 검사' : '전체 행 맞춤법 검사',
     }] : []),
     ...((showScoring && !showComments && !showComprehensive) || (!showScoring && !showComments && showComprehensive) ? [{
