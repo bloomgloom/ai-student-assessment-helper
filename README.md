@@ -44,9 +44,8 @@
 
 ## 다운로드 / 설치
 
-[최신 버전 다운로드](https://github.com/bloomgloom/ai-student-assessment-helper/releases/latest)
-
-최신 릴리즈에서 macOS용 `.dmg` 또는 Windows용 `.exe` 파일을 내려받아 설치합니다.
+- [Windows 다운로드 (.exe)](https://github.com/bloomgloom/ai-student-assessment-helper/releases/download/v0.1.0/AI.Student.Assessment.Helper.Setup.0.1.0.exe)
+- [macOS 다운로드 (.dmg)](https://github.com/bloomgloom/ai-student-assessment-helper/releases/download/v0.1.0/AI.Student.Assessment.Helper-0.1.0-arm64.dmg)
 
 macOS에서 “확인되지 않은 개발자” 경고가 나오면 Finder에서 앱을 우클릭한 뒤 `열기`를 선택합니다.
 
