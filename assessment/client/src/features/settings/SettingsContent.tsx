@@ -96,11 +96,48 @@ export function SettingsContent({
               disabled={inputOptionsSaving || aiDisabled}
               onChange={(e) => handleInputOptionChange('artifactStripIntroBlocks', e.target.checked)}
             />
-            <span className="text-sm font-medium text-gray-700">산출물 첫 설명 블록 제외</span>
+            <span className="text-sm font-medium text-gray-700">산출물 개인정보 가리기</span>
           </label>
           <p className="text-xs text-gray-400 mt-1 ml-6">
             켜면 HWPX 첫 표 행, IPYNB 첫 마크다운 셀, 코드 파일 맨 앞의 블록 주석이나 docstring을 AI 입력에서 제외합니다.
           </p>
+          <div className="mt-3 ml-6 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-xs font-medium text-gray-600" htmlFor="pdf-redaction-top-cm">
+                PDF 첫 페이지 상단 가림 높이
+              </label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  className="input h-8 w-20 text-right text-xs"
+                  min={0}
+                  max={30}
+                  step={0.1}
+                  value={settings.pdfRedactionTopCm}
+                  disabled={inputOptionsSaving || aiDisabled || !settings.artifactStripIntroBlocks}
+                  onChange={(e) => {
+                    const nextValue = Math.max(0, Math.min(30, Number(e.target.value) || 0));
+                    handleInputOptionChange('pdfRedactionTopCm', nextValue);
+                  }}
+                />
+                <span className="text-xs text-gray-500">cm</span>
+              </div>
+            </div>
+            <input
+              id="pdf-redaction-top-cm"
+              type="range"
+              className="w-full accent-gray-800"
+              min={0}
+              max={30}
+              step={0.1}
+              value={settings.pdfRedactionTopCm}
+              disabled={inputOptionsSaving || aiDisabled || !settings.artifactStripIntroBlocks}
+              onChange={(e) => handleInputOptionChange('pdfRedactionTopCm', Number(e.target.value))}
+            />
+            <p className="text-xs text-gray-400">
+              원본 PDF는 그대로 보관하고, AI 입력용 이미지 캐시를 만들 때 첫 페이지만 지정 높이만큼 위에서부터 지웁니다. 0이면 PDF 가림을 적용하지 않습니다.
+            </p>
+          </div>
         </div>
       </div>
       </div>

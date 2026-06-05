@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import { queryAll, queryOne } from '../services/db';
-import { callLLM, createLLMLogSession, getLLMSettings, type LLMLogSession, type LLMSettings } from '../services/llm';
+import { callLLM, createLLMLogSession, getLLMSettings, type LLMImageAttachment, type LLMLogSession, type LLMSettings } from '../services/llm';
 import { extractHwpxText } from '../services/hwpx';
+import { imageFileToAttachment, pdfToRedactedJpegAttachments } from '../services/visionArtifacts';
 
 const router = Router();
 
@@ -357,7 +358,8 @@ function stripLeadingCodeIntroBlock(code: string, ext: string): string {
 async function appendArtifactContents(
   parts: string[],
   artifacts: ArtifactRow[],
-  settings: Pick<LLMSettings, 'artifactStripIntroBlocks'>,
+  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'pdfRedactionTopCm'>,
+  attachments: LLMImageAttachment[] = [],
 ): Promise<boolean> {
   let hasContent = false;
   const privacyMapper = createArtifactPrivacyMapper(artifacts);
@@ -428,8 +430,27 @@ async function appendArtifactContents(
         parts.push(`[${promptLabel}]\n${text}\n---`);
         hasContent = true;
       } catch { /* skip */ }
-    } else if (artifact.mime_type === 'application/pdf') {
-      parts.push(`[${promptLabel}] (PDF 파일 첨부 - 텍스트 파일로 변환 후 업로드 권장)\n---`);
+    } else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+      try {
+        attachments.push(imageFileToAttachment(artifact.filepath, privacyMapper.artifactName(artifact), ext));
+        parts.push(`[${promptLabel}] (이미지 파일 첨부)\n---`);
+        hasContent = true;
+      } catch { /* skip */ }
+    } else if (artifact.mime_type === 'application/pdf' || ext === 'pdf') {
+      try {
+        const topHeightCm = settings.artifactStripIntroBlocks ? settings.pdfRedactionTopCm : 0;
+        const pdfAttachments = await pdfToRedactedJpegAttachments(
+          artifact.filepath,
+          privacyMapper.artifactName(artifact),
+          topHeightCm,
+        );
+        attachments.push(...pdfAttachments);
+        parts.push(`[${promptLabel}] (원본 PDF를 LLM 입력용 이미지 ${pdfAttachments.length}쪽으로 변환해 첨부${topHeightCm > 0 ? `, 첫 페이지 상단 ${topHeightCm}cm 제거` : ''})\n---`);
+        if (pdfAttachments.length > 0) hasContent = true;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        parts.push(`[${promptLabel}] (PDF 이미지 변환 실패: ${message})\n---`);
+      }
     }
   }
 
@@ -510,7 +531,8 @@ router.post('/generate', async (req: Request, res: Response) => {
   }
 
   const settings = await getLLMSettings();
-  const hasContent = await appendArtifactContents(parts, artifacts, settings);
+  const attachments: LLMImageAttachment[] = [];
+  const hasContent = await appendArtifactContents(parts, artifacts, settings, attachments);
 
   if (!hasContent && artifacts.length === 0) {
     if (contentType !== 'scoring') {
@@ -528,7 +550,7 @@ router.post('/generate', async (req: Request, res: Response) => {
 
   try {
     const noArtifactScoring = contentType === 'scoring' && !hasContent;
-    const result = noArtifactScoring ? '산출물 없음: 기본점수 적용' : await callLLM(parts.join('\n\n'), settings);
+    const result = noArtifactScoring ? '산출물 없음: 기본점수 적용' : await callLLM(parts.join('\n\n'), settings, undefined, undefined, attachments);
     const storedContent = noArtifactScoring
       ? buildDefaultScoringContent(evalCriteria)
       : buildStoredContent(contentType, result, evalCriteria);
@@ -692,7 +714,8 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
         }
 
         if (!settings) throw new Error('LLM 설정이 로드되지 않았습니다.');
-        const hasContent = await appendArtifactContents(parts, artifacts, settings);
+        const attachments: LLMImageAttachment[] = [];
+        const hasContent = await appendArtifactContents(parts, artifacts, settings, attachments);
 
         if (hasContent || artifacts.length > 0) {
           parts.push(criteriaSet.mode === '세특'
@@ -704,7 +727,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
             result = await callLLM(parts.join('\n\n'), settings, abortController.signal, {
               session: logSession || undefined,
               label: `학생 ${index + 1}/${students.length}`,
-            });
+            }, attachments);
             if (cancelled) return;
             storedContent = buildStoredContent(contentType, result, evalCriteria);
           } catch (e: unknown) {

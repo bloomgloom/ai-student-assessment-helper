@@ -59,6 +59,7 @@ router.put('/', async (req: Request, res: Response) => {
     maxConcurrency,
     loggingEnabled,
     artifactStripIntroBlocks,
+    pdfRedactionTopCm,
     aiEnabled,
     providerSettings,
   } = req.body;
@@ -100,6 +101,11 @@ router.put('/', async (req: Request, res: Response) => {
 
   if (artifactStripIntroBlocks != null) {
     pairs.push(['artifact_strip_intro_blocks', String(artifactStripIntroBlocks)]);
+  }
+
+  if (pdfRedactionTopCm != null) {
+    const heightCm = Math.max(0, Math.min(30, parseFloat(String(pdfRedactionTopCm)) || 0));
+    pairs.push(['pdf_redaction_top_cm', String(heightCm)]);
   }
 
   if (aiEnabled != null) {
@@ -234,6 +240,7 @@ router.post('/test', async (req: Request, res: Response) => {
       sequentialMode: (parseInt(String(body.maxConcurrency), 10) || 1) <= 1,
       loggingEnabled: body.loggingEnabled !== false,
       artifactStripIntroBlocks: body.artifactStripIntroBlocks !== false,
+      pdfRedactionTopCm: Math.max(0, Math.min(30, parseFloat(String(body.pdfRedactionTopCm ?? '0')) || 0)),
       aiEnabled: true,
     } : undefined);
     res.json({ ok: true, response: result });

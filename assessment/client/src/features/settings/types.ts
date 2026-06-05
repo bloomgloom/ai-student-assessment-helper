@@ -10,6 +10,7 @@ export interface SettingsState {
   providerSettings: Record<string, { model: string; baseUrl: string; maxConcurrency: number }>;
   loggingEnabled: boolean;
   artifactStripIntroBlocks: boolean;
+  pdfRedactionTopCm: number;
   aiEnabled: boolean;
   storage?: {
     currentRoot: string;

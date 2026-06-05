@@ -15,6 +15,7 @@ export interface LLMSettings {
   sequentialMode: boolean;
   loggingEnabled: boolean;
   artifactStripIntroBlocks: boolean;
+  pdfRedactionTopCm: number;
   aiEnabled: boolean;
 }
 
@@ -34,6 +35,12 @@ export interface LLMLogSession {
 export interface LLMLogOptions {
   session?: LLMLogSession;
   label?: string;
+}
+
+export interface LLMImageAttachment {
+  filename: string;
+  mimeType: string;
+  data: string;
 }
 
 export async function getLLMSettings(): Promise<LLMSettings> {
@@ -82,6 +89,7 @@ export async function getLLMSettings(): Promise<LLMSettings> {
     sequentialMode: activeMaxConcurrency <= 1,
     loggingEnabled: map['llm_logging_enabled'] !== 'false',
     artifactStripIntroBlocks: map['artifact_strip_intro_blocks'] !== 'false',
+    pdfRedactionTopCm: Math.max(0, Math.min(30, parseFloat(map['pdf_redaction_top_cm'] || '0') || 0)),
     aiEnabled: map['ai_enabled'] === 'true',
   };
 }
@@ -153,6 +161,7 @@ async function writeLLMLog(params: {
   finishedAt: Date;
   settings: LLMSettings;
   prompt: string;
+  attachments?: LLMImageAttachment[];
   output?: string;
   error?: unknown;
   log?: LLMLogOptions;
@@ -177,6 +186,13 @@ async function writeLLMLog(params: {
       '',
       '===== LLM INPUT =====',
       params.prompt,
+      ...(params.attachments?.length ? [
+        '',
+        '===== LLM IMAGE ATTACHMENTS =====',
+        ...params.attachments.map((item, index) =>
+          `${index + 1}. ${item.filename} (${item.mimeType}, base64 ${item.data.length} chars)`
+        ),
+      ] : []),
       '',
       params.error === undefined ? '===== LLM OUTPUT =====' : '===== LLM ERROR =====',
       params.error === undefined ? (params.output || '') : errorText,
@@ -208,7 +224,13 @@ function mergeSignals(...signals: Array<AbortSignal | undefined>): AbortSignal |
   return controller.signal;
 }
 
-export async function callLLM(prompt: string, settings?: LLMSettings, signal?: AbortSignal, log?: LLMLogOptions): Promise<string> {
+export async function callLLM(
+  prompt: string,
+  settings?: LLMSettings,
+  signal?: AbortSignal,
+  log?: LLMLogOptions,
+  attachments: LLMImageAttachment[] = [],
+): Promise<string> {
   const cfg = settings || (await getLLMSettings());
   if (!cfg.aiEnabled) {
     throw new Error('AI 기능이 꺼져 있습니다. 환경 설정에서 AI 기능 사용을 켜세요.');
@@ -217,32 +239,43 @@ export async function callLLM(prompt: string, settings?: LLMSettings, signal?: A
 
   try {
     let output: string;
-    if (cfg.provider === 'openai-compatible') output = await callOpenAICompatible(prompt, cfg, signal);
-    else if (cfg.provider === 'ollama') output = await callOllama(prompt, cfg, signal);
-    else if (cfg.provider === 'anthropic') output = await callAnthropic(prompt, cfg, signal);
-    else if (cfg.provider === 'gemini') output = await callGemini(prompt, cfg, signal);
-    else output = await callOpenAI(prompt, cfg, signal);
+    if (cfg.provider === 'openai-compatible') output = await callOpenAICompatible(prompt, cfg, signal, attachments);
+    else if (cfg.provider === 'ollama') output = await callOllama(prompt, cfg, signal, attachments);
+    else if (cfg.provider === 'anthropic') output = await callAnthropic(prompt, cfg, signal, attachments);
+    else if (cfg.provider === 'gemini') output = await callGemini(prompt, cfg, signal, attachments);
+    else output = await callOpenAI(prompt, cfg, signal, attachments);
 
     if (cfg.loggingEnabled) {
-      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, output, log });
+      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, attachments, output, log });
     }
     return output;
   } catch (error) {
     if (cfg.loggingEnabled) {
-      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, error, log });
+      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, attachments, error, log });
     }
     throw error;
   }
 }
 
-async function callOpenAI(prompt: string, cfg: LLMSettings, signal?: AbortSignal): Promise<string> {
+function buildOpenAIContent(prompt: string, attachments: LLMImageAttachment[]) {
+  if (!attachments.length) return prompt;
+  return [
+    { type: 'text', text: prompt },
+    ...attachments.map((item) => ({
+      type: 'image_url',
+      image_url: { url: `data:${item.mimeType};base64,${item.data}` },
+    })),
+  ];
+}
+
+async function callOpenAI(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = []): Promise<string> {
   const baseUrl = cfg.baseUrl || 'https://api.openai.com/v1';
   const model = cfg.model || 'gpt-4o-mini';
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.3 }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: buildOpenAIContent(prompt, attachments) }], temperature: 0.3 }),
     signal,
   });
   if (!res.ok) throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
@@ -250,8 +283,21 @@ async function callOpenAI(prompt: string, cfg: LLMSettings, signal?: AbortSignal
   return data.choices[0]?.message?.content || '';
 }
 
-async function callAnthropic(prompt: string, cfg: LLMSettings, signal?: AbortSignal): Promise<string> {
+async function callAnthropic(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = []): Promise<string> {
   const model = cfg.model || 'claude-sonnet-4-6';
+  const content = attachments.length
+    ? [
+        { type: 'text', text: prompt },
+        ...attachments.map((item) => ({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: item.mimeType,
+            data: item.data,
+          },
+        })),
+      ]
+    : prompt;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -259,7 +305,7 @@ async function callAnthropic(prompt: string, cfg: LLMSettings, signal?: AbortSig
       'x-api-key': cfg.apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] }),
+    body: JSON.stringify({ model, max_tokens: 4096, messages: [{ role: 'user', content }] }),
     signal,
   });
   if (!res.ok) throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
@@ -267,7 +313,7 @@ async function callAnthropic(prompt: string, cfg: LLMSettings, signal?: AbortSig
   return data.content[0]?.text || '';
 }
 
-async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal): Promise<string> {
+async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = []): Promise<string> {
   const model = cfg.model || 'gemini-2.5-flash';
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.apiKey}`,
@@ -275,7 +321,17 @@ async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{
+          parts: [
+            { text: prompt },
+            ...attachments.map((item) => ({
+              inline_data: {
+                mime_type: item.mimeType,
+                data: item.data,
+              },
+            })),
+          ],
+        }],
         generationConfig: { temperature: 0.3 },
       }),
       signal,
@@ -288,7 +344,7 @@ async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal
   return data.candidates[0]?.content?.parts[0]?.text || '';
 }
 
-async function callOpenAICompatible(prompt: string, cfg: LLMSettings, signal?: AbortSignal): Promise<string> {
+async function callOpenAICompatible(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = []): Promise<string> {
   const baseUrl = cfg.baseUrl || 'http://localhost:8000/v1';
   const model = cfg.model;
   if (!model) throw new Error('OpenAI 호환: 모델명을 설정해주세요. 모델 가져오기를 사용하거나 직접 입력하세요.');
@@ -304,7 +360,7 @@ async function callOpenAICompatible(prompt: string, cfg: LLMSettings, signal?: A
         model,
         messages: [
           { role: 'system', content: '당신은 유능하고 친절한 AI 어시스턴트입니다.' },
-          { role: 'user', content: prompt },
+          { role: 'user', content: buildOpenAIContent(prompt, attachments) },
         ],
         temperature: 0.3,
         max_tokens: 4096,
@@ -333,13 +389,18 @@ async function callOpenAICompatible(prompt: string, cfg: LLMSettings, signal?: A
   return doRequest();
 }
 
-async function callOllama(prompt: string, cfg: LLMSettings, signal?: AbortSignal): Promise<string> {
+async function callOllama(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = []): Promise<string> {
   const baseUrl = cfg.baseUrl || 'http://localhost:11434';
   const model = cfg.model || 'llama3';
   const res = await fetch(`${baseUrl}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, prompt, stream: false }),
+    body: JSON.stringify({
+      model,
+      prompt,
+      stream: false,
+      ...(attachments.length ? { images: attachments.map((item) => item.data) } : {}),
+    }),
     signal,
   });
   if (!res.ok) throw new Error(`Ollama API error ${res.status}: ${await res.text()}`);

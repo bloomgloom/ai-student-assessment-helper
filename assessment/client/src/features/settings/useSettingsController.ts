@@ -14,6 +14,7 @@ export function useSettingsController() {
     providerSettings: {},
     loggingEnabled: true,
     artifactStripIntroBlocks: true,
+    pdfRedactionTopCm: 0,
     aiEnabled: false,
   });
   const [saving, setSaving] = useState(false);
@@ -38,6 +39,7 @@ export function useSettingsController() {
         ...data,
         providerSettings: data.providerSettings || {},
         artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
+        pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
         aiEnabled: data.aiEnabled === true,
       });
     });
@@ -150,8 +152,8 @@ export function useSettingsController() {
   };
 
   const handleInputOptionChange = async (
-    key: 'loggingEnabled' | 'artifactStripIntroBlocks' | 'aiEnabled',
-    value: boolean,
+    key: 'loggingEnabled' | 'artifactStripIntroBlocks' | 'aiEnabled' | 'pdfRedactionTopCm',
+    value: boolean | number,
   ) => {
     const previousValue = settings[key];
     setTestResult(null);

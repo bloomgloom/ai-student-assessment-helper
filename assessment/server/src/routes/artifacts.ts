@@ -16,7 +16,7 @@ const TEMP_DIR = path.join(UPLOADS_DIR, 'temp');
 
 const upload = multer({ dest: TEMP_DIR, limits: { fileSize: 200 * 1024 * 1024 } });
 
-// 텍스트 파일 확장자 → charset=utf-8 포함 Content-Type
+// 파일 확장자 → Content-Type
 const TEXT_CONTENT_TYPES: Record<string, string> = {
   '.py':   'text/x-python; charset=utf-8',
   '.js':   'text/javascript; charset=utf-8',
@@ -36,6 +36,7 @@ const TEXT_CONTENT_TYPES: Record<string, string> = {
   '.txt':  'text/plain; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
   '.hwpx': 'application/vnd.hancom.hwpx',
+  '.pdf':  'application/pdf',
 };
 
 function escHtml(s: string): string {
@@ -322,11 +323,9 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
 
       const finalPath = uniqueArtifactPath(baseUploadDir, origName, index);
       const finalName = origName;
-      let mimeType = file.mimetype;
+      let mimeType = file.mimetype || TEXT_CONTENT_TYPES[ext] || '';
 
-      if (ext === '.hwpx') {
-        mimeType = TEXT_CONTENT_TYPES['.hwpx'];
-      }
+      if (TEXT_CONTENT_TYPES[ext]) mimeType = TEXT_CONTENT_TYPES[ext];
 
       fs.renameSync(file.path, finalPath);
       movedPaths.push(finalPath);
