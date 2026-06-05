@@ -23,6 +23,32 @@ export function storagePath(...parts: string[]) {
   return path.join(STORAGE_ROOT, ...parts);
 }
 
+export function toStoredPath(filepath: string): string {
+  if (!filepath) return '';
+  const absolutePath = path.resolve(filepath);
+  const relativePath = path.relative(STORAGE_ROOT, absolutePath);
+  if (!relativePath.startsWith('..') && !path.isAbsolute(relativePath)) return relativePath;
+
+  const marker = `${path.sep}uploads${path.sep}`;
+  const markerIndex = absolutePath.indexOf(marker);
+  if (markerIndex >= 0) {
+    return path.join('uploads', absolutePath.slice(markerIndex + marker.length));
+  }
+  return filepath;
+}
+
+export function resolveStoredPath(filepath: string): string {
+  if (!filepath) return '';
+  if (!path.isAbsolute(filepath)) return path.join(STORAGE_ROOT, filepath);
+
+  const marker = `${path.sep}uploads${path.sep}`;
+  const markerIndex = path.resolve(filepath).indexOf(marker);
+  if (markerIndex >= 0) {
+    return path.join(UPLOADS_DIR, path.resolve(filepath).slice(markerIndex + marker.length));
+  }
+  return filepath;
+}
+
 export function getStorageSettings() {
   return {
     currentRoot: STORAGE_ROOT,

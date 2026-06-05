@@ -5,6 +5,7 @@ const net = require('net');
 const path = require('path');
 
 const ASSESSMENT_HOST = '127.0.0.1';
+const DEFAULT_ASSESSMENT_PORT = 3201;
 
 app.setName('ai-student-assessment-helper');
 app.setPath('userData', path.join(app.getPath('appData'), 'ai-student-assessment-helper'));
@@ -23,6 +24,18 @@ function getAssessmentServerEntry() {
 
 function getAppStorageDir() {
   return path.join(app.getPath('userData'), 'storage');
+}
+
+function getBundledPythonPath() {
+  const platformPath = process.platform === 'win32'
+    ? path.join('Scripts', 'python.exe')
+    : path.join('bin', 'python3');
+  const relativePath = path.join('assessment', 'python', '.venv', platformPath);
+  const candidates = [
+    path.join(getAppRoot(), relativePath),
+    path.join(process.resourcesPath, 'app.asar.unpacked', relativePath)
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || '';
 }
 
 function waitForServer(url, timeoutMs = 15000) {
@@ -59,6 +72,22 @@ function getAvailablePort() {
   });
 }
 
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(port, ASSESSMENT_HOST, () => {
+      probe.close(() => resolve(true));
+    });
+  });
+}
+
+async function getAssessmentPort() {
+  if (process.env.ASSESSMENT_PORT) return Number(process.env.ASSESSMENT_PORT);
+  if (await isPortAvailable(DEFAULT_ASSESSMENT_PORT)) return DEFAULT_ASSESSMENT_PORT;
+  return getAvailablePort();
+}
+
 async function startAssessmentServer() {
   if (serverProcess) return Promise.resolve();
 
@@ -69,7 +98,8 @@ async function startAssessmentServer() {
 
   const storageDir = getAppStorageDir();
   fs.mkdirSync(storageDir, { recursive: true });
-  assessmentPort = await getAvailablePort();
+  assessmentPort = await getAssessmentPort();
+  const bundledPythonPath = getBundledPythonPath();
 
   serverProcess = fork(serverEntry, [], {
     cwd: app.getPath('userData'),
@@ -77,7 +107,8 @@ async function startAssessmentServer() {
       ...process.env,
       HOST: ASSESSMENT_HOST,
       PORT: String(assessmentPort),
-      APP_STORAGE_DIR: storageDir
+      APP_STORAGE_DIR: storageDir,
+      ...(bundledPythonPath ? { ASSESSMENT_PYTHON: bundledPythonPath } : {})
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc']
   });

@@ -4,6 +4,8 @@ import { queryAll, queryOne } from '../services/db';
 import { callLLM, createLLMLogSession, getLLMSettings, type LLMImageAttachment, type LLMLogSession, type LLMSettings } from '../services/llm';
 import { extractHwpxText } from '../services/hwpx';
 import { imageFileToAttachment, pdfToRedactedJpegAttachments } from '../services/visionArtifacts';
+import { buildNotebookExecutionEvidence, buildTabularDataEvidence } from '../services/artifactEvidence';
+import { resolveStoredPath } from '../services/storage';
 
 const router = Router();
 
@@ -294,15 +296,24 @@ function createArtifactPrivacyMapper(artifacts: ArtifactRow[]): ArtifactPrivacyM
   };
 }
 
-function decodeTextBuffer(buffer: Buffer): string {
+interface DecodedTextBuffer {
+  text: string;
+  encoding: string;
+}
+
+function decodeTextBufferWithEncoding(buffer: Buffer): DecodedTextBuffer {
   const encodings = ['utf-8', 'euc-kr', 'utf-16le'];
   for (const encoding of encodings) {
     try {
       const decoded = new TextDecoder(encoding, { fatal: encoding === 'utf-8' }).decode(buffer);
-      if (!decoded.includes('\uFFFD')) return decoded;
+      if (!decoded.includes('\uFFFD')) return { text: decoded, encoding };
     } catch { /* try next encoding */ }
   }
-  return buffer.toString('utf8');
+  return { text: buffer.toString('utf8'), encoding: 'utf-8-fallback' };
+}
+
+function decodeTextBuffer(buffer: Buffer): string {
+  return decodeTextBufferWithEncoding(buffer).text;
 }
 
 function normalizeNotebookSource(source: unknown): string {
@@ -332,8 +343,9 @@ function extractIpynbInputText(buffer: Buffer, options: { skipFirstMarkdownCell?
   return chunks.join('\n\n');
 }
 
-function extractCsvInputText(buffer: Buffer): string {
-  return decodeTextBuffer(buffer).trim();
+function extractCsvInputText(buffer: Buffer): DecodedTextBuffer {
+  const decoded = decodeTextBufferWithEncoding(buffer);
+  return { ...decoded, text: decoded.text.trim() };
 }
 
 function stripLeadingCStyleBlockComment(code: string): string {
@@ -370,11 +382,13 @@ async function appendArtifactContents(
 
   for (const [index, artifact] of artifacts.entries()) {
     const ext = artifact.filename.split('.').pop()?.toLowerCase() || '';
+    const filepath = resolveStoredPath(artifact.filepath);
+    const resolvedArtifact = { ...artifact, filepath };
     const promptLabel = `산출물 ${index + 1}: ${privacyMapper.artifactName(artifact)}`;
     if (ext === 'hwpx') {
       try {
         const text = privacyMapper.sanitizeText(
-          await extractHwpxText(fs.readFileSync(artifact.filepath), {
+          await extractHwpxText(fs.readFileSync(filepath), {
             skipFirstTableRow: settings.artifactStripIntroBlocks,
           })
         );
@@ -389,7 +403,7 @@ async function appendArtifactContents(
     } else if (ext === 'ipynb') {
       try {
         const text = privacyMapper.sanitizeText(
-          extractIpynbInputText(fs.readFileSync(artifact.filepath), {
+          extractIpynbInputText(fs.readFileSync(filepath), {
             skipFirstMarkdownCell: settings.artifactStripIntroBlocks,
           })
         );
@@ -401,17 +415,31 @@ async function appendArtifactContents(
           hasContent = true;
         }
       } catch { /* skip */ }
-    } else if (ext === 'csv') {
       try {
-        const text = privacyMapper.sanitizeText(extractCsvInputText(fs.readFileSync(artifact.filepath)));
+        const evidence = await buildNotebookExecutionEvidence(
+          resolvedArtifact,
+          artifacts.map((item) => ({ ...item, filepath: resolveStoredPath(item.filepath) })),
+          privacyMapper.artifactName(artifact),
+          { skipFirstMarkdownCell: settings.artifactStripIntroBlocks },
+        );
+        const text = privacyMapper.sanitizeText(evidence.text);
         if (text) {
-          parts.push(`[${promptLabel}]\n[CSV 데이터: 파일명 제외]\n\`\`\`csv\n${text}\n\`\`\`\n---`);
+          parts.push(`[${promptLabel}]\n${text}\n---`);
+          hasContent = true;
+        }
+        attachments.push(...evidence.attachments);
+      } catch { /* skip */ }
+    } else if (['csv', 'tsv', 'xlsx', 'xls'].includes(ext)) {
+      try {
+        const text = privacyMapper.sanitizeText(await buildTabularDataEvidence(resolvedArtifact));
+        if (text) {
+          parts.push(`[${promptLabel}]\n${text}\n---`);
           hasContent = true;
         }
       } catch { /* skip */ }
     } else if (codeExts[ext]) {
       try {
-        const rawCode = fs.readFileSync(artifact.filepath, 'utf-8');
+        const rawCode = fs.readFileSync(filepath, 'utf-8');
         const code = privacyMapper.sanitizeText(
           settings.artifactStripIntroBlocks ? stripLeadingCodeIntroBlock(rawCode, ext) : rawCode
         );
@@ -422,9 +450,9 @@ async function appendArtifactContents(
       try {
         let text: string;
         try {
-          text = fs.readFileSync(artifact.filepath, 'utf-8');
+          text = fs.readFileSync(filepath, 'utf-8');
         } catch {
-          text = fs.readFileSync(artifact.filepath, 'utf16le');
+          text = fs.readFileSync(filepath, 'utf16le');
         }
         text = privacyMapper.sanitizeText(text);
         parts.push(`[${promptLabel}]\n${text}\n---`);
@@ -432,7 +460,7 @@ async function appendArtifactContents(
       } catch { /* skip */ }
     } else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
       try {
-        attachments.push(imageFileToAttachment(artifact.filepath, privacyMapper.artifactName(artifact), ext));
+        attachments.push(imageFileToAttachment(filepath, privacyMapper.artifactName(artifact), ext));
         parts.push(`[${promptLabel}] (이미지 파일 첨부)\n---`);
         hasContent = true;
       } catch { /* skip */ }
@@ -440,7 +468,7 @@ async function appendArtifactContents(
       try {
         const topHeightCm = settings.artifactStripIntroBlocks ? settings.pdfRedactionTopCm : 0;
         const pdfAttachments = await pdfToRedactedJpegAttachments(
-          artifact.filepath,
+          filepath,
           privacyMapper.artifactName(artifact),
           topHeightCm,
         );
@@ -750,6 +778,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
         domain,
         content: storedContent,
         error,
+        llmResult: error && result ? result : undefined,
         completed,
         total: students.length,
       });

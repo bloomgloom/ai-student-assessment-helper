@@ -29,6 +29,8 @@ export interface ScoringContent {
   [key: string]: string | number | Record<string, string> | undefined;
   total?: string | number;
   __reasons?: Record<string, string>;
+  __llmError?: string;
+  __llmErrorResult?: string;
 }
 
 export interface ContentItem {

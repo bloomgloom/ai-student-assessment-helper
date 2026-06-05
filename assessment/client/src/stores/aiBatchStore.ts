@@ -7,7 +7,9 @@ export interface GeneratedContentUpdate {
   studentId: number;
   contentType: BatchContentType;
   domain: string;
-  content: string;
+  content?: string;
+  error?: string;
+  llmResult?: string;
 }
 
 export interface BatchJob {
@@ -52,7 +54,7 @@ function newJobId() {
 
 function isGeneratedContentUpdate(value: unknown): value is GeneratedContentUpdate {
   const event = value as Partial<GeneratedContentUpdate>;
-  return Boolean(event.studentId && event.contentType && event.domain && event.content);
+  return Boolean(event.studentId && event.contentType && event.domain && (event.content || event.error || event.llmResult));
 }
 
 export const useAiBatchStore = create<AiBatchState>((set, get) => ({
@@ -146,12 +148,16 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
                     contentType: event.contentType || contentType,
                     domain: event.domain || domain,
                     content: event.content,
+                    error: event.error,
+                    llmResult: event.llmResult,
                   })
                     ? {
                         studentId: event.studentId,
                         contentType: event.contentType || contentType,
                         domain: event.domain || domain,
                         content: event.content,
+                        error: event.error,
+                        llmResult: event.llmResult,
                       }
                     : null;
 

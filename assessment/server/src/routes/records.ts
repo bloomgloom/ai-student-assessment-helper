@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
-import { UPLOADS_DIR, ensureDir } from '../services/storage';
+import { UPLOADS_DIR, ensureDir, resolveStoredPath } from '../services/storage';
 import { parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeCommentsToExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
@@ -101,7 +101,8 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
 
     if (type === 'scoring') {
       // ── 채점 파일에 영역별 합계 점수 기록 ─────────────────────────────
-      if (!cls.scoring_filepath || !fs.existsSync(cls.scoring_filepath)) {
+      const scoringFilepath = resolveStoredPath(cls.scoring_filepath);
+      if (!cls.scoring_filepath || !fs.existsSync(scoringFilepath)) {
         return res.status(400).json({ error: '채점 원본 파일이 없습니다. 파일을 먼저 업로드해주세요.' });
       }
 
@@ -109,7 +110,7 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
         'SELECT name, excel_col FROM assessment_domains WHERE class_id=? ORDER BY sort_order',
         [classId]
       );
-      const parsedScoring = await parseScoringExcel(cls.scoring_filepath);
+      const parsedScoring = await parseScoringExcel(scoringFilepath);
       const scoringRowByStudentNum = new Map(
         parsedScoring.students.map(student => [cls.grade * 10000 + student.studentNum, student.excelRow])
       );
@@ -134,12 +135,13 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
         }
       }
 
-      buffer = await writeScoringToExcel(cls.scoring_filepath, entries);
+      buffer = await writeScoringToExcel(scoringFilepath, entries);
       downloadName = cls.scoring_filename || cls.filename;
 
     } else {
       // ── 세특 파일에 종합 세특 기록 ────────────────────────────────────
-      if (!cls.comments_filepath || !fs.existsSync(cls.comments_filepath)) {
+      const commentsFilepath = resolveStoredPath(cls.comments_filepath);
+      if (!cls.comments_filepath || !fs.existsSync(commentsFilepath)) {
         return res.status(400).json({ error: '세특 원본 파일이 없습니다. 파일을 먼저 업로드해주세요.' });
       }
 
@@ -160,7 +162,7 @@ router.get('/export/:classId', async (req: Request, res: Response) => {
         if (text) entries.push({ personalNum: s.personal_num, commentsText: text });
       }
 
-      buffer = await writeCommentsToExcel(cls.comments_filepath, entries);
+      buffer = await writeCommentsToExcel(commentsFilepath, entries);
       downloadName = cls.comments_filename;
     }
 

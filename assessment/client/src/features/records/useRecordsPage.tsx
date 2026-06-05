@@ -492,9 +492,17 @@ export function useRecordsPage() {
       let next = prev;
       for (const update of pendingUpdates) {
         if (!students.some(student => student.id === update.studentId)) continue;
+        const key = `${update.studentId}_${update.contentType}_${update.domain}`;
+        const nextContent = update.content
+          ? parseContent(update.content)
+          : {
+              ...(next[key] || {}),
+              __llmError: update.error,
+              __llmErrorResult: update.llmResult,
+            };
         next = {
           ...next,
-          [`${update.studentId}_${update.contentType}_${update.domain}`]: parseContent(update.content),
+          [key]: nextContent,
         };
       }
       return next;
@@ -1317,10 +1325,21 @@ export function useRecordsPage() {
                             if (c.type === 'total') {
                               const contentKey = `${s.id}_scoring_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, 'total');
+                              const llmError = (scoreData as ScoringContent).__llmError || '';
+                              const llmErrorResult = (scoreData as ScoringContent).__llmErrorResult || '';
                               return (
                                 <td key={`${d.name}_total`} className={`border-r text-center font-bold text-blue-600 align-middle p-2 ${dirty ? 'bg-amber-50' : 'bg-blue-50/30'}`}
                                   style={{ width: w, minWidth: w }}>
-                                  {scoreData.total || 0}
+                                  <div className="group relative">
+                                    <span>{scoreData.total || 0}</span>
+                                    {(llmError || llmErrorResult) && (
+                                      <div className="absolute left-1/2 top-full z-50 mt-2 hidden max-h-80 w-96 max-w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 overflow-auto rounded-md border border-rose-200 bg-rose-50 p-3 text-left text-xs font-normal leading-relaxed text-rose-950 shadow-lg ring-1 ring-rose-100 group-hover:block">
+                                        <div className="mb-1 text-[11px] font-semibold text-rose-700">LLM 오류</div>
+                                        {llmError && <div className="mb-2 whitespace-pre-wrap text-rose-800">{llmError}</div>}
+                                        {llmErrorResult && <div className="whitespace-pre-wrap">{llmErrorResult}</div>}
+                                      </div>
+                                    )}
+                                  </div>
                                 </td>
                               );
                             }

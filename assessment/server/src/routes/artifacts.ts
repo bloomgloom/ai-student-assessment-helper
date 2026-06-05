@@ -5,7 +5,7 @@ import fs from 'fs';
 import * as unzipper from 'unzipper';
 import * as cheerio from 'cheerio';
 import { execute, queryOne, queryAll } from '../services/db';
-import { UPLOADS_DIR, ensureDir } from '../services/storage';
+import { UPLOADS_DIR, ensureDir, resolveStoredPath, toStoredPath } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 
 const router = Router();
@@ -96,7 +96,8 @@ function matchStudentByFilename(
 
 async function deleteArtifactRows(rows: { id: number; filepath: string }[]): Promise<void> {
   for (const row of rows) {
-    try { if (fs.existsSync(row.filepath)) fs.unlinkSync(row.filepath); } catch {}
+    const filepath = resolveStoredPath(row.filepath);
+    try { if (fs.existsSync(filepath)) fs.unlinkSync(filepath); } catch {}
     await execute('DELETE FROM artifacts WHERE id=?', [row.id]);
   }
 }
@@ -331,7 +332,7 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
       movedPaths.push(finalPath);
       const r = await execute(
         'INSERT INTO artifacts(student_id, domain, filename, filepath, mime_type) VALUES(?,?,?,?,?)',
-        [req.params.studentId, domain, finalName, finalPath, mimeType]
+        [req.params.studentId, domain, finalName, toStoredPath(finalPath), mimeType]
       );
       inserted.push({ id: Number(r.lastInsertRowid), filename: finalName, filepath: finalPath });
     }
@@ -435,7 +436,7 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
       const ct = TEXT_CONTENT_TYPES[fileExt] || '';
       await execute(
         'INSERT INTO artifacts(student_id, domain, filename, filepath, mime_type) VALUES(?,?,?,?,?)',
-        [student.id, domain, decodedName, savePath, ct]
+        [student.id, domain, decodedName, toStoredPath(savePath), ct]
       );
       count++;
     }
@@ -468,7 +469,8 @@ router.get('/:id/file', async (req: Request, res: Response) => {
   const artifact = await queryOne<{ filename: string; filepath: string; mime_type: string }>(
     'SELECT * FROM artifacts WHERE id=?', [req.params.id]
   );
-  if (!artifact || !fs.existsSync(artifact.filepath)) {
+  const filepath = artifact ? resolveStoredPath(artifact.filepath) : '';
+  if (!artifact || !fs.existsSync(filepath)) {
     return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
   }
 
@@ -480,7 +482,7 @@ router.get('/:id/file', async (req: Request, res: Response) => {
 
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(artifact.filename)}`);
-  res.sendFile(path.resolve(artifact.filepath));
+  res.sendFile(path.resolve(filepath));
 });
 
 // ── 파일 삭제 ──────────────────────────────────────────────────────────────────
@@ -490,7 +492,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
   );
   if (!artifact) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
   try {
-    if (fs.existsSync(artifact.filepath)) fs.unlinkSync(artifact.filepath);
+    const filepath = resolveStoredPath(artifact.filepath);
+    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
     await execute('DELETE FROM artifacts WHERE id=?', [req.params.id]);
     res.json({ ok: true });
   } catch (e: unknown) {

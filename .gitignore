@@ -9,6 +9,7 @@ storage/
 assessment/storage/
 storage.config.json
 assessment/storage.config.json
+assessment/python/.venv/
 template/
 assessment/template/
 .log/

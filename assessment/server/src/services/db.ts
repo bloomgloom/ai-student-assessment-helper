@@ -1,6 +1,6 @@
 import { createClient, type Client, type InValue } from '@libsql/client';
 import path from 'path';
-import { DATA_DIR, LEGACY_UPLOADS_DIR, UPLOADS_DIR, ensureDir } from './storage';
+import { DATA_DIR, LEGACY_UPLOADS_DIR, STORAGE_ROOT, UPLOADS_DIR, ensureDir, toStoredPath } from './storage';
 
 ensureDir(DATA_DIR);
 
@@ -235,8 +235,6 @@ export async function initDb(): Promise<void> {
 
 async function migrateStoredUploadPaths(): Promise<void> {
   const legacy = LEGACY_UPLOADS_DIR;
-  if (path.resolve(legacy) === path.resolve(UPLOADS_DIR)) return;
-
   const db = getClient();
   const pairs = [
     ['classes', 'scoring_filepath'],
@@ -251,6 +249,19 @@ async function migrateStoredUploadPaths(): Promise<void> {
             WHERE ${column} LIKE ?`,
       args: [legacy, UPLOADS_DIR, `${legacy}%`],
     });
+
+    const rows = await db.execute(`SELECT id, ${column} AS filepath FROM ${table} WHERE ${column} != ''`);
+    for (const row of rows.rows as unknown as Array<{ id: number; filepath: string }>) {
+      const current = String(row.filepath || '');
+      if (!current || (!path.isAbsolute(current) && !current.startsWith(STORAGE_ROOT))) continue;
+      const next = toStoredPath(current);
+      if (next !== current) {
+        await db.execute({
+          sql: `UPDATE ${table} SET ${column}=? WHERE id=?`,
+          args: [next, row.id],
+        });
+      }
+    }
   }
 }
 

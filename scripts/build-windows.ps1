@@ -5,6 +5,7 @@ Set-Location $RootDir
 
 npm install
 npm install --prefix assessment
+& (Join-Path $PSScriptRoot "setup-python-env.ps1")
 npm run build:windows
 
 Write-Host ""

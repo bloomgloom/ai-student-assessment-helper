@@ -7,11 +7,15 @@
   "scripts": {
     "assessment:dev": "npm run dev --prefix assessment",
     "assessment:build": "npm run build --prefix assessment",
+    "python:setup": "bash scripts/setup-python-env.sh",
+    "dmg:background": "node scripts/create-dmg-background.js",
     "electron:dev": "npm run assessment:build && electron .",
     "electron:pack": "npm run assessment:build && electron-builder --dir",
-    "electron:dist": "npm run assessment:build && electron-builder",
-    "build:mac": "npm run assessment:build && electron-builder --mac",
+    "electron:dist": "npm run dmg:background && npm run assessment:build && electron-builder",
+    "build:mac": "npm run dmg:background && npm run assessment:build && electron-builder --mac --dir && bash scripts/create-dmg-mac.sh",
     "build:mac:app": "npm run assessment:build && electron-builder --mac --dir",
+    "build:mac:dmg": "npm run dmg:background && bash scripts/create-dmg-mac.sh",
+    "build:windows:full": "powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1",
     "build:windows": "npm run assessment:build && electron-builder --win --x64"
   },
   "dependencies": {
@@ -29,29 +33,35 @@
   "devDependencies": {
     "@types/pngjs": "^6.0.5",
     "electron": "^31.7.7",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "sharp": "^0.34.5"
   },
   "build": {
     "appId": "kr.co.teacher.assessment-helper",
     "productName": "AI Student Assessment Helper",
     "asar": true,
     "asarUnpack": [
-      "node_modules/**/*.node"
+      "node_modules/**/*.node",
+      "assessment/python/.venv/**/*"
     ],
     "files": [
       "electron/**/*",
       "assessment/server/dist/**/*",
       "assessment/client/dist/**/*",
+      "assessment/python/**/*",
       "package.json"
     ],
     "directories": {
       "output": "release"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dir"
     },
     "win": {
       "target": "nsis"
     }
+  },
+  "allowScripts": {
+    "sharp@0.34.5": true
   }
 }

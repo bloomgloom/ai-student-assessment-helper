@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
-import { UPLOADS_DIR, ensureDir } from '../services/storage';
+import { UPLOADS_DIR, ensureDir, resolveStoredPath, toStoredPath } from '../services/storage';
 import { parseClassFilename, parseScoringExcel, parseCommentsFilename, parseCommentsExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
@@ -216,7 +216,7 @@ router.post('/upload', scoringUpload.fields([
          VALUES(?,?,?,?,?,?,?,?,?,?)`,
         [
           classInfo!.year, classInfo!.semester, classInfo!.grade, classInfo!.subject, classInfo!.room,
-          originalName, originalName, scoringFile.path, commentsOriginalName, commentsFile?.path || '',
+          originalName, originalName, toStoredPath(scoringFile.path), commentsOriginalName, commentsFile?.path ? toStoredPath(commentsFile.path) : '',
         ]
       );
       const classId = Number(r.lastInsertRowid);
@@ -350,7 +350,7 @@ router.post('/upload/scoring', scoringUpload.single('file'), async (req: Request
     }
     await execute(
       'UPDATE classes SET scoring_filename=?, scoring_filepath=?, filename=? WHERE id=?',
-      [originalName, file.path, originalName, classId]
+      [originalName, toStoredPath(file.path), originalName, classId]
     );
     // 도메인 갱신
     await execute('DELETE FROM assessment_domains WHERE class_id=?', [classId]);
@@ -385,7 +385,7 @@ router.post('/upload/scoring', scoringUpload.single('file'), async (req: Request
         `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, comments_filename, comments_filepath)
          VALUES(?,?,?,?,?,?,?,?,?,?)`,
         [classInfo.year, classInfo.semester, classInfo.grade, classInfo.subject, classInfo.room,
-          originalName, originalName, file.path, '', '']
+          originalName, originalName, toStoredPath(file.path), '', '']
       );
       const cid = Number(ins.lastInsertRowid);
       for (const d of domains) {
@@ -492,7 +492,7 @@ router.post('/upload/comments', commentsUpload.single('file'), async (req: Reque
     }
     await execute(
       'UPDATE classes SET comments_filename=?, comments_filepath=? WHERE id=?',
-      [originalName, file.path, classId]
+      [originalName, toStoredPath(file.path), classId]
     );
   } else {
     // 새 수업 생성: 도메인은 영역 관리에서 가져옴
@@ -507,7 +507,7 @@ router.post('/upload/comments', commentsUpload.single('file'), async (req: Reque
       const ins = await execute(
         `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, comments_filename, comments_filepath)
          VALUES(?,?,?,?,?,?,?,?,?,?)`,
-        [year, semester, grade, subject, room, originalName, '', '', originalName, file.path]
+        [year, semester, grade, subject, room, originalName, '', '', originalName, toStoredPath(file.path)]
       );
       const cid = Number(ins.lastInsertRowid);
       for (const d of managedDomains) {
@@ -540,7 +540,7 @@ router.delete('/:id/scoring', async (req: Request, res: Response) => {
   );
   if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
   if (cls.scoring_filepath) {
-    try { fs.unlinkSync(cls.scoring_filepath); } catch { /* ignore */ }
+    try { fs.unlinkSync(resolveStoredPath(cls.scoring_filepath)); } catch { /* ignore */ }
   }
   await execute(
     'UPDATE classes SET scoring_filename=?, scoring_filepath=? WHERE id=?',
@@ -556,7 +556,7 @@ router.delete('/:id/comments', async (req: Request, res: Response) => {
   );
   if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
   if (cls.comments_filepath) {
-    try { fs.unlinkSync(cls.comments_filepath); } catch { /* ignore */ }
+    try { fs.unlinkSync(resolveStoredPath(cls.comments_filepath)); } catch { /* ignore */ }
   }
   await execute(
     'UPDATE classes SET comments_filename=?, comments_filepath=? WHERE id=?',
@@ -584,16 +584,16 @@ router.delete('/:id', async (req: Request, res: Response) => {
       'SELECT filepath FROM artifacts WHERE student_id=?', [s.id]
     );
     for (const a of artifacts) {
-      try { if (a.filepath) fs.unlinkSync(a.filepath); } catch { /* ignore */ }
+      try { if (a.filepath) fs.unlinkSync(resolveStoredPath(a.filepath)); } catch { /* ignore */ }
     }
   }
 
   // 채점/세특 원본 파일 삭제
   if (cls.scoring_filepath) {
-    try { fs.unlinkSync(cls.scoring_filepath); } catch { /* ignore */ }
+    try { fs.unlinkSync(resolveStoredPath(cls.scoring_filepath)); } catch { /* ignore */ }
   }
   if (cls.comments_filepath) {
-    try { fs.unlinkSync(cls.comments_filepath); } catch { /* ignore */ }
+    try { fs.unlinkSync(resolveStoredPath(cls.comments_filepath)); } catch { /* ignore */ }
   }
 
   // DB 삭제 (generated_content, artifacts는 ON DELETE CASCADE)
