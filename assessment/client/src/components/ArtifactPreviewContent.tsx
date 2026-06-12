@@ -3,6 +3,7 @@ import { File, Loader2 } from 'lucide-react';
 import { artifactsApi, assignmentConfigsApi } from '../lib/api';
 
 const CodeArtifactPreview = lazy(() => import('./preview/CodeArtifactPreview'));
+const MarkdownArtifactPreview = lazy(() => import('./preview/MarkdownArtifactPreview'));
 const PdfArtifactPreview = lazy(() => import('./preview/PdfArtifactPreview'));
 const HwpxArtifactPreview = lazy(() => import('./preview/HwpxArtifactPreview'));
 const CsvArtifactPreview = lazy(() => import('./preview/CsvArtifactPreview'));
@@ -26,7 +27,8 @@ function getExt(filename: string): string {
   return filename.split('.').pop()?.toLowerCase() || '';
 }
 
-function isCodeFile(f: string) { return ['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','md','txt'].includes(getExt(f)); }
+function isMdFile(f: string) { return getExt(f) === 'md'; }
+function isCodeFile(f: string) { return ['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','txt'].includes(getExt(f)); }
 function isHtmlFile(f: string) { return getExt(f) === 'html'; }
 function isPdfFile(f: string) { return getExt(f) === 'pdf'; }
 function isHwpxFile(f: string) { return getExt(f) === 'hwpx'; }
@@ -84,6 +86,10 @@ export default function ArtifactPreviewContent({
           title="HTML Viewer"
           sandbox="allow-scripts allow-same-origin"
         />
+      ) : isMdFile(artifact.filename) ? (
+        <Suspense fallback={<PreviewFallback />}>
+          <MarkdownArtifactPreview fileUrl={fileUrl} />
+        </Suspense>
       ) : isCodeFile(artifact.filename) ? (
         <Suspense fallback={<PreviewFallback />}>
           <CodeArtifactPreview

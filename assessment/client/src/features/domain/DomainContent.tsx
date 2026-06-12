@@ -106,7 +106,7 @@ function Section({ children }: { children: ReactNode }) {
   return <section>{children}</section>;
 }
 
-const mdRenderer = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: false });
+const mdRenderer = new MarkdownIt({ html: true, linkify: true, breaks: false, typographer: false });
 
 function renderMarkdown(md: string) {
   return mdRenderer.render(md);
@@ -171,6 +171,28 @@ function serializeExtensionRules(items: AssignmentExtensionRule[]) {
       .filter(item => item.extension)
       .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index)
   );
+}
+
+function extBadgeClass(ext: string): string {
+  switch (ext) {
+    case 'py':   return 'bg-blue-100 text-blue-700 border-blue-300';
+    case 'c':
+    case 'cpp':
+    case 'h':    return 'bg-purple-100 text-purple-700 border-purple-300';
+    case 'pdf':  return 'bg-red-100 text-red-700 border-red-300';
+    case 'html': return 'bg-orange-100 text-orange-700 border-orange-300';
+    case 'hwpx': return 'bg-teal-100 text-teal-700 border-teal-300';
+    case 'csv':  return 'bg-emerald-100 text-emerald-700 border-emerald-300';
+    case 'ipynb': return 'bg-indigo-100 text-indigo-700 border-indigo-300';
+    case 'java': return 'bg-red-100 text-red-800 border-red-300';
+    case 'js':
+    case 'ts':
+    case 'jsx':
+    case 'tsx':  return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+    case 'json': return 'bg-gray-100 text-gray-700 border-gray-300';
+    case 'sql':  return 'bg-green-100 text-green-700 border-green-300';
+    default:     return 'bg-gray-100 text-gray-500 border-gray-300';
+  }
 }
 
 export function DomainContent({
@@ -246,6 +268,7 @@ export function DomainContent({
   deleteAssignmentResource,
 }: DomainContentProps) {
   const [guideEditorOpen, setGuideEditorOpen] = useState(false);
+  const [guideOriginal, setGuideOriginal] = useState('');
   const [extensionDraft, setExtensionDraft] = useState('');
   const [viewingResource, setViewingResource] = useState<AssignmentResource | null>(null);
   const [resourceCodeContent, setResourceCodeContent] = useState('');
@@ -688,7 +711,7 @@ export function DomainContent({
                   </button>
                   <button
                     className="btn-secondary py-1 text-xs"
-                    onClick={() => setGuideEditorOpen(true)}
+                    onClick={() => { setGuideOriginal(assignmentConfig?.guide_md || ''); setGuideEditorOpen(true); }}
                   >
                     <Edit3 size={13} />
                     직접 작성
@@ -811,30 +834,40 @@ export function DomainContent({
               )}
 
               <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <h3 className="mb-3 text-sm font-semibold text-gray-800">제출 설정</h3>
+                <h3 className="mb-3 text-sm font-semibold text-gray-800">제출 파일 설정</h3>
                 <div className="space-y-3">
                   <div>
-                    <span className="label">허용 확장자</span>
                     <div className="rounded-md border border-gray-300 bg-white p-2">
-                      <div className="space-y-2">
+                      <div className="space-y-1">
+                        {assignmentExtensionRules.length > 0 && (
+                          <div className="grid grid-cols-3 px-2 pb-1 text-[11px] font-medium text-gray-400">
+                            <span className="text-center">확장자</span>
+                            <span className="text-center">최대 용량</span>
+                            <span className="text-center">파일 수</span>
+                          </div>
+                        )}
                         {assignmentExtensionRules.map((rule, index) => (
-                          <div key={rule.extension} className="grid grid-cols-[minmax(70px,1fr)_92px_78px_28px] items-end gap-2 rounded border border-gray-200 bg-gray-50 p-2">
-                            <label className="block">
-                              <span className="mb-1 block text-[11px] font-medium text-gray-500">확장자</span>
+                          <div key={rule.extension} className="grid grid-cols-3 items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+                            <div className="flex justify-center">
+                              <div className="relative group">
+                                <span className={`px-2 py-0.5 text-[11px] font-bold rounded border whitespace-nowrap ${extBadgeClass(rule.extension)}`}>
+                                  {rule.extension.toUpperCase()}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white"
+                                  onClick={() => updateAssignmentConfig({
+                                    allowed_extensions: serializeExtensionRules(assignmentExtensionRules.filter((_, ruleIndex) => ruleIndex !== index)),
+                                  })}
+                                  title="삭제"
+                                >
+                                  <X size={8} />
+                                </button>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-center gap-1">
                               <input
-                                className="input h-8 px-2 py-0 text-xs"
-                                value={rule.extension}
-                                onChange={(e) => {
-                                  const next = [...assignmentExtensionRules];
-                                  next[index] = { ...rule, extension: e.target.value.replace(/[.,\s]/g, '').toLowerCase() };
-                                  updateAssignmentExtensionRules(next);
-                                }}
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1 block text-[11px] font-medium text-gray-500">최대 MB</span>
-                              <input
-                                className="input h-8 px-2 py-0 text-xs"
+                                className="input h-7 w-14 px-1.5 py-0 text-center text-xs"
                                 type="number"
                                 min={1}
                                 value={rule.max_file_size_mb}
@@ -844,11 +877,11 @@ export function DomainContent({
                                   updateAssignmentExtensionRules(next);
                                 }}
                               />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1 block text-[11px] font-medium text-gray-500">파일 수</span>
+                              <span className="text-[11px] text-gray-500">MB</span>
+                            </div>
+                            <div className="flex items-center justify-center gap-1">
                               <input
-                                className="input h-8 px-2 py-0 text-xs"
+                                className="input h-7 w-12 px-1.5 py-0 text-center text-xs"
                                 type="number"
                                 min={1}
                                 value={rule.max_files}
@@ -858,17 +891,8 @@ export function DomainContent({
                                   updateAssignmentExtensionRules(next);
                                 }}
                               />
-                            </label>
-                            <button
-                              type="button"
-                              className="inline-flex h-8 w-8 items-center justify-center rounded border border-red-200 bg-white text-red-500 hover:bg-red-50"
-                              onClick={() => updateAssignmentConfig({
-                                allowed_extensions: serializeExtensionRules(assignmentExtensionRules.filter((_, ruleIndex) => ruleIndex !== index)),
-                              })}
-                              title="삭제"
-                            >
-                              <X size={13} />
-                            </button>
+                              <span className="text-[11px] text-gray-500">개</span>
+                            </div>
                           </div>
                         ))}
                         {assignmentExtensionRules.length === 0 && (
@@ -903,7 +927,6 @@ export function DomainContent({
                           }}
                         >
                           <Plus size={13} />
-                          추가
                         </button>
                       </div>
                     </div>
@@ -921,16 +944,25 @@ export function DomainContent({
                   <div>
                     <h3 className="text-sm font-semibold text-gray-800">안내 사항 직접 작성</h3>
                   </div>
-                  <button
-                    className="btn-primary py-1 text-xs"
-                    onClick={async () => {
-                      const ok = await saveAssignmentConfig();
-                      if (ok) setGuideEditorOpen(false);
-                    }}
-                  >
-                    <Save size={13} />
-                    저장
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      className="btn-secondary py-1 text-xs"
+                      onClick={() => { updateAssignmentConfig({ guide_md: guideOriginal }); setGuideEditorOpen(false); }}
+                    >
+                      <X size={13} />
+                      닫기
+                    </button>
+                    <button
+                      className="btn-primary py-1 text-xs"
+                      onClick={async () => {
+                        const ok = await saveAssignmentConfig();
+                        if (ok) setGuideEditorOpen(false);
+                      }}
+                    >
+                      <Save size={13} />
+                      저장
+                    </button>
+                  </div>
                 </div>
                 <div className="grid min-h-0 flex-1 grid-cols-2 gap-0">
                   <div className="min-h-0 border-r border-gray-200 p-4">

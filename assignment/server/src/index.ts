@@ -19,7 +19,7 @@ const STUDENT_PORT = Number(process.env.STUDENT_PORT || TEACHER_PORT + 1);
 const ADMIN_HOST = '127.0.0.1';
 const PUBLIC_HOST = process.env.HOST || '0.0.0.0';
 const mdRenderer = new MarkdownIt({
-  html: false,
+  html: true,
   linkify: true,
   breaks: false,
   typographer: false
@@ -393,7 +393,7 @@ function updateLinks(r){
  runToggle.textContent=Number(r.is_open)?'종료':'시작';
  runToggle.className=Number(r.is_open)?'secondary':'';
  setControlsLocked(Number(r.is_open));
- links.innerHTML='<p><b>학생 주소</b>: <a target="_blank" href="http://'+studentBase+'">http://'+studentBase+'</a></p><p><b>교사용 뷰어</b>: <a target="_blank" href="http://'+teacherBase+'">http://'+teacherBase+'</a></p>';
+ links.innerHTML='<p><b>학생</b>: <a target="_blank" href="http://'+studentBase+'">http://'+studentBase+'</a></p><p><b>교사</b>: <a target="_blank" href="http://'+teacherBase+'">http://'+teacherBase+'</a></p>';
 }
 async function loadRuns(){ const rows=await j('/api/admin/runs'); currentRun=rows.find(r=>Number(r.is_open)); updateLinks(currentRun); await loadSubs(); }
 function visibleRows(rows){return absentOnly.checked?rows.filter(s=>Number(s.artifact_count||0)===0):rows;}
