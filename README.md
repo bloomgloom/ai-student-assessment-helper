@@ -54,9 +54,15 @@ Windows에서 SmartScreen 경고가 나오면 배포자를 확인한 뒤 `추가
 ## 개발자용
 
 ```bash
-./scripts/build-mac.sh
+./scripts/build-app-mac.sh
+./scripts/create-dmg-mac.sh
 ```
 
 ```powershell
 .\scripts\build-windows.ps1
 ```
+
+## TODO
+
+- [ ] 수행평가 실시 이력 보기
+- [ ] 학생별 산출물 이력 보기

@@ -6,6 +6,11 @@ import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { UPLOADS_DIR, ensureDir, resolveStoredPath, toStoredPath } from '../services/storage';
 import { parseClassFilename, parseScoringExcel, parseCommentsFilename, parseCommentsExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
+import {
+  deleteAssignmentSnapshotForAssessmentClass,
+  syncAssignmentSnapshotsForAssessmentClass,
+} from './assignmentConfigs';
+import { assignmentExecute, assignmentQueryAll } from '../services/assignmentDb';
 
 const SCORING_UPLOAD_DIR = path.join(UPLOADS_DIR, 'scoring');
 const RECORDS_UPLOAD_DIR = path.join(UPLOADS_DIR, 'records');
@@ -238,6 +243,8 @@ router.post('/upload', scoringUpload.fields([
       return classId;
     });
 
+    await syncAssignmentSnapshotsForAssessmentClass(classId);
+
     res.json({
       id: classId,
       ...classInfo,
@@ -402,6 +409,8 @@ router.post('/upload/scoring', scoringUpload.single('file'), async (req: Request
     classId = r;
   }
 
+  await syncAssignmentSnapshotsForAssessmentClass(classId);
+
   res.json({
     classId,
     ...classInfo,
@@ -535,8 +544,8 @@ router.post('/upload/comments', commentsUpload.single('file'), async (req: Reque
 
 // ── 채점 파일만 삭제 ──────────────────────────────────────────────────────
 router.delete('/:id/scoring', async (req: Request, res: Response) => {
-  const cls = await queryOne<{ scoring_filepath: string }>(
-    'SELECT scoring_filepath FROM classes WHERE id=?', [req.params.id]
+  const cls = await queryOne<{ scoring_filepath: string; comments_filename: string }>(
+    'SELECT scoring_filepath, comments_filename FROM classes WHERE id=?', [req.params.id]
   );
   if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
   if (cls.scoring_filepath) {
@@ -546,13 +555,14 @@ router.delete('/:id/scoring', async (req: Request, res: Response) => {
     'UPDATE classes SET scoring_filename=?, scoring_filepath=? WHERE id=?',
     ['', '', req.params.id]
   );
+  if (!cls.comments_filename) await deleteAssignmentSnapshotForAssessmentClass(req.params.id);
   res.json({ ok: true });
 });
 
 // ── 세특 파일만 삭제 ──────────────────────────────────────────────────────
 router.delete('/:id/comments', async (req: Request, res: Response) => {
-  const cls = await queryOne<{ comments_filepath: string }>(
-    'SELECT comments_filepath FROM classes WHERE id=?', [req.params.id]
+  const cls = await queryOne<{ comments_filepath: string; scoring_filename: string }>(
+    'SELECT comments_filepath, scoring_filename FROM classes WHERE id=?', [req.params.id]
   );
   if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
   if (cls.comments_filepath) {
@@ -564,6 +574,7 @@ router.delete('/:id/comments', async (req: Request, res: Response) => {
   );
   // 개인번호도 함께 초기화 (세특에서 가져온 데이터)
   await execute('UPDATE class_students SET personal_num=? WHERE class_id=?', ['', req.params.id]);
+  if (!cls.scoring_filename) await deleteAssignmentSnapshotForAssessmentClass(req.params.id);
   res.json({ ok: true });
 });
 
@@ -575,17 +586,23 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
   if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
 
-  // 산출물(artifact) 파일 경로 수집 후 삭제
+  // Assignment DB가 산출물의 단일 원본이다. 수업에 속한 수동 업로드 산출물을 정리한다.
   const students = await queryAll<{ id: number }>(
     'SELECT id FROM class_students WHERE class_id=?', [req.params.id]
   );
-  for (const s of students) {
-    const artifacts = await queryAll<{ filepath: string }>(
-      'SELECT filepath FROM artifacts WHERE student_id=?', [s.id]
+  if (students.length) {
+    const placeholders = students.map(() => '?').join(',');
+    const artifacts = await assignmentQueryAll<{ filepath: string }>(
+      `SELECT filepath FROM assignment_artifacts WHERE assessment_student_id IN (${placeholders})`,
+      students.map(student => student.id)
     );
     for (const a of artifacts) {
       try { if (a.filepath) fs.unlinkSync(resolveStoredPath(a.filepath)); } catch { /* ignore */ }
     }
+    await assignmentExecute(
+      `DELETE FROM assignment_artifacts WHERE assessment_student_id IN (${placeholders})`,
+      students.map(student => student.id)
+    );
   }
 
   // 채점/세특 원본 파일 삭제
@@ -596,7 +613,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
     try { fs.unlinkSync(resolveStoredPath(cls.comments_filepath)); } catch { /* ignore */ }
   }
 
-  // DB 삭제 (generated_content, artifacts는 ON DELETE CASCADE)
+  // DB 삭제 (generated_content는 ON DELETE CASCADE)
+  await deleteAssignmentSnapshotForAssessmentClass(req.params.id);
   await execute('DELETE FROM assessment_domains WHERE class_id=?', [req.params.id]);
   await execute('DELETE FROM class_students WHERE class_id=?', [req.params.id]);
   await execute('DELETE FROM classes WHERE id=?', [req.params.id]);

@@ -34,12 +34,17 @@ export function SettingsContent({
   handleReset,
   handleBackup,
   handleRestore,
+  saveAssignmentTeacherPassword,
+  clearAssignmentTeacherPassword,
   isOllama,
   isOpenAICompatible,
   needsKey,
   needsUrl,
 }: SettingsContentProps) {
   const [showApiKey, setShowApiKey] = useState(false);
+  const [teacherPassword, setTeacherPassword] = useState('');
+  const [teacherPasswordConfirm, setTeacherPasswordConfirm] = useState('');
+  const [savingTeacherPassword, setSavingTeacherPassword] = useState(false);
   const aiDisabled = !settings.aiEnabled;
   const disabledPanelClass = aiDisabled ? 'opacity-45 grayscale select-none' : '';
 
@@ -355,6 +360,90 @@ export function SettingsContent({
           </ul>
         </div>
       </div>
+      </div>
+      )}
+
+      {activeTab === 'assignment' && (
+      <div className="space-y-6">
+        <div className="card p-6 space-y-5">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-800">교사용 확인 화면 비밀번호</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              수행평가앱의 교사용 뷰어 주소에 접속할 때 입력할 비밀번호입니다. 학생 제출 화면에는 적용되지 않습니다.
+            </p>
+          </div>
+
+          <div className={`rounded-md border px-3 py-2 text-xs ${settings.assignmentTeacherPasswordSet ? 'border-green-200 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+            {settings.assignmentTeacherPasswordSet
+              ? '현재 교사용 비밀번호가 설정되어 있습니다.'
+              : '아직 교사용 비밀번호가 설정되어 있지 않습니다.'}
+          </div>
+
+          <div className="space-y-3">
+            <label className="block">
+              <span className="label">새 비밀번호</span>
+              <input
+                type="password"
+                className="input"
+                value={teacherPassword}
+                onChange={(e) => setTeacherPassword(e.target.value)}
+                placeholder="4자 이상"
+              />
+            </label>
+            <label className="block">
+              <span className="label">새 비밀번호 확인</span>
+              <input
+                type="password"
+                className="input"
+                value={teacherPasswordConfirm}
+                onChange={(e) => setTeacherPasswordConfirm(e.target.value)}
+                placeholder="같은 비밀번호를 한 번 더 입력"
+              />
+            </label>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              className="btn-primary"
+              disabled={savingTeacherPassword}
+              onClick={async () => {
+                if (teacherPassword !== teacherPasswordConfirm) {
+                  alert('비밀번호 확인이 일치하지 않습니다.');
+                  return;
+                }
+                setSavingTeacherPassword(true);
+                try {
+                  const ok = await saveAssignmentTeacherPassword(teacherPassword);
+                  if (ok) {
+                    setTeacherPassword('');
+                    setTeacherPasswordConfirm('');
+                  }
+                } finally {
+                  setSavingTeacherPassword(false);
+                }
+              }}
+            >
+              {savingTeacherPassword ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              비밀번호 저장
+            </button>
+            {settings.assignmentTeacherPasswordSet && (
+              <button
+                className="btn-secondary"
+                disabled={savingTeacherPassword}
+                onClick={async () => {
+                  setSavingTeacherPassword(true);
+                  try {
+                    await clearAssignmentTeacherPassword();
+                  } finally {
+                    setSavingTeacherPassword(false);
+                  }
+                }}
+              >
+                비밀번호 해제
+              </button>
+            )}
+          </div>
+        </div>
       </div>
       )}
 

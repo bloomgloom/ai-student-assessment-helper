@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { initDb } from './services/db';
+import { initAssignmentDb } from './services/assignmentDb';
 
 import settingsRouter from './routes/settings';
 import criteriaRouter from './routes/criteria';
@@ -9,6 +10,7 @@ import classesRouter from './routes/classes';
 import recordsRouter from './routes/records';
 import artifactsRouter from './routes/artifacts';
 import aiRouter from './routes/ai';
+import assignmentConfigsRouter from './routes/assignmentConfigs';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -31,6 +33,7 @@ app.use('/api/classes', classesRouter);
 app.use('/api/records', recordsRouter);
 app.use('/api/artifacts', artifactsRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api/assignment-configs', assignmentConfigsRouter);
 
 // 프로덕션: 빌드된 클라이언트 서빙
 const clientDist = path.join(__dirname, '../../client/dist');
@@ -46,6 +49,7 @@ app.get('*', (_req, res) => {
 
 async function main() {
   await initDb();
+  await initAssignmentDb();
   app.listen(Number(PORT), HOST, () => {
     console.log(`✅ Assessment server running at http://${HOST}:${PORT}`);
   });

@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import {
-  Settings, BookOpen, ClipboardList, ListChecks, Loader2, Menu
+  Settings, BookOpen, ClipboardList, ListChecks, Loader2, LogOut, Menu
 } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 import SettingsPage from './pages/SettingsPage';
@@ -74,6 +74,20 @@ function Sidebar() {
           </NavLink>
         ))}
       </nav>
+      <div className="border-t border-gray-800 py-3">
+        <button
+          type="button"
+          title={collapsed ? '종료' : undefined}
+          onClick={() => {
+            if (hasUnsavedRecords && !confirm('저장되지 않은 변경 사항이 있습니다. 종료하시겠습니까?')) return;
+            window.location.href = 'app://launcher';
+          }}
+          className={`flex w-full items-center ${collapsed ? 'justify-center px-2' : 'gap-2.5 px-4'} py-2.5 text-sm text-red-300 transition-colors hover:bg-red-950 hover:text-red-100`}
+        >
+          <LogOut size={16} />
+          {!collapsed && '종료'}
+        </button>
+      </div>
     </aside>
   );
 }

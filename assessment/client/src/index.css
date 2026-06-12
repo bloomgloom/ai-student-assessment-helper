@@ -82,4 +82,46 @@
   .records-table-row:hover > td {
     @apply bg-blue-50;
   }
+  .prose-preview h1 {
+    @apply mb-3 text-xl font-bold text-gray-900;
+  }
+  .prose-preview h2 {
+    @apply mb-2 mt-4 text-lg font-semibold text-gray-900;
+  }
+  .prose-preview h3 {
+    @apply mb-2 mt-3 text-base font-semibold text-gray-900;
+  }
+  .prose-preview p {
+    @apply my-2;
+  }
+  .prose-preview ul {
+    @apply my-2 list-disc pl-5;
+  }
+  .prose-preview li {
+    @apply my-1;
+  }
+  .prose-preview table {
+    width: 100%;
+    margin: 1rem 0;
+    border-collapse: collapse;
+    overflow: hidden;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    font-size: 0.875rem;
+  }
+  .prose-preview th {
+    border: 1px solid #d1d5db;
+    background: #f3f4f6;
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    color: #1f2937;
+  }
+  .prose-preview td {
+    border: 1px solid #d1d5db;
+    padding: 0.5rem 0.75rem;
+    vertical-align: top;
+    color: #374151;
+  }
 }

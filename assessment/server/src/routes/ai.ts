@@ -6,6 +6,7 @@ import { extractHwpxText } from '../services/hwpx';
 import { imageFileToAttachment, pdfToRedactedJpegAttachments } from '../services/visionArtifacts';
 import { buildNotebookExecutionEvidence, buildTabularDataEvidence } from '../services/artifactEvidence';
 import { resolveStoredPath } from '../services/storage';
+import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
 
 const router = Router();
 
@@ -498,9 +499,7 @@ router.post('/generate', async (req: Request, res: Response) => {
   );
   if (!criteriaSet) return res.status(404).json({ error: '기준을 찾을 수 없습니다.' });
 
-  const artifacts = await queryAll<ArtifactRow>(
-    'SELECT * FROM artifacts WHERE student_id=? AND domain=?', [studentId, domain]
-  );
+  const artifacts = await assignmentArtifactsForStudent(studentId, domain) as ArtifactRow[];
 
   const parts: string[] = [];
   const classContext = await getClassContextByStudent(studentId);
@@ -625,9 +624,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
       let evalCriteria: EvalCriterion[] = [];
 
       // generate 로직 인라인
-      const artifacts = await queryAll<ArtifactRow>(
-        'SELECT * FROM artifacts WHERE student_id=? AND domain=?', [student.id, domain]
-      );
+      const artifacts = await assignmentArtifactsForStudent(student.id, domain) as ArtifactRow[];
 
       const criteriaSet = criteriaSetId
         ? await queryOne<{ mode: string }>('SELECT * FROM criteria_sets WHERE id=?', [criteriaSetId])

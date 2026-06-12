@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { File, Loader2 } from 'lucide-react';
-import { artifactsApi } from '../lib/api';
+import { artifactsApi, assignmentConfigsApi } from '../lib/api';
 
 const CodeArtifactPreview = lazy(() => import('./preview/CodeArtifactPreview'));
 const PdfArtifactPreview = lazy(() => import('./preview/PdfArtifactPreview'));
@@ -11,6 +11,7 @@ const IpynbArtifactPreview = lazy(() => import('./preview/IpynbArtifactPreview')
 interface Artifact {
   id: number;
   filename: string;
+  source?: 'artifact' | 'assignment';
 }
 
 interface ArtifactPreviewContentProps {
@@ -40,6 +41,12 @@ function PreviewFallback() {
   );
 }
 
+function artifactFileUrl(artifact: Artifact) {
+  return artifact.source === 'assignment'
+    ? assignmentConfigsApi.submissionFileUrl(artifact.id)
+    : artifactsApi.fileUrl(artifact.id);
+}
+
 export default function ArtifactPreviewContent({
   artifact,
   codeContent,
@@ -47,31 +54,32 @@ export default function ArtifactPreviewContent({
   pdfPages,
   setPdfPages,
 }: ArtifactPreviewContentProps) {
+  const fileUrl = artifactFileUrl(artifact);
   return (
     <div className="flex-1 overflow-hidden" style={{ textAlign: 'left' }}>
       {isPdfFile(artifact.filename) ? (
         <Suspense fallback={<PreviewFallback />}>
           <PdfArtifactPreview
-            artifactId={artifact.id}
+            fileUrl={fileUrl}
             pdfPages={pdfPages}
             setPdfPages={setPdfPages}
           />
         </Suspense>
       ) : isHwpxFile(artifact.filename) ? (
         <Suspense fallback={<PreviewFallback />}>
-          <HwpxArtifactPreview fileUrl={artifactsApi.fileUrl(artifact.id)} />
+          <HwpxArtifactPreview fileUrl={fileUrl} />
         </Suspense>
       ) : isCsvFile(artifact.filename) ? (
         <Suspense fallback={<PreviewFallback />}>
-          <CsvArtifactPreview fileUrl={artifactsApi.fileUrl(artifact.id)} />
+          <CsvArtifactPreview fileUrl={fileUrl} />
         </Suspense>
       ) : isIpynbFile(artifact.filename) ? (
         <Suspense fallback={<PreviewFallback />}>
-          <IpynbArtifactPreview fileUrl={artifactsApi.fileUrl(artifact.id)} />
+          <IpynbArtifactPreview fileUrl={fileUrl} />
         </Suspense>
       ) : isHtmlFile(artifact.filename) ? (
         <iframe
-          src={artifactsApi.fileUrl(artifact.id)}
+          src={fileUrl}
           className="w-full h-full border-none bg-white"
           title="HTML Viewer"
           sandbox="allow-scripts allow-same-origin"
@@ -88,7 +96,7 @@ export default function ArtifactPreviewContent({
         <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-500">
           <File size={48} className="text-gray-300" />
           <p>이 파일 형식은 뷰어에서 지원하지 않습니다.</p>
-          <a href={artifactsApi.fileUrl(artifact.id)} className="btn-primary" download={artifact.filename}>다운로드</a>
+          <a href={fileUrl} className="btn-primary" download={artifact.filename}>다운로드</a>
         </div>
       )}
     </div>

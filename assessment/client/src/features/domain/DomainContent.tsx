@@ -1,12 +1,13 @@
-import { Dispatch, ReactNode, SetStateAction } from 'react';
-import { AlertCircle, ClipboardCheck, Plus, Trash2 } from 'lucide-react';
+import { Dispatch, ReactNode, RefObject, SetStateAction, useState } from 'react';
+import { AlertCircle, ClipboardCheck, Download, Edit3, Eye, FileText, Loader2, Plus, Save, Trash2, Upload, X } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
+import { assignmentConfigsApi } from '../../lib/api';
 import { DomainCriteriaPanel } from './DomainCriteriaPanel';
 import { DomainSubjectCommentsPanel } from './DomainSubjectCommentsPanel';
-import { EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
+import { AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
 
-type DomainTab = 'standards' | 'scoring' | 'records' | 'ratio' | 'comments';
+type DomainTab = 'standards' | 'scoring' | 'records' | 'assignment' | 'ratio' | 'comments';
 
 interface DomainContentProps {
   selectedSubject: SubjectItem | null;
@@ -67,6 +68,18 @@ interface DomainContentProps {
   updateSubjectCommentsMetaPrompt: (type: string, metaPrompt: string) => void;
   updateSubjectComments: (type: string, prompt: string) => void;
   aiEnabled: boolean;
+  assignmentGuideFileRef: RefObject<HTMLInputElement>;
+  assignmentResourceFileRef: RefObject<HTMLInputElement>;
+  assignmentConfig: AssignmentConfig | null;
+  assignmentResources: AssignmentResource[];
+  assignmentClasses: AssignmentClassSnapshot[];
+  assignmentLoading: boolean;
+  assignmentUploading: boolean;
+  updateAssignmentConfig: (patch: Partial<AssignmentConfig>) => void;
+  saveAssignmentConfig: () => Promise<boolean>;
+  handleAssignmentGuideUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  handleAssignmentResourceUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  deleteAssignmentResource: (id: number) => void;
 }
 
 function EmptySelection() {
@@ -83,6 +96,149 @@ function EmptySelection() {
 
 function Section({ children }: { children: ReactNode }) {
   return <section>{children}</section>;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function splitTableRow(line: string) {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map(cell => cell.trim());
+}
+
+function isTableSeparator(line: string) {
+  const cells = splitTableRow(line);
+  return cells.length > 1 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
+}
+
+function renderMarkdown(md: string) {
+  const lines = md.split(/\r?\n/);
+  const html: string[] = [];
+  let listOpen = false;
+  const closeList = () => {
+    if (listOpen) {
+      html.push('</ul>');
+      listOpen = false;
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.trimEnd();
+    const nextLine = lines[i + 1]?.trimEnd() || '';
+    if (!line.trim()) {
+      closeList();
+      html.push('<br />');
+      continue;
+    }
+    if (line.includes('|') && isTableSeparator(nextLine)) {
+      closeList();
+      const headers = splitTableRow(line);
+      const bodyRows: string[][] = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        bodyRows.push(splitTableRow(lines[i]));
+        i++;
+      }
+      i--;
+      html.push('<table><thead><tr>');
+      headers.forEach(cell => html.push(`<th>${escapeHtml(cell)}</th>`));
+      html.push('</tr></thead><tbody>');
+      bodyRows.forEach(row => {
+        html.push('<tr>');
+        headers.forEach((_, index) => html.push(`<td>${escapeHtml(row[index] || '')}</td>`));
+        html.push('</tr>');
+      });
+      html.push('</tbody></table>');
+      continue;
+    }
+    if (line.startsWith('### ')) {
+      closeList();
+      html.push(`<h3>${escapeHtml(line.slice(4))}</h3>`);
+    } else if (line.startsWith('## ')) {
+      closeList();
+      html.push(`<h2>${escapeHtml(line.slice(3))}</h2>`);
+    } else if (line.startsWith('# ')) {
+      closeList();
+      html.push(`<h1>${escapeHtml(line.slice(2))}</h1>`);
+    } else if (/^[-*]\s+/.test(line)) {
+      if (!listOpen) {
+        html.push('<ul>');
+        listOpen = true;
+      }
+      html.push(`<li>${escapeHtml(line.replace(/^[-*]\s+/, ''))}</li>`);
+    } else {
+      closeList();
+      html.push(`<p>${escapeHtml(line)}</p>`);
+    }
+  }
+  closeList();
+  return html.join('');
+}
+
+function formatBytes(size: number) {
+  if (!size) return '-';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function parseExtensionList(value: string) {
+  return value
+    .split(/[\s,]+/)
+    .map(item => item.trim().replace(/^\./, '').toLowerCase())
+    .filter(Boolean)
+    .filter((item, index, arr) => arr.indexOf(item) === index);
+}
+
+function serializeExtensionList(items: string[]) {
+  return items.map(item => item.replace(/^\./, '').toLowerCase()).filter(Boolean).join('\n');
+}
+
+interface AssignmentExtensionRule {
+  extension: string;
+  max_file_size_mb: number;
+  max_files: number;
+}
+
+function parseExtensionRules(value: string, fallbackSize = 50, fallbackFiles = 1): AssignmentExtensionRule[] {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item) => ({
+          extension: String(item.extension || item.ext || '').trim().replace(/^\./, '').toLowerCase(),
+          max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || fallbackSize)),
+          max_files: Math.max(1, Number(item.max_files || item.maxFiles || fallbackFiles)),
+        }))
+        .filter(item => item.extension)
+        .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index);
+    }
+  } catch {
+    // Legacy newline/comma separated extension list.
+  }
+  return parseExtensionList(value).map(extension => ({
+    extension,
+    max_file_size_mb: Math.max(1, Number(fallbackSize) || 50),
+    max_files: Math.max(1, Number(fallbackFiles) || 1),
+  }));
+}
+
+function serializeExtensionRules(items: AssignmentExtensionRule[]) {
+  return JSON.stringify(
+    items
+      .map(item => ({
+        extension: item.extension.trim().replace(/^\./, '').toLowerCase(),
+        max_file_size_mb: Math.max(1, Number(item.max_file_size_mb) || 50),
+        max_files: Math.max(1, Number(item.max_files) || 1),
+      }))
+      .filter(item => item.extension)
+      .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index)
+  );
 }
 
 export function DomainContent({
@@ -144,7 +300,42 @@ export function DomainContent({
   updateSubjectCommentsMetaPrompt,
   updateSubjectComments,
   aiEnabled,
+  assignmentGuideFileRef,
+  assignmentResourceFileRef,
+  assignmentConfig,
+  assignmentResources,
+  assignmentClasses,
+  assignmentLoading,
+  assignmentUploading,
+  updateAssignmentConfig,
+  saveAssignmentConfig,
+  handleAssignmentGuideUpload,
+  handleAssignmentResourceUpload,
+  deleteAssignmentResource,
 }: DomainContentProps) {
+  const [guideEditorOpen, setGuideEditorOpen] = useState(false);
+  const [extensionDraft, setExtensionDraft] = useState('');
+  const assignmentExtensionRules = parseExtensionRules(
+    assignmentConfig?.allowed_extensions || '',
+    assignmentConfig?.max_file_size_mb || 50,
+    assignmentConfig?.max_files || 1
+  );
+  const updateAssignmentExtensionRules = (rules: AssignmentExtensionRule[]) => {
+    const normalized = rules
+      .map(item => ({
+        extension: item.extension.trim().replace(/^\./, '').toLowerCase(),
+        max_file_size_mb: Math.max(1, Number(item.max_file_size_mb) || 50),
+        max_files: Math.max(1, Number(item.max_files) || 1),
+      }))
+      .filter(item => item.extension)
+      .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index);
+    updateAssignmentConfig({
+      allowed_extensions: serializeExtensionRules(normalized),
+      max_file_size_mb: Math.max(1, ...normalized.map(item => item.max_file_size_mb), 50),
+      max_files: Math.max(1, ...normalized.map(item => item.max_files), 1),
+    });
+  };
+
   if (!selectedSubject) {
     return <EmptySelection />;
   }
@@ -516,6 +707,266 @@ export function DomainContent({
               }),
             }}
           />
+        </Section>
+      )}
+
+      {selectedDomain && activeTab === 'assignment' && (
+        <Section>
+          <div className="grid grid-cols-[minmax(0,2fr)_minmax(280px,1fr)] gap-4">
+            <div className="rounded-lg border border-gray-200 bg-white p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <FileText size={15} className="shrink-0 text-gray-500" />
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-semibold text-gray-800">안내문</h3>
+                    <p className="mt-0.5 text-xs text-gray-500">학생 화면에 표시될 Markdown 미리보기입니다.</p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    className="btn-secondary py-1 text-xs"
+                    onClick={() => assignmentGuideFileRef.current?.click()}
+                    disabled={assignmentUploading}
+                  >
+                    {assignmentUploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                    MD 업로드
+                  </button>
+                  <button
+                    className="btn-secondary py-1 text-xs"
+                    onClick={() => setGuideEditorOpen(true)}
+                  >
+                    <Edit3 size={13} />
+                    직접 작성
+                  </button>
+                  <input
+                    ref={assignmentGuideFileRef}
+                    type="file"
+                    className="hidden"
+                    accept=".md,.markdown,text/markdown,text/plain"
+                    onChange={handleAssignmentGuideUpload}
+                  />
+                </div>
+              </div>
+              {assignmentLoading ? (
+                <div className="flex h-[42rem] items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-400">
+                  <Loader2 size={20} className="animate-spin" />
+                </div>
+              ) : (
+                <div
+                  className="prose-preview h-[42rem] overflow-auto rounded-md border border-gray-200 bg-gray-50 p-5 text-sm leading-relaxed text-gray-800"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(assignmentConfig?.guide_md || '안내문을 입력하세요.') }}
+                />
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-white p-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800">배부 자료</h3>
+                    <p className="mt-0.5 text-xs text-gray-500">학생이 다운로드할 파일입니다.</p>
+                  </div>
+                  <button
+                    className="btn-secondary py-1 text-xs"
+                    onClick={() => assignmentResourceFileRef.current?.click()}
+                    disabled={assignmentUploading}
+                  >
+                    {assignmentUploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                    업로드
+                  </button>
+                  <input
+                    ref={assignmentResourceFileRef}
+                    type="file"
+                    className="hidden"
+                    multiple
+                    onChange={handleAssignmentResourceUpload}
+                  />
+                </div>
+                <div className="space-y-2">
+                  {assignmentResources.map((resource) => (
+                    <div key={resource.id} className="rounded-md border border-gray-200 bg-gray-50 p-2">
+                      <div className="truncate text-xs font-medium text-gray-800" title={resource.filename}>{resource.filename}</div>
+                      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-500">
+                        <span>{formatBytes(Number(resource.size))}</span>
+                        <div className="flex gap-1">
+                          <a
+                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                            href={assignmentConfigsApi.resourceFileUrl(resource.id)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="열기"
+                          >
+                            <Eye size={13} />
+                          </a>
+                          <a
+                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                            href={assignmentConfigsApi.resourceFileUrl(resource.id)}
+                            download={resource.filename}
+                            title="다운로드"
+                          >
+                            <Download size={13} />
+                          </a>
+                          <button
+                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white text-red-500 hover:bg-red-50"
+                            onClick={() => deleteAssignmentResource(resource.id)}
+                            title="삭제"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {assignmentResources.length === 0 && (
+                    <div className="rounded-md border border-dashed border-gray-200 py-8 text-center text-xs text-gray-400">
+                      업로드된 배부 자료가 없습니다.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-4">
+                <h3 className="mb-3 text-sm font-semibold text-gray-800">제출 설정</h3>
+                <div className="space-y-3">
+                  <div>
+                    <span className="label">허용 확장자</span>
+                    <div className="rounded-md border border-gray-300 bg-white p-2">
+                      <div className="space-y-2">
+                        {assignmentExtensionRules.map((rule, index) => (
+                          <div key={rule.extension} className="grid grid-cols-[minmax(70px,1fr)_92px_78px_28px] items-end gap-2 rounded border border-gray-200 bg-gray-50 p-2">
+                            <label className="block">
+                              <span className="mb-1 block text-[11px] font-medium text-gray-500">확장자</span>
+                              <input
+                                className="input h-8 px-2 py-0 text-xs"
+                                value={rule.extension}
+                                onChange={(e) => {
+                                  const next = [...assignmentExtensionRules];
+                                  next[index] = { ...rule, extension: e.target.value.replace(/[.,\s]/g, '').toLowerCase() };
+                                  updateAssignmentExtensionRules(next);
+                                }}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-[11px] font-medium text-gray-500">최대 MB</span>
+                              <input
+                                className="input h-8 px-2 py-0 text-xs"
+                                type="number"
+                                min={1}
+                                value={rule.max_file_size_mb}
+                                onChange={(e) => {
+                                  const next = [...assignmentExtensionRules];
+                                  next[index] = { ...rule, max_file_size_mb: Number(e.target.value) };
+                                  updateAssignmentExtensionRules(next);
+                                }}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-[11px] font-medium text-gray-500">파일 수</span>
+                              <input
+                                className="input h-8 px-2 py-0 text-xs"
+                                type="number"
+                                min={1}
+                                value={rule.max_files}
+                                onChange={(e) => {
+                                  const next = [...assignmentExtensionRules];
+                                  next[index] = { ...rule, max_files: Number(e.target.value) };
+                                  updateAssignmentExtensionRules(next);
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded border border-red-200 bg-white text-red-500 hover:bg-red-50"
+                              onClick={() => updateAssignmentConfig({
+                                allowed_extensions: serializeExtensionRules(assignmentExtensionRules.filter((_, ruleIndex) => ruleIndex !== index)),
+                              })}
+                              title="삭제"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        ))}
+                        {assignmentExtensionRules.length === 0 && (
+                          <div className="rounded border border-dashed border-gray-200 px-2 py-3 text-xs text-gray-400">
+                            확장자를 추가하면 학생 화면에 확장자별 업로드 버튼이 표시됩니다. 비워두면 모든 확장자를 50MB, 1개까지 허용합니다.
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-2 flex gap-2">
+                        <input
+                          className="input h-8 px-2 py-0 text-xs"
+                          value={extensionDraft}
+                          onChange={(e) => setExtensionDraft(e.target.value.replace(/[.,\s]/g, '').toLowerCase())}
+                          onKeyDown={(e) => {
+                            if (e.key !== 'Enter') return;
+                            e.preventDefault();
+                            const next = extensionDraft.trim().replace(/^\./, '').toLowerCase();
+                            if (!next) return;
+                            updateAssignmentExtensionRules([...assignmentExtensionRules, { extension: next, max_file_size_mb: 50, max_files: 1 }]);
+                            setExtensionDraft('');
+                          }}
+                          placeholder="pdf"
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary h-8 py-0 text-xs"
+                          onClick={() => {
+                            const next = extensionDraft.trim().replace(/^\./, '').toLowerCase();
+                            if (!next) return;
+                            updateAssignmentExtensionRules([...assignmentExtensionRules, { extension: next, max_file_size_mb: 50, max_files: 1 }]);
+                            setExtensionDraft('');
+                          }}
+                        >
+                          <Plus size={13} />
+                          추가
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {guideEditorOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
+              <div className="flex h-[82vh] w-[min(980px,calc(100vw-3rem))] flex-col rounded-lg bg-white shadow-xl">
+                <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800">안내문 직접 작성</h3>
+                    <p className="mt-0.5 text-xs text-gray-500">저장 버튼을 누르면 안내문과 제출 설정이 저장됩니다.</p>
+                  </div>
+                  <button
+                    className="btn-primary py-1 text-xs"
+                    onClick={async () => {
+                      const ok = await saveAssignmentConfig();
+                      if (ok) setGuideEditorOpen(false);
+                    }}
+                  >
+                    <Save size={13} />
+                    저장
+                  </button>
+                </div>
+                <div className="grid min-h-0 flex-1 grid-cols-2 gap-0">
+                  <div className="min-h-0 border-r border-gray-200 p-4">
+                    <textarea
+                      className="textarea h-full w-full font-mono text-xs leading-relaxed"
+                      value={assignmentConfig?.guide_md || ''}
+                      onChange={(e) => updateAssignmentConfig({ guide_md: e.target.value })}
+                      placeholder={'# 수행평가 안내\n\n| 항목 | 내용 |\n| --- | --- |\n| 제출물 | 보고서 |\n| 형식 | PDF |\n'}
+                    />
+                  </div>
+                  <div className="min-h-0 p-4">
+                    <div
+                      className="prose-preview h-full overflow-auto rounded-md border border-gray-200 bg-gray-50 p-4 text-sm leading-relaxed text-gray-800"
+                      dangerouslySetInnerHTML={{ __html: renderMarkdown(assignmentConfig?.guide_md || '안내문을 입력하세요.') }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </Section>
       )}
 

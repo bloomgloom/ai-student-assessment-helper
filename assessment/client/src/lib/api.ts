@@ -200,6 +200,40 @@ export const artifactsApi = {
   viewerUrl: (id: number) => `/artifacts/${id}/view`,
 };
 
+export const assignmentConfigsApi = {
+  getConfig: (params: { year: number; semester: number; grade: number; subject: string; domainName: string }) =>
+    api.get('/assignment-configs/config', { params: { ...params, t: Date.now() } }),
+  saveConfig: (data: {
+    year: number;
+    semester: number;
+    grade: number;
+    subject: string;
+    domainName: string;
+    title: string;
+    guide_md: string;
+    allowed_extensions: string;
+    max_file_size_mb: number;
+    max_files: number;
+  }) => api.put('/assignment-configs/config', data),
+  uploadGuideMd: (params: { year: number; semester: number; grade: number; subject: string; domainName: string }, file: File) => {
+    const form = new FormData();
+    Object.entries(params).forEach(([key, value]) => form.append(key, String(value)));
+    form.append('file', file);
+    return api.post('/assignment-configs/guide-md', form);
+  },
+  uploadResources: (params: { year: number; semester: number; grade: number; subject: string; domainName: string }, files: FileList) => {
+    const form = new FormData();
+    Object.entries(params).forEach(([key, value]) => form.append(key, String(value)));
+    Array.from(files).forEach((file) => form.append('files', file));
+    return api.post('/assignment-configs/resources', form);
+  },
+  deleteResource: (id: number) => api.delete(`/assignment-configs/resources/${id}`),
+  resourceFileUrl: (id: number) => `/api/assignment-configs/resources/${id}/file`,
+  getSubmissions: (params: { year: number; semester: number; grade: number; subject: string; domainName: string; room?: string }) =>
+    api.get('/assignment-configs/submissions', { params: { ...params, t: Date.now() } }),
+  submissionFileUrl: (id: number) => `/api/assignment-configs/submissions/${id}/file`,
+};
+
 // Classes (수업 관리)
 export const classesApi = {
   getAll: () => api.get('/classes'),

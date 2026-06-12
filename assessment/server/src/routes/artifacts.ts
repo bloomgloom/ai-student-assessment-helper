@@ -4,7 +4,9 @@ import path from 'path';
 import fs from 'fs';
 import * as unzipper from 'unzipper';
 import * as cheerio from 'cheerio';
-import { execute, queryOne, queryAll } from '../services/db';
+import { queryOne, queryAll } from '../services/db';
+import { assignmentExecute, assignmentQueryAll, assignmentQueryOne } from '../services/assignmentDb';
+import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
 import { UPLOADS_DIR, ensureDir, resolveStoredPath, toStoredPath } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 
@@ -98,17 +100,18 @@ async function deleteArtifactRows(rows: { id: number; filepath: string }[]): Pro
   for (const row of rows) {
     const filepath = resolveStoredPath(row.filepath);
     try { if (fs.existsSync(filepath)) fs.unlinkSync(filepath); } catch {}
-    await execute('DELETE FROM artifacts WHERE id=?', [row.id]);
+    await assignmentExecute('DELETE FROM assignment_artifacts WHERE id=?', [row.id]);
   }
 }
 
 async function clearArtifactsForClassDomain(classId: number | string, domain: string): Promise<void> {
-  const existing = await queryAll<{ id: number; filepath: string }>(
-    `SELECT a.id, a.filepath
-     FROM artifacts a
-     JOIN class_students cs ON cs.id = a.student_id
-     WHERE cs.class_id=? AND a.domain=?`,
-    [classId, domain]
+  const students = await queryAll<{ id: number }>('SELECT id FROM class_students WHERE class_id=?', [classId]);
+  if (!students.length) return;
+  const placeholders = students.map(() => '?').join(',');
+  const existing = await assignmentQueryAll<{ id: number; filepath: string }>(
+    `SELECT id, filepath FROM assignment_artifacts
+     WHERE assessment_student_id IN (${placeholders}) AND domain=?`,
+    [...students.map(student => student.id), domain]
   );
   await deleteArtifactRows(existing);
 }
@@ -330,9 +333,10 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
 
       fs.renameSync(file.path, finalPath);
       movedPaths.push(finalPath);
-      const r = await execute(
-        'INSERT INTO artifacts(student_id, domain, filename, filepath, mime_type) VALUES(?,?,?,?,?)',
-        [req.params.studentId, domain, finalName, toStoredPath(finalPath), mimeType]
+      const r = await assignmentExecute(
+        `INSERT INTO assignment_artifacts(assessment_student_id, domain, filename, filepath, mime_type, size)
+         VALUES(?,?,?,?,?,?)`,
+        [req.params.studentId, domain, finalName, toStoredPath(finalPath), mimeType, file.size || 0]
       );
       inserted.push({ id: Number(r.lastInsertRowid), filename: finalName, filepath: finalPath });
     }
@@ -344,7 +348,7 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
     });
   } catch (e: any) {
     for (const row of inserted) {
-      try { await execute('DELETE FROM artifacts WHERE id=?', [row.id]); } catch {}
+      try { await assignmentExecute('DELETE FROM assignment_artifacts WHERE id=?', [row.id]); } catch {}
     }
     for (const file of files) {
       try { if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
@@ -358,11 +362,7 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
 
 // ── 도메인별 산출물 조회 ───────────────────────────────────────────────────────
 router.get('/student/:studentId/domain/:domain', async (req: Request, res: Response) => {
-  const artifacts = await queryAll(
-    'SELECT * FROM artifacts WHERE student_id=? AND domain=? ORDER BY uploaded_at DESC',
-    [req.params.studentId, req.params.domain]
-  );
-  res.json(artifacts);
+  res.json(await assignmentArtifactsForStudent(req.params.studentId, req.params.domain));
 });
 
 // ── 일괄 ZIP 업로드 ────────────────────────────────────────────────────────────
@@ -434,9 +434,10 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
       const savePath = path.join(baseUploadDir, `${Date.now()}_${count}_${decodedName}`);
       fs.writeFileSync(savePath, fileBuffer);
       const ct = TEXT_CONTENT_TYPES[fileExt] || '';
-      await execute(
-        'INSERT INTO artifacts(student_id, domain, filename, filepath, mime_type) VALUES(?,?,?,?,?)',
-        [student.id, domain, decodedName, toStoredPath(savePath), ct]
+      await assignmentExecute(
+        `INSERT INTO assignment_artifacts(assessment_student_id, domain, filename, filepath, mime_type, size)
+         VALUES(?,?,?,?,?,?)`,
+        [student.id, domain, decodedName, toStoredPath(savePath), ct, fileBuffer.length]
       );
       count++;
     }
@@ -457,8 +458,8 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
 
 // ── 파일 서빙 ──────────────────────────────────────────────────────────────────
 router.get('/:id', async (req: Request, res: Response) => {
-  const artifact = await queryOne(
-    'SELECT id, filename, filepath, mime_type, domain, uploaded_at FROM artifacts WHERE id=?',
+  const artifact = await assignmentQueryOne(
+    'SELECT id, filename, filepath, mime_type, domain, uploaded_at FROM assignment_artifacts WHERE id=?',
     [req.params.id]
   );
   if (!artifact) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
@@ -466,8 +467,8 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 router.get('/:id/file', async (req: Request, res: Response) => {
-  const artifact = await queryOne<{ filename: string; filepath: string; mime_type: string }>(
-    'SELECT * FROM artifacts WHERE id=?', [req.params.id]
+  const artifact = await assignmentQueryOne<{ filename: string; filepath: string; mime_type: string }>(
+    'SELECT filename, filepath, mime_type FROM assignment_artifacts WHERE id=?', [req.params.id]
   );
   const filepath = artifact ? resolveStoredPath(artifact.filepath) : '';
   if (!artifact || !fs.existsSync(filepath)) {
@@ -487,14 +488,14 @@ router.get('/:id/file', async (req: Request, res: Response) => {
 
 // ── 파일 삭제 ──────────────────────────────────────────────────────────────────
 router.delete('/:id', async (req: Request, res: Response) => {
-  const artifact = await queryOne<{ filepath: string }>(
-    'SELECT filepath FROM artifacts WHERE id=?', [req.params.id]
+  const artifact = await assignmentQueryOne<{ filepath: string }>(
+    'SELECT filepath FROM assignment_artifacts WHERE id=?', [req.params.id]
   );
   if (!artifact) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
   try {
     const filepath = resolveStoredPath(artifact.filepath);
     if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
-    await execute('DELETE FROM artifacts WHERE id=?', [req.params.id]);
+    await assignmentExecute('DELETE FROM assignment_artifacts WHERE id=?', [req.params.id]);
     res.json({ ok: true });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });

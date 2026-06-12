@@ -3,7 +3,7 @@ export const DOMAIN_GUIDE_KEY = 'hideDomainGuide.v2';
 export const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
 export const DOMAIN_SOURCE_TYPE = 'domains';
 
-export type DomainTab = 'standards' | 'scoring' | 'records' | 'ratio' | 'comments';
+export type DomainTab = 'standards' | 'scoring' | 'records' | 'assignment' | 'ratio' | 'comments';
 
 export const DOMAIN_TREE_KEY_PREFIXES = {
   year: 'dy',
@@ -33,6 +33,7 @@ export const DOMAIN_TAB_TEXT = {
     standards: { value: 'standards', label: '성취 기준', color: 'amber' },
     scoring: { value: 'scoring', label: '채점 기준', color: 'green' },
     records: { value: 'records', label: '기록 기준', color: 'blue', customColor: 'purple' },
+    assignment: { value: 'assignment', label: '실시 관리', color: 'blue' },
   },
   subjectTabs: {
     ratio: { value: 'ratio', label: '반영비율/만점관리', color: 'green' },

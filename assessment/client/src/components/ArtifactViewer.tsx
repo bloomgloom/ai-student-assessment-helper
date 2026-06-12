@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { artifactsApi } from '../lib/api';
+import { assignmentConfigsApi } from '../lib/api';
 import { Upload, X, Loader2, Eye, File, Download } from 'lucide-react';
 
 const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
@@ -12,6 +13,7 @@ interface Artifact {
   mime_type: string;
   domain: string;
   uploaded_at: string;
+  source?: 'artifact' | 'assignment';
 }
 
 function getExt(filename: string): string {
@@ -50,6 +52,18 @@ function sortArtifacts(a: Artifact, b: Artifact) {
   const extCompare = getExt(a.filename).localeCompare(getExt(b.filename), 'ko');
   if (extCompare !== 0) return extCompare;
   return a.filename.localeCompare(b.filename, 'ko', { numeric: true });
+}
+
+function artifactFileUrl(artifact: Artifact) {
+  return artifact.source === 'assignment'
+    ? assignmentConfigsApi.submissionFileUrl(artifact.id)
+    : artifactsApi.fileUrl(artifact.id);
+}
+
+function artifactViewerUrl(artifact: Artifact) {
+  return artifact.source === 'assignment'
+    ? assignmentConfigsApi.submissionFileUrl(artifact.id)
+    : artifactsApi.viewerUrl(artifact.id);
 }
 
 interface ArtifactViewerProps {
@@ -110,7 +124,7 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
     if (isCodeFile(artifact.filename)) {
       setLoadingCode(true);
       try {
-        setCodeContent(await (await fetch(artifactsApi.fileUrl(artifact.id))).text());
+        setCodeContent(await (await fetch(artifactFileUrl(artifact))).text());
       } finally {
         setLoadingCode(false);
       }
@@ -129,12 +143,14 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
           >
             {getExtLabel(a.filename)}
           </button>
-          <button
-            className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white"
-            onClick={() => handleDelete(a.id)}
-          >
-            <X size={8} />
-          </button>
+          {a.source !== 'assignment' && (
+            <button
+              className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white"
+              onClick={() => handleDelete(a.id)}
+            >
+              <X size={8} />
+            </button>
+          )}
         </div>
       ))}
 
@@ -160,10 +176,10 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
                 )}
               </div>
               <div className="flex gap-2 shrink-0">
-                <a href={artifactsApi.viewerUrl(viewing.id)} target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs py-1">
+                <a href={artifactViewerUrl(viewing)} target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs py-1">
                   <Eye size={13} /> 새 탭
                 </a>
-                <a href={artifactsApi.fileUrl(viewing.id)} download={viewing.filename} className="btn-secondary text-xs py-1">
+                <a href={artifactFileUrl(viewing)} download={viewing.filename} className="btn-secondary text-xs py-1">
                   <Download size={13} /> 다운로드
                 </a>
                 <button className="btn-secondary text-xs py-1" onClick={() => setViewing(null)}>

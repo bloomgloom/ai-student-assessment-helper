@@ -9,6 +9,40 @@ export interface SubjectItem {
   has_source?: number;
 }
 
+export interface AssignmentResource {
+  id: number;
+  filename: string;
+  filepath: string;
+  mime_type: string;
+  size: number;
+  uploaded_at: string;
+}
+
+export interface AssignmentClassSnapshot {
+  id: number;
+  assessment_class_id: number;
+  room: string;
+  student_count: number;
+}
+
+export interface AssignmentConfig {
+  id: number;
+  year: number;
+  semester: number;
+  grade: number;
+  subject: string;
+  domain_name: string;
+  title: string;
+  guide_md: string;
+  allowed_extensions: string;
+  max_file_size_mb: number;
+  max_files: number;
+  is_open: number;
+  share_code: string;
+  viewer_code: string;
+  updated_at: string;
+}
+
 export interface SubjectDomainRow {
   id?: number | string;
   year?: number;

@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { criteriaApi, aiApi } from '../../lib/api';
+import { criteriaApi, aiApi, assignmentConfigsApi } from '../../lib/api';
 import { useAiAction } from '../../hooks/useAiAction';
 import {
   AiPromptRow,
+  AssignmentClassSnapshot,
+  AssignmentConfig,
+  AssignmentResource,
   EvalItem,
   CommentsItem,
   StandardRef,
@@ -12,6 +15,7 @@ import {
 import {
   DOMAIN_GUIDE_KEY,
   DOMAIN_SELECTION_KEY,
+  DomainTab,
   getSubjectCommentsTemplate,
   SUBJECT_COMPREHENSIVE_DOMAIN,
 } from './constants';
@@ -62,6 +66,8 @@ export function useDomainController() {
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem(DOMAIN_GUIDE_KEY) !== '1');
   const domainsFileRef = useRef<HTMLInputElement>(null);
   const configFileRef = useRef<HTMLInputElement>(null);
+  const assignmentGuideFileRef = useRef<HTMLInputElement>(null);
+  const assignmentResourceFileRef = useRef<HTMLInputElement>(null);
 
   const [evalMetaPrompts, setEvalMetaPrompts] = useState<Record<number, string>>({});
   const [commentsMetaPrompts, setCommentsMetaPrompts] = useState<Record<number, string>>({});
@@ -74,7 +80,12 @@ export function useDomainController() {
   const [generatingSubjectDomains, setGeneratingSubjectDomains] = useState(false);
   const [generatingEval, setGeneratingEval] = useState(false);
   const [generatingComments, setGeneratingComments] = useState(false);
-  const [activeTab, setActiveTab] = useState<'standards' | 'scoring' | 'records' | 'ratio' | 'comments'>('standards');
+  const [activeTab, setActiveTab] = useState<DomainTab>('standards');
+  const [assignmentConfig, setAssignmentConfig] = useState<AssignmentConfig | null>(null);
+  const [assignmentResources, setAssignmentResources] = useState<AssignmentResource[]>([]);
+  const [assignmentClasses, setAssignmentClasses] = useState<AssignmentClassSnapshot[]>([]);
+  const [assignmentLoading, setAssignmentLoading] = useState(false);
+  const [assignmentUploading, setAssignmentUploading] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const runAiAction = useAiAction();
   const domainRestoredRef = useRef(false);
@@ -97,6 +108,28 @@ export function useDomainController() {
   });
 
   useEffect(() => { loadSubjects(); }, [loadSubjects]);
+
+  const loadAssignment = useCallback(async (sub: SubjectItem, domainName: string) => {
+    setAssignmentLoading(true);
+    try {
+      const r = await assignmentConfigsApi.getConfig({
+        year: sub.year,
+        semester: sub.semester,
+        grade: sub.grade,
+        subject: sub.subject,
+        domainName,
+      });
+      setAssignmentConfig(r.data.config);
+      setAssignmentResources(r.data.resources || []);
+      setAssignmentClasses(r.data.classes || []);
+    } catch {
+      setAssignmentConfig(null);
+      setAssignmentResources([]);
+      setAssignmentClasses([]);
+    } finally {
+      setAssignmentLoading(false);
+    }
+  }, []);
 
   const loadCriteria = useCallback(async (sub: SubjectItem, domainName: string, isCustom: boolean) => {
     setIsDirty(false);
@@ -162,7 +195,14 @@ export function useDomainController() {
       setEvalMetaPrompts({});
       setCommentsMetaPrompts({});
     }
-  }, []);
+    if (domainName !== SUBJECT_COMPREHENSIVE_DOMAIN) {
+      await loadAssignment(sub, domainName);
+    } else {
+      setAssignmentConfig(null);
+      setAssignmentResources([]);
+      setAssignmentClasses([]);
+    }
+  }, [loadAssignment]);
 
   const handleSelectDomain = useCallback((sub: SubjectItem, domain: string, isCustom: boolean) => {
     if (isDirty && !confirm('저장되지 않은 변경 사항이 있습니다. 이동하시겠습니까?')) return;
@@ -285,6 +325,21 @@ export function useDomainController() {
         const eItems = evalItems.map((item, j) => ({ ...item, sort_order: item.item_type === 'formula' ? -1 : j }));
         await criteriaApi.bulkSaveEval(selectedSubject.year, selectedSubject.semester, selectedSubject.grade, selectedSubject.subject, selectedDomain, eItems);
       }
+      if (selectedDomain && assignmentConfig) {
+        await assignmentConfigsApi.saveConfig({
+          year: selectedSubject.year,
+          semester: selectedSubject.semester,
+          grade: selectedSubject.grade,
+          subject: selectedSubject.subject,
+          domainName: selectedDomain,
+          title: assignmentConfig.title || `${selectedSubject.subject} ${selectedDomain}`,
+          guide_md: assignmentConfig.guide_md || '',
+          allowed_extensions: assignmentConfig.allowed_extensions || '',
+          max_file_size_mb: Number(assignmentConfig.max_file_size_mb) || 50,
+          max_files: Number(assignmentConfig.max_files) || 1,
+        });
+        await loadAssignment(selectedSubject, selectedDomain);
+      }
       alert('저장되었습니다.');
       setIsDirty(false);
       return true;
@@ -309,7 +364,82 @@ export function useDomainController() {
     setCommentsItems([]);
     setEvalItems([]);
     setAchievementStandards([]);
+    setAssignmentConfig(null);
+    setAssignmentResources([]);
+    setAssignmentClasses([]);
     localStorage.removeItem(DOMAIN_SELECTION_KEY);
+  };
+
+  const updateAssignmentConfig = (patch: Partial<AssignmentConfig>) => {
+    setAssignmentConfig(prev => prev ? { ...prev, ...patch } : prev);
+    setIsDirty(true);
+  };
+
+  const saveAssignmentConfig = async () => {
+    if (!selectedSubject || !selectedDomain || !assignmentConfig) return true;
+    await assignmentConfigsApi.saveConfig({
+      year: selectedSubject.year,
+      semester: selectedSubject.semester,
+      grade: selectedSubject.grade,
+      subject: selectedSubject.subject,
+      domainName: selectedDomain,
+      title: `${selectedSubject.subject} ${selectedDomain}`,
+      guide_md: assignmentConfig.guide_md || '',
+      allowed_extensions: assignmentConfig.allowed_extensions || '',
+      max_file_size_mb: Number(assignmentConfig.max_file_size_mb) || 50,
+      max_files: Number(assignmentConfig.max_files) || 1,
+    });
+    setIsDirty(false);
+    return true;
+  };
+
+  const handleAssignmentGuideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!selectedSubject || !selectedDomain || !e.target.files?.length) return;
+    setAssignmentUploading(true);
+    try {
+      const r = await assignmentConfigsApi.uploadGuideMd({
+        year: selectedSubject.year,
+        semester: selectedSubject.semester,
+        grade: selectedSubject.grade,
+        subject: selectedSubject.subject,
+        domainName: selectedDomain,
+      }, e.target.files[0]);
+      setAssignmentConfig(prev => prev ? { ...prev, guide_md: r.data.guide_md || '' } : prev);
+      setIsDirty(true);
+    } catch (err: any) {
+      alert(`Markdown 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
+    } finally {
+      setAssignmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleAssignmentResourceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!selectedSubject || !selectedDomain || !e.target.files?.length) return;
+    setAssignmentUploading(true);
+    try {
+      await saveAssignmentConfig();
+      await assignmentConfigsApi.uploadResources({
+        year: selectedSubject.year,
+        semester: selectedSubject.semester,
+        grade: selectedSubject.grade,
+        subject: selectedSubject.subject,
+        domainName: selectedDomain,
+      }, e.target.files);
+      await loadAssignment(selectedSubject, selectedDomain);
+    } catch (err: any) {
+      alert(`자료 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
+    } finally {
+      setAssignmentUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const deleteAssignmentResource = async (id: number) => {
+    if (!confirm('자료 파일을 삭제하시겠습니까?')) return;
+    await saveAssignmentConfig();
+    await assignmentConfigsApi.deleteResource(id);
+    if (selectedSubject && selectedDomain) await loadAssignment(selectedSubject, selectedDomain);
   };
 
   const getDownloadFilename = (disposition: string, fallback: string) => {
@@ -847,6 +977,8 @@ export function useDomainController() {
     setActiveTab,
     domainsFileRef,
     configFileRef,
+    assignmentGuideFileRef,
+    assignmentResourceFileRef,
     uploadingDomains: domainsUpload.uploading,
     uploadingConfig,
     uploadMessage: domainsUpload.message,
@@ -912,5 +1044,15 @@ export function useDomainController() {
     handleGenerateCommon,
     updateSubjectCommentsMetaPrompt,
     updateSubjectComments,
+    assignmentConfig,
+    assignmentResources,
+    assignmentClasses,
+    assignmentLoading,
+    assignmentUploading,
+    updateAssignmentConfig,
+    saveAssignmentConfig,
+    handleAssignmentGuideUpload,
+    handleAssignmentResourceUpload,
+    deleteAssignmentResource,
   };
 }

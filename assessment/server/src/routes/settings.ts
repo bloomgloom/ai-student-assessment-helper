@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import AdmZip from 'adm-zip';
 import multer from 'multer';
 import { execute, closeDb, initDb } from '../services/db';
+import { assignmentExecute, assignmentQueryOne } from '../services/assignmentDb';
 import { getStorageSettings, STORAGE_ROOT, UPLOADS_DIR, ensureDir } from '../services/storage';
 import { callLLM, getLLMSettings, fetchOpenAICompatibleModels } from '../services/llm';
 
@@ -45,9 +47,20 @@ function copyDirContents(fromDir: string, toDir: string) {
   }
 }
 
+function hashPassword(password: string) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const iterations = 120000;
+  const hash = crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256').toString('hex');
+  return `pbkdf2_sha256$${iterations}$${salt}$${hash}`;
+}
+
 router.get('/', async (_req: Request, res: Response) => {
   const settings = await getLLMSettings();
-  res.json({ ...settings, storage: getStorageSettings() });
+  const teacherPassword = await assignmentQueryOne<{ value: string }>(
+    'SELECT value FROM assignment_settings WHERE key=?',
+    ['teacher_password_hash']
+  );
+  res.json({ ...settings, storage: getStorageSettings(), assignmentTeacherPasswordSet: !!teacherPassword?.value });
 });
 
 router.put('/', async (req: Request, res: Response) => {
@@ -62,6 +75,8 @@ router.put('/', async (req: Request, res: Response) => {
     pdfRedactionTopCm,
     aiEnabled,
     providerSettings,
+    assignmentTeacherPassword,
+    clearAssignmentTeacherPassword,
   } = req.body;
   const concurrency = maxConcurrency != null ? Math.max(1, parseInt(String(maxConcurrency), 10) || 1) : undefined;
   
@@ -124,6 +139,15 @@ router.put('/', async (req: Request, res: Response) => {
 
   for (const [key, value] of validPairs) {
     await execute('INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)', [key, value]);
+  }
+
+  if (typeof assignmentTeacherPassword === 'string' && assignmentTeacherPassword.trim()) {
+    await assignmentExecute(
+      'INSERT OR REPLACE INTO assignment_settings(key, value) VALUES(?, ?)',
+      ['teacher_password_hash', hashPassword(assignmentTeacherPassword.trim())]
+    );
+  } else if (clearAssignmentTeacherPassword === true) {
+    await assignmentExecute('DELETE FROM assignment_settings WHERE key=?', ['teacher_password_hash']);
   }
 
   res.json({ ok: true, storage: getStorageSettings() });

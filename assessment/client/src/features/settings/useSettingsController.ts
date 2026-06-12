@@ -16,6 +16,7 @@ export function useSettingsController() {
     artifactStripIntroBlocks: true,
     pdfRedactionTopCm: 0,
     aiEnabled: false,
+    assignmentTeacherPasswordSet: false,
   });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -41,6 +42,7 @@ export function useSettingsController() {
         artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
         pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
         aiEnabled: data.aiEnabled === true,
+        assignmentTeacherPasswordSet: data.assignmentTeacherPasswordSet === true,
       });
     });
   }, []);
@@ -259,6 +261,24 @@ export function useSettingsController() {
     }
   };
 
+  const saveAssignmentTeacherPassword = async (password: string) => {
+    const trimmed = password.trim();
+    if (trimmed.length < 4) {
+      alert('교사 비밀번호는 4자 이상으로 입력하세요.');
+      return false;
+    }
+    await settingsApi.update({ assignmentTeacherPassword: trimmed });
+    setSettings((s) => ({ ...s, assignmentTeacherPasswordSet: true }));
+    return true;
+  };
+
+  const clearAssignmentTeacherPassword = async () => {
+    if (!confirm('교사 확인 화면 비밀번호를 해제하시겠습니까?')) return false;
+    await settingsApi.update({ clearAssignmentTeacherPassword: true });
+    setSettings((s) => ({ ...s, assignmentTeacherPasswordSet: false }));
+    return true;
+  };
+
   const isOllama = settings.provider === 'ollama';
   const isOpenAICompatible = settings.provider === 'openai-compatible';
   const needsKey = settings.provider !== 'ollama';
@@ -291,6 +311,8 @@ export function useSettingsController() {
     handleReset,
     handleBackup,
     handleRestore,
+    saveAssignmentTeacherPassword,
+    clearAssignmentTeacherPassword,
     isOllama,
     isOpenAICompatible,
     needsKey,

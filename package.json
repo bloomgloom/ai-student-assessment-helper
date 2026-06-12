@@ -7,16 +7,19 @@
   "scripts": {
     "assessment:dev": "npm run dev --prefix assessment",
     "assessment:build": "npm run build --prefix assessment",
+    "assignment:dev": "npm run dev --prefix assignment",
+    "assignment:build": "npm run build --prefix assignment",
     "python:setup": "bash scripts/setup-python-env.sh",
     "dmg:background": "node scripts/create-dmg-background.js",
-    "electron:dev": "npm run assessment:build && electron .",
-    "electron:pack": "npm run assessment:build && electron-builder --dir",
-    "electron:dist": "npm run dmg:background && npm run assessment:build && electron-builder",
-    "build:mac": "npm run dmg:background && npm run assessment:build && electron-builder --mac --dir && bash scripts/create-dmg-mac.sh",
-    "build:mac:app": "npm run assessment:build && electron-builder --mac --dir",
+    "electron:dev": "npm run assessment:build && npm run assignment:build && electron .",
+    "electron:assignment": "npm run assessment:build && npm run assignment:build && APP_MODE=assignment electron .",
+    "electron:pack": "npm run assessment:build && npm run assignment:build && electron-builder --dir",
+    "electron:dist": "npm run dmg:background && npm run assessment:build && npm run assignment:build && electron-builder",
+    "build:mac": "npm run dmg:background && npm run assessment:build && npm run assignment:build && electron-builder --mac --dir && bash scripts/create-dmg-mac.sh",
+    "build:mac:app": "npm run assessment:build && npm run assignment:build && electron-builder --mac --dir",
     "build:mac:dmg": "npm run dmg:background && bash scripts/create-dmg-mac.sh",
     "build:windows:full": "powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1",
-    "build:windows": "npm run assessment:build && electron-builder --win --x64"
+    "build:windows": "npm run assessment:build && npm run assignment:build && electron-builder --win --x64"
   },
   "dependencies": {
     "@libsql/client": "^0.14.0",
@@ -25,6 +28,7 @@
     "cors": "^2.8.5",
     "exceljs": "^4.4.0",
     "express": "^4.18.3",
+    "markdown-it": "^14.2.0",
     "multer": "^2.1.1",
     "pdf-lib": "^1.17.1",
     "pngjs": "^7.0.0",
@@ -48,6 +52,7 @@
       "electron/**/*",
       "assessment/server/dist/**/*",
       "assessment/client/dist/**/*",
+      "assignment/server/dist/**/*",
       "assessment/python/**/*",
       "package.json"
     ],

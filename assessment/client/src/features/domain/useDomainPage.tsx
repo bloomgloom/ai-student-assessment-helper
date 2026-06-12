@@ -1,4 +1,4 @@
-import { Award, BookOpen, ClipboardCheck, Download, Save, School, Upload } from 'lucide-react';
+import { Award, BookOpen, ClipboardCheck, Download, FileText, Save, School, Upload } from 'lucide-react';
 import { PageHeaderAction } from '../../components/common/PageHeaderActions';
 import { PageTab } from '../../components/common/PageTabs';
 import { DOMAIN_PAGE_TEXT, DOMAIN_TAB_TEXT, DomainTab } from './constants';
@@ -18,6 +18,7 @@ export function useDomainPage() {
       icon: <BookOpen size={14} />,
       color: domain.isCustomDomain ? DOMAIN_TAB_TEXT.domainTabs.records.customColor : DOMAIN_TAB_TEXT.domainTabs.records.color,
     },
+    { ...DOMAIN_TAB_TEXT.domainTabs.assignment, icon: <FileText size={14} /> },
   ];
   const subjectTabs: PageTab<DomainTab>[] = [
     { ...DOMAIN_TAB_TEXT.subjectTabs.ratio, icon: <ClipboardCheck size={14} /> },
@@ -169,6 +170,18 @@ export function useDomainPage() {
       updateSubjectCommentsMetaPrompt: domain.updateSubjectCommentsMetaPrompt,
       updateSubjectComments: domain.updateSubjectComments,
       aiEnabled,
+      assignmentGuideFileRef: domain.assignmentGuideFileRef,
+      assignmentResourceFileRef: domain.assignmentResourceFileRef,
+      assignmentConfig: domain.assignmentConfig,
+      assignmentResources: domain.assignmentResources,
+      assignmentClasses: domain.assignmentClasses,
+      assignmentLoading: domain.assignmentLoading,
+      assignmentUploading: domain.assignmentUploading,
+      updateAssignmentConfig: domain.updateAssignmentConfig,
+      saveAssignmentConfig: domain.saveAssignmentConfig,
+      handleAssignmentGuideUpload: domain.handleAssignmentGuideUpload,
+      handleAssignmentResourceUpload: domain.handleAssignmentResourceUpload,
+      deleteAssignmentResource: domain.deleteAssignmentResource,
     },
   };
 }

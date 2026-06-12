@@ -1,4 +1,4 @@
-export type SettingsTab = 'ai' | 'data';
+export type SettingsTab = 'ai' | 'assignment' | 'data';
 
 export interface SettingsState {
   provider: string;
@@ -12,6 +12,7 @@ export interface SettingsState {
   artifactStripIntroBlocks: boolean;
   pdfRedactionTopCm: number;
   aiEnabled: boolean;
+  assignmentTeacherPasswordSet?: boolean;
   storage?: {
     currentRoot: string;
     defaultRoot: string;
