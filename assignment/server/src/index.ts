@@ -191,6 +191,7 @@ select,input,button,textarea{font:inherit}
 select,input{width:100%;box-sizing:border-box;height:44px;border:1px solid #d1d5db;border-radius:6px;padding:0 12px;background:#fff;font-size:16px}
 button,.button{height:44px;border:1px solid #2563eb;border-radius:6px;background:#2563eb;color:#fff;padding:0 14px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;text-align:center}
 button.secondary,.button.secondary{border-color:#d1d5db;background:#fff;color:#374151}
+button:disabled,.button.disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
 .resource-list{display:grid;gap:10px}.resource-card{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #dbe2ea;background:#f8fafc;border-radius:8px;padding:12px 14px;text-decoration:none;color:#111827}.resource-card:hover{border-color:#2563eb;background:#eff6ff}.resource-name{font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.resource-action{flex:0 0 auto;color:#2563eb;font-size:14px;font-weight:700}
 .file-list{display:grid;gap:10px;margin:10px 0}.upload-rule{display:grid;gap:8px;border:1px solid #dbe2ea;background:#f8fafc;border-radius:8px;padding:12px}.file-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid #e5e7eb;background:#fff;border-radius:6px;padding:10px 12px;font-size:16px}.file-row button{height:30px;border-color:#fecaca;background:#fff;color:#dc2626;padding:0 10px}.student-form{display:grid;gap:16px}.student-fields{display:grid;grid-template-columns:1fr;gap:12px}.full{grid-column:1/-1}
 table{width:100%;border-collapse:collapse;background:#fff}
@@ -239,7 +240,7 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
   res.send(page(run.title || '수행평가 제출', `
 <header><strong>${escapeHtml(run.title || '수행평가 제출')}</strong><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '제출 가능' : '제출 마감'}</span></header>
 <main class="grid student-layout">
- <section class="card"><h2>안내문</h2><div class="guide">${markdown(run.guide_md)}</div></section>
+ <section class="card"><h2>안내</h2><div class="guide">${markdown(run.guide_md)}</div></section>
  <div class="stack">
   <section class="card"><h2>다운로드 자료</h2><div class="resource-list">${resources.map(r=>`<a class="resource-card" href="/api/public/resources/${r.id}/file"><span class="resource-name">${escapeHtml(r.filename)}</span><span class="resource-action">다운로드</span></a>`).join('') || '<p class="muted">자료 없음</p>'}</div></section>
   <section class="card"><h2>제출</h2><form id="f" class="student-form"><div class="student-fields"><div><label>반</label><input name="classNum" type="number" min="1" step="1" required inputmode="numeric"></div><div><label>번호</label><input name="seatNum" type="number" min="1" step="1" required inputmode="numeric"></div><div class="full"><label>이름</label><input name="name" required autocomplete="name" placeholder="띄어쓰기 없이 입력"></div></div><div><label>파일</label><div id="uploadGroups" class="file-list"></div></div><button>제출</button></form><p id="msg"></p></section>
@@ -329,11 +330,11 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
 
 app.get(['/', '/admin'], requireLocal, (_req, res) => {
   const ips = localIps();
-  res.send(page('수행평가 서버', `
-<header><strong>수행평가 진행</strong><div class="row"><span class="muted">진행 ${ADMIN_PORT} / 교사 뷰어 ${TEACHER_PORT} / 학생 ${STUDENT_PORT}</span><a class="button secondary" href="app://launcher">종료</a></div></header>
+  res.send(page('평가 실시 관리', `
+<header><strong>평가 실시 관리</strong><div class="row"><span class="muted">관리 ${ADMIN_PORT} / 교사 ${TEACHER_PORT} / 학생 ${STUDENT_PORT}</span><a id="exitBtn" class="button secondary" href="app://launcher">종료</a></div></header>
 <main>
   <div class="card">
-    <h2>수행 시작</h2>
+    <h2>평가 실시</h2>
     <div class="admin-controls">
       <div class="field"><label>학년도</label><select id="year"></select></div>
       <div class="field"><label>학기</label><select id="semester"></select></div>
@@ -341,14 +342,18 @@ app.get(['/', '/admin'], requireLocal, (_req, res) => {
       <div class="field"><label>과목</label><select id="subject"></select></div>
       <div class="field"><label>영역</label><select id="domain"></select></div>
       <div class="field"><label>강의실</label><select id="class"></select></div>
-      <button id="runToggle">수행 시작</button>
+      <button id="runToggle">시작</button>
     </div>
-    <p class="muted">학생에게는 학생 주소만 알려주세요. 수행을 시작하면 학생용 포트의 첫 화면이 현재 수행으로 연결됩니다.</p>
-    <div id="links"></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
+      <div id="links" style="flex:1"></div>
+      <label id="targetFilter" class="row" style="margin:0;font-size:15px;font-weight:600;cursor:pointer"><input id="absentOnly" type="checkbox" style="width:auto;height:auto"> 미실시자만</label>
+    </div>
   </div>
   <div class="card" style="margin-top:16px">
-    <h2>실행 중 제출 현황</h2>
-    <div class="row"><select id="sort"><option value="default">기본순</option><option value="recent">제출순</option></select><label id="targetFilter" class="row" style="margin:0"><input id="absentOnly" type="checkbox" style="width:auto;height:auto"> 미실시자만</label></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0">제출 현황</h2>
+      <select id="sort" style="width:auto;height:36px;font-size:14px"><option value="default">기본순</option><option value="recent">제출순</option></select>
+    </div>
     <div id="summary" class="summary"></div>
     <div id="submissions"></div>
   </div>
@@ -382,10 +387,10 @@ function refreshSubject(keep=true){options(subjectSel,unique(scoped('subject'),'
 function refreshDomain(keep=true){options(domainSel,unique(scoped('domain'),'domain_name'),keep);}
 async function loadClasses(){ const cfg=selectedConfig(); classes=cfg?await j('/api/admin/configs/'+cfg.id+'/classes'):[]; classSel.innerHTML=classes.map(c=>'<option value="'+c.id+'">'+c.room+' ('+c.student_count+'명)</option>').join(''); await loadClassRoster(); }
 function runLabel(r){return (r.is_open?'[진행중] ':'[종료] ')+r.title+' / '+r.room+' / '+r.started_at;}
-function setControlsLocked(locked){[yearSel,semesterSel,gradeSel,subjectSel,domainSel,classSel].forEach(el=>el.disabled=locked);targetFilter.style.display=locked?'none':'';}
+function setControlsLocked(locked){[yearSel,semesterSel,gradeSel,subjectSel,domainSel,classSel].forEach(el=>el.disabled=locked);targetFilter.style.display=locked?'none':'';const exitBtn=document.getElementById('exitBtn');if(exitBtn){if(locked){exitBtn.classList.add('disabled');exitBtn.removeAttribute('href');}else{exitBtn.classList.remove('disabled');exitBtn.setAttribute('href','app://launcher');}}}
 function updateLinks(r){
- if(!r){links.innerHTML='';runToggle.textContent='수행 시작';runToggle.className='';setControlsLocked(false);return;}
- runToggle.textContent=Number(r.is_open)?'수행 종료':'수행 시작';
+ if(!r){links.innerHTML='';runToggle.textContent='시작';runToggle.className='';setControlsLocked(false);return;}
+ runToggle.textContent=Number(r.is_open)?'종료':'시작';
  runToggle.className=Number(r.is_open)?'secondary':'';
  setControlsLocked(Number(r.is_open));
  links.innerHTML='<p><b>학생 주소</b>: <a target="_blank" href="http://'+studentBase+'">http://'+studentBase+'</a></p><p><b>교사용 뷰어</b>: <a target="_blank" href="http://'+teacherBase+'">http://'+teacherBase+'</a></p>';
@@ -397,7 +402,7 @@ function renderSummary(rows){
  const total=rows.length;
  const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;
  const present=total-absent;
- const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&Number(s.artifact_count||0)>0).length;
+ const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;
  const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&s.status==='accepted'&&Number(s.teacher_checked||0)===1).length;
  const done=present>0&&checked>=present;
  summary.className='summary '+(done?'summary-done':'');
@@ -471,7 +476,7 @@ teacherApp.get('/', async (req, res) => {
 <main><div id="summary" class="summary"></div><div id="submissions"></div></main>
 <script>
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json();}
-function renderSummary(rows){const total=rows.length;const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;const present=total-absent;const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&Number(s.artifact_count||0)>0).length;const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&s.status==='accepted'&&Number(s.teacher_checked||0)===1).length;const done=present>0&&checked>=present;summary.className='summary '+(done?'summary-done':'');summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');}
+function renderSummary(rows){const total=rows.length;const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;const present=total-absent;const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&s.status==='accepted'&&Number(s.teacher_checked||0)===1).length;const done=present>0&&checked>=present;summary.className='summary '+(done?'summary-done':'');summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');}
 function statusHtml(s){if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';return '<span class="ok">'+(Number(s.accepted_count||0)>1?'새로 제출됨':'제출됨')+'</span>';}
 function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const accepted=submitted&&s.status!=='rejected';const file=accepted?'<a target="_blank" href="/api/submissions/'+s.submission_id+'/file">'+s.original_filename+'</a>':(submitted?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');const check=accepted&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
 async function load(){const rows=await j('/api/submissions?sort='+sort.value);renderSummary(rows);submissions.innerHTML='<table><thead><tr><th>결시 여부</th><th>제출 확인</th><th>제출 상태</th><th>제출 시간</th><th>반</th><th>번호</th><th>이름</th><th>IP</th><th>파일</th></tr></thead><tbody>'+rows.map(rowHtml).join('')+'</tbody></table>'}

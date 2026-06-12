@@ -11,7 +11,7 @@ const IpynbArtifactPreview = lazy(() => import('./preview/IpynbArtifactPreview')
 interface Artifact {
   id: number;
   filename: string;
-  source?: 'artifact' | 'assignment';
+  source?: 'artifact' | 'assignment' | 'resource';
 }
 
 interface ArtifactPreviewContentProps {
@@ -42,9 +42,9 @@ function PreviewFallback() {
 }
 
 function artifactFileUrl(artifact: Artifact) {
-  return artifact.source === 'assignment'
-    ? assignmentConfigsApi.submissionFileUrl(artifact.id)
-    : artifactsApi.fileUrl(artifact.id);
+  if (artifact.source === 'assignment') return assignmentConfigsApi.submissionFileUrl(artifact.id);
+  if (artifact.source === 'resource') return assignmentConfigsApi.resourceFileUrl(artifact.id);
+  return artifactsApi.fileUrl(artifact.id);
 }
 
 export default function ArtifactPreviewContent({

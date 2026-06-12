@@ -30,6 +30,10 @@ function Sidebar() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebarCollapsed') === '1');
   const hasUnsavedRecords = useRecordsUnsavedStore(state => state.hasUnsavedChanges);
   const location = useLocation();
+
+  useEffect(() => {
+    (window as any).__hasUnsavedChanges = hasUnsavedRecords;
+  }, [hasUnsavedRecords]);
   const links = [
     { to: '/criteria', label: '성취 기준 관리', icon: BookOpen },
     { to: '/domains', label: '평가 영역 관리', icon: ListChecks },

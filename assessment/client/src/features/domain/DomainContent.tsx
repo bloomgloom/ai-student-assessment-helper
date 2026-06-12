@@ -1,4 +1,4 @@
-import { Dispatch, ReactNode, RefObject, SetStateAction, useState } from 'react';
+import { Dispatch, lazy, ReactNode, RefObject, SetStateAction, Suspense, useEffect, useState } from 'react';
 import MarkdownIt from 'markdown-it';
 import { AlertCircle, ClipboardCheck, Download, Edit3, Eye, FileText, Loader2, Plus, Save, Trash2, Upload, X } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
@@ -7,6 +7,13 @@ import { assignmentConfigsApi } from '../../lib/api';
 import { DomainCriteriaPanel } from './DomainCriteriaPanel';
 import { DomainSubjectCommentsPanel } from './DomainSubjectCommentsPanel';
 import { AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
+
+const ArtifactPreviewContent = lazy(() => import('../../components/ArtifactPreviewContent'));
+
+const CODE_EXTS = new Set(['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','md','txt']);
+function isCodeFile(filename: string) {
+  return CODE_EXTS.has(filename.split('.').pop()?.toLowerCase() || '');
+}
 
 type DomainTab = 'standards' | 'scoring' | 'records' | 'assignment' | 'ratio' | 'comments';
 
@@ -240,6 +247,30 @@ export function DomainContent({
 }: DomainContentProps) {
   const [guideEditorOpen, setGuideEditorOpen] = useState(false);
   const [extensionDraft, setExtensionDraft] = useState('');
+  const [viewingResource, setViewingResource] = useState<AssignmentResource | null>(null);
+  const [resourceCodeContent, setResourceCodeContent] = useState('');
+  const [resourceCodeLoading, setResourceCodeLoading] = useState(false);
+  const [resourcePdfPages, setResourcePdfPages] = useState(0);
+
+  useEffect(() => {
+    if (!viewingResource) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setViewingResource(null); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [viewingResource]);
+
+  const handleViewResource = async (resource: AssignmentResource) => {
+    setViewingResource(resource);
+    setResourceCodeContent('');
+    if (isCodeFile(resource.filename)) {
+      setResourceCodeLoading(true);
+      try {
+        setResourceCodeContent(await (await fetch(assignmentConfigsApi.resourceFileUrl(resource.id))).text());
+      } finally {
+        setResourceCodeLoading(false);
+      }
+    }
+  };
   const assignmentExtensionRules = parseExtensionRules(
     assignmentConfig?.allowed_extensions || '',
     assignmentConfig?.max_file_size_mb || 50,
@@ -643,7 +674,7 @@ export function DomainContent({
                 <div className="flex min-w-0 items-center gap-2">
                   <FileText size={15} className="shrink-0 text-gray-500" />
                   <div className="min-w-0">
-                    <h3 className="text-sm font-semibold text-gray-800">안내문</h3>
+                    <h3 className="text-sm font-semibold text-gray-800">안내</h3>
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-2">
@@ -678,7 +709,7 @@ export function DomainContent({
               ) : (
                 <div
                   className="prose-preview h-[42rem] overflow-auto rounded-md border border-gray-200 bg-gray-50 p-5 text-sm leading-relaxed text-gray-800"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(assignmentConfig?.guide_md || '안내문을 입력하세요.') }}
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(assignmentConfig?.guide_md || '안내 사항을 입력하세요.') }}
                 />
               )}
             </div>
@@ -713,15 +744,13 @@ export function DomainContent({
                       <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-500">
                         <span>{formatBytes(Number(resource.size))}</span>
                         <div className="flex gap-1">
-                          <a
+                          <button
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                            href={assignmentConfigsApi.resourceFileUrl(resource.id)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title="열기"
+                            onClick={() => handleViewResource(resource)}
+                            title="미리보기"
                           >
                             <Eye size={13} />
-                          </a>
+                          </button>
                           <a
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
                             href={assignmentConfigsApi.resourceFileUrl(resource.id)}
@@ -748,6 +777,38 @@ export function DomainContent({
                   )}
                 </div>
               </div>
+
+              {/* 배부 자료 미리보기 모달 */}
+              {viewingResource && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+                  <div className="bg-white rounded-lg shadow-xl w-[85vw] h-[85vh] flex flex-col">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
+                      <div className="font-medium text-sm text-gray-800 truncate max-w-[60%]">{viewingResource.filename}</div>
+                      <div className="flex gap-2 shrink-0">
+                        <a
+                          href={assignmentConfigsApi.resourceFileUrl(viewingResource.id)}
+                          download={viewingResource.filename}
+                          className="btn-secondary text-xs py-1 inline-flex items-center gap-1"
+                        >
+                          <Download size={13} /> 다운로드
+                        </a>
+                        <button className="btn-secondary text-xs py-1 inline-flex items-center gap-1" onClick={() => setViewingResource(null)}>
+                          <X size={13} /> 닫기
+                        </button>
+                      </div>
+                    </div>
+                    <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 size={24} className="animate-spin text-gray-400" /></div>}>
+                      <ArtifactPreviewContent
+                        artifact={{ id: viewingResource.id, filename: viewingResource.filename, source: 'resource' }}
+                        codeContent={resourceCodeContent}
+                        loadingCode={resourceCodeLoading}
+                        pdfPages={resourcePdfPages}
+                        setPdfPages={setResourcePdfPages}
+                      />
+                    </Suspense>
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <h3 className="mb-3 text-sm font-semibold text-gray-800">제출 설정</h3>
@@ -858,8 +919,7 @@ export function DomainContent({
               <div className="flex h-[82vh] w-[min(980px,calc(100vw-3rem))] flex-col rounded-lg bg-white shadow-xl">
                 <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-800">안내문 직접 작성</h3>
-                    <p className="mt-0.5 text-xs text-gray-500">저장 버튼을 누르면 안내문과 제출 설정이 저장됩니다.</p>
+                    <h3 className="text-sm font-semibold text-gray-800">안내 사항 직접 작성</h3>
                   </div>
                   <button
                     className="btn-primary py-1 text-xs"

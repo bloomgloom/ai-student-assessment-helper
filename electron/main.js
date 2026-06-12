@@ -1,6 +1,7 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const { fork } = require('child_process');
 const fs = require('fs');
+const http = require('http');
 const net = require('net');
 const path = require('path');
 
@@ -21,6 +22,17 @@ let assignmentAdminPort = null;
 let assignmentTeacherPort = null;
 let assignmentStudentPort = null;
 let activeMode = null;
+let isForceQuit = false;
+
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    http.get(url, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
+    }).on('error', reject);
+  });
+}
 
 function getAppRoot() {
   return app.getAppPath();
@@ -316,12 +328,12 @@ function launcherHtml() {
       <a class="card" href="app://start/assignment">
         <span class="badge">LAN</span>
         <div class="title">평가 실시</div>
-        <p class="desc">수행평가 안내문과 자료를 학생에게 보여주고, 학생 제출 파일을 받습니다.</p>
+        <p class="desc">수행 평가를 실시합니다. <br>학생들에게 평가 안내 및 관련 자료를 배포하고, 학생 산출물을 취합합니다.</p>
       </a>
       <a class="card" href="app://start/assessment">
         <span class="badge">Local</span>
         <div class="title">평가 관리</div>
-        <p class="desc">평가 영역·기준·안내 등을 관리하고, 학생 별 채점 및 세특을 관리합니다.</p>
+        <p class="desc">평가 영역·기준·안내 등을 평가를 준비하고,<br> 채점 및 세특 등의 평과 결과를 관리합니다.</p>
       </a>
     </div>
   </div>
@@ -399,7 +411,61 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', stopServer);
+app.on('before-quit', async (event) => {
+  if (isForceQuit) return;
+  event.preventDefault();
+
+  let shouldQuit = true;
+
+  // 평가 실시 중: 열린 수행이 있으면 경고
+  if (activeMode === 'assignment' && assignmentAdminPort) {
+    try {
+      const runs = await fetchJson(`http://127.0.0.1:${assignmentAdminPort}/api/admin/runs`);
+      const hasActiveRun = Array.isArray(runs) && runs.some((r) => Number(r.is_open));
+      if (hasActiveRun) {
+        const { response } = await dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          title: '수행 진행 중',
+          message: '수행평가가 진행 중입니다.',
+          detail: '종료하면 학생들의 연결이 즉시 끊어집니다.\n수행 종료 후 앱을 닫는 것을 권장합니다.',
+          buttons: ['취소', '그래도 종료'],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (response === 0) shouldQuit = false;
+      }
+    } catch {
+      // 서버 응답 없으면 그냥 종료
+    }
+  }
+
+  // 채점 중: 저장 안 된 변경사항 있으면 경고
+  if (shouldQuit && activeMode === 'assessment' && mainWindow) {
+    try {
+      const hasUnsaved = await mainWindow.webContents.executeJavaScript('window.__hasUnsavedChanges === true');
+      if (hasUnsaved) {
+        const { response } = await dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          title: '저장되지 않은 변경사항',
+          message: '저장되지 않은 채점 데이터가 있습니다.',
+          detail: '종료하면 변경사항이 손실됩니다.',
+          buttons: ['취소', '저장 없이 종료'],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (response === 0) shouldQuit = false;
+      }
+    } catch {
+      // 확인 실패 시 그냥 종료
+    }
+  }
+
+  if (shouldQuit) {
+    stopServer();
+    isForceQuit = true;
+    app.quit();
+  }
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
