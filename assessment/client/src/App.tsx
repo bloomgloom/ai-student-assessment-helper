@@ -1,8 +1,8 @@
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import {
   Settings, BookOpen, ClipboardList, ListChecks, Loader2, LogOut, Menu
 } from 'lucide-react';
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import SettingsPage from './pages/SettingsPage';
 import CriteriaPage from './pages/CriteriaPage';
 import DomainPage from './pages/DomainPage';
@@ -13,6 +13,18 @@ import { useRecordsUnsavedStore } from './stores/recordsUnsavedStore';
 const ArtifactStandalonePage = lazy(() =>
   import('./components/ArtifactViewer').then((module) => ({ default: module.ArtifactStandalonePage }))
 );
+
+const SAVEABLE_PATHS = ['/criteria', '/domains', '/records', '/settings'];
+
+function LastLocationSaver() {
+  const location = useLocation();
+  useEffect(() => {
+    if (SAVEABLE_PATHS.includes(location.pathname)) {
+      localStorage.setItem('lastPath', location.pathname);
+    }
+  }, [location.pathname]);
+  return null;
+}
 
 function Sidebar() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebarCollapsed') === '1');
@@ -104,12 +116,13 @@ export default function App() {
           } />
           <Route path="*" element={
             <>
+              <LastLocationSaver />
               <Sidebar />
               <main className="flex-1 min-w-0 flex flex-col">
                 <AiGlobalOverlay />
                 <div className="flex-1 overflow-auto">
                   <Routes>
-                    <Route path="/" element={<CriteriaPage />} />
+                    <Route path="/" element={<Navigate to={localStorage.getItem('lastPath') || '/criteria'} replace />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/criteria" element={<CriteriaPage />} />
                     <Route path="/domains" element={<DomainPage />} />

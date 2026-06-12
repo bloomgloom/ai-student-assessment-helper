@@ -1,4 +1,5 @@
 import { Dispatch, ReactNode, RefObject, SetStateAction, useState } from 'react';
+import MarkdownIt from 'markdown-it';
 import { AlertCircle, ClipboardCheck, Download, Edit3, Eye, FileText, Loader2, Plus, Save, Trash2, Upload, X } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
@@ -98,86 +99,10 @@ function Section({ children }: { children: ReactNode }) {
   return <section>{children}</section>;
 }
 
-function escapeHtml(value: string) {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function splitTableRow(line: string) {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map(cell => cell.trim());
-}
-
-function isTableSeparator(line: string) {
-  const cells = splitTableRow(line);
-  return cells.length > 1 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
-}
+const mdRenderer = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: false });
 
 function renderMarkdown(md: string) {
-  const lines = md.split(/\r?\n/);
-  const html: string[] = [];
-  let listOpen = false;
-  const closeList = () => {
-    if (listOpen) {
-      html.push('</ul>');
-      listOpen = false;
-    }
-  };
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
-    const line = raw.trimEnd();
-    const nextLine = lines[i + 1]?.trimEnd() || '';
-    if (!line.trim()) {
-      closeList();
-      html.push('<br />');
-      continue;
-    }
-    if (line.includes('|') && isTableSeparator(nextLine)) {
-      closeList();
-      const headers = splitTableRow(line);
-      const bodyRows: string[][] = [];
-      i += 2;
-      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
-        bodyRows.push(splitTableRow(lines[i]));
-        i++;
-      }
-      i--;
-      html.push('<table><thead><tr>');
-      headers.forEach(cell => html.push(`<th>${escapeHtml(cell)}</th>`));
-      html.push('</tr></thead><tbody>');
-      bodyRows.forEach(row => {
-        html.push('<tr>');
-        headers.forEach((_, index) => html.push(`<td>${escapeHtml(row[index] || '')}</td>`));
-        html.push('</tr>');
-      });
-      html.push('</tbody></table>');
-      continue;
-    }
-    if (line.startsWith('### ')) {
-      closeList();
-      html.push(`<h3>${escapeHtml(line.slice(4))}</h3>`);
-    } else if (line.startsWith('## ')) {
-      closeList();
-      html.push(`<h2>${escapeHtml(line.slice(3))}</h2>`);
-    } else if (line.startsWith('# ')) {
-      closeList();
-      html.push(`<h1>${escapeHtml(line.slice(2))}</h1>`);
-    } else if (/^[-*]\s+/.test(line)) {
-      if (!listOpen) {
-        html.push('<ul>');
-        listOpen = true;
-      }
-      html.push(`<li>${escapeHtml(line.replace(/^[-*]\s+/, ''))}</li>`);
-    } else {
-      closeList();
-      html.push(`<p>${escapeHtml(line)}</p>`);
-    }
-  }
-  closeList();
-  return html.join('');
+  return mdRenderer.render(md);
 }
 
 function formatBytes(size: number) {
@@ -719,7 +644,6 @@ export function DomainContent({
                   <FileText size={15} className="shrink-0 text-gray-500" />
                   <div className="min-w-0">
                     <h3 className="text-sm font-semibold text-gray-800">안내문</h3>
-                    <p className="mt-0.5 text-xs text-gray-500">학생 화면에 표시될 Markdown 미리보기입니다.</p>
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-2">

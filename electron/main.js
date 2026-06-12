@@ -312,19 +312,16 @@ function launcherHtml() {
 <main>
   <div class="wrap">
     <h1>실행할 앱을 선택하세요</h1>
-    <p class="lead">채점/기준 관리와 수행평가 제출 서버는 동시에 실행하지 않습니다. 선택한 앱의 서버만 시작됩니다.</p>
     <div class="grid">
       <a class="card" href="app://start/assignment">
-        <span class="badge">LAN 공개</span>
-        <div class="title">수행평가앱</div>
+        <span class="badge">LAN</span>
+        <div class="title">평가 실시</div>
         <p class="desc">수행평가 안내문과 자료를 학생에게 보여주고, 학생 제출 파일을 받습니다.</p>
-        <span class="button">수행평가앱 실행</span>
       </a>
       <a class="card" href="app://start/assessment">
-        <span class="badge">로컬 전용</span>
-        <div class="title">채점앱</div>
-        <p class="desc">성취 기준, 평가 영역, 채점 기준, 기록 기준, 학생별 채점 기록을 관리합니다.</p>
-        <span class="button">채점앱 실행</span>
+        <span class="badge">Local</span>
+        <div class="title">평가 관리</div>
+        <p class="desc">평가 영역·기준·안내 등을 관리하고, 학생 별 채점 및 세특을 관리합니다.</p>
       </a>
     </div>
   </div>

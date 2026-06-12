@@ -909,6 +909,7 @@ export function useRecordsPage() {
   const compWidth = colWidths['_comp'] ?? 320;
   const compCountWidth = colWidths['_comp_count'] ?? 74;
   const compSpellWidth = colWidths['_comp_spell'] ?? 320;
+  const grandTotalWidth = colWidths['_grand_total'] ?? 70;
   const tableColumnWidths = [
     cw.chk,
     cw.cls,
@@ -921,6 +922,7 @@ export function useRecordsPage() {
         return colWidths[wk] ?? getDomainColumnDefaultWidth(c.type);
       });
     }),
+    ...(showScoring ? [grandTotalWidth] : []),
     ...(showComprehensive ? [compWidth, compCountWidth, compSpellWidth] : []),
   ];
   const tableTotalWidth = tableColumnWidths.reduce((sum, width) => sum + width, 0);
@@ -1189,6 +1191,16 @@ export function useRecordsPage() {
                       );
                     })}
 
+                    {/* Grand total header */}
+                    {showScoring && (
+                      <th rowSpan={2} className="relative px-2 py-3 font-semibold text-gray-700 border-b border-r bg-green-50/60 text-center select-none"
+                        style={{ width: grandTotalWidth, minWidth: grandTotalWidth }}>
+                        합계
+                        <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                          onMouseDown={e => handleResizeStart(e, '_grand_total', 70)} />
+                      </th>
+                    )}
+
                     {/* Comp comments header */}
                     {showComprehensive && (
                       <>
@@ -1389,6 +1401,21 @@ export function useRecordsPage() {
                             return null;
                           });
                         })}
+
+                        {/* Grand total */}
+                        {showScoring && (() => {
+                          const grandTotal = ((selectedSubject?.fixedDomains || []) as any[])
+                            .reduce((sum: number, d: any) => {
+                              const scoreData = (contents[`${s.id}_scoring_${d.name}`] || {}) as ScoringContent;
+                              return sum + (Number(scoreData.total) || 0);
+                            }, 0);
+                          return (
+                            <td className="border-r text-center font-bold text-green-700 align-middle p-2 bg-green-50/30"
+                              style={{ width: grandTotalWidth, minWidth: grandTotalWidth }}>
+                              {grandTotal || ''}
+                            </td>
+                          );
+                        })()}
 
                         {/* Comp comments */}
                         {showComprehensive && (
