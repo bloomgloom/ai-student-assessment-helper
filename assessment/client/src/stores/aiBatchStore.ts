@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { startDisplaySleepPrevention, stopDisplaySleepPrevention } from '../lib/displaySleepPrevention';
 
 export type BatchContentType = 'scoring' | 'comments';
 export type BatchStatus = 'running' | 'stopping' | 'completed' | 'error' | 'stopped';
@@ -94,6 +95,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
     let aggregateErrors = 0;
 
     try {
+      await startDisplaySleepPrevention();
       for (const domain of domains) {
         if (activeController.signal.aborted) break;
         const domainStartCompleted = aggregateCompleted;
@@ -234,6 +236,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
       return false;
     } finally {
       activeController = null;
+      await stopDisplaySleepPrevention();
     }
   },
 
@@ -268,8 +271,10 @@ if (typeof window !== 'undefined' && !unloadListenerAttached) {
   unloadListenerAttached = true;
   window.addEventListener('beforeunload', () => {
     activeController?.abort();
+    void stopDisplaySleepPrevention();
   });
   window.addEventListener('pagehide', () => {
     activeController?.abort();
+    void stopDisplaySleepPrevention();
   });
 }

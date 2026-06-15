@@ -369,7 +369,7 @@ export function SettingsContent({
           <div>
             <h3 className="text-sm font-semibold text-gray-800">교사용 확인 화면 비밀번호</h3>
             <p className="text-xs text-gray-500 mt-1">
-              수행평가앱의 교사용 뷰어 주소에 접속할 때 입력할 비밀번호입니다. 학생 제출 화면에는 적용되지 않습니다.
+              수행평가앱의 교사용 페이지에 접속할 때 입력할 비밀번호입니다. 학생 제출 화면에는 적용되지 않습니다.
             </p>
           </div>
 

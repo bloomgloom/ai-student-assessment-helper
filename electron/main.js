@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker } = require('electron');
 const { fork } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -23,6 +23,22 @@ let assignmentTeacherPort = null;
 let assignmentStudentPort = null;
 let activeMode = null;
 let isForceQuit = false;
+let displaySleepBlockerId = null;
+
+function setDisplaySleepPrevention(enabled) {
+  if (enabled) {
+    if (displaySleepBlockerId === null || !powerSaveBlocker.isStarted(displaySleepBlockerId)) {
+      displaySleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+    }
+    return true;
+  }
+
+  if (displaySleepBlockerId !== null && powerSaveBlocker.isStarted(displaySleepBlockerId)) {
+    powerSaveBlocker.stop(displaySleepBlockerId);
+  }
+  displaySleepBlockerId = null;
+  return false;
+}
 
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
@@ -212,6 +228,7 @@ async function startAssignmentServer() {
 }
 
 function stopServer() {
+  setDisplaySleepPrevention(false);
   if (!serverProcess) return;
   serverProcess.kill();
   serverProcess = null;
@@ -323,7 +340,6 @@ function launcherHtml() {
 <body>
 <main>
   <div class="wrap">
-    <h1>실행할 앱을 선택하세요</h1>
     <div class="grid">
       <a class="card" href="app://start/assignment">
         <span class="badge">LAN</span>
@@ -367,6 +383,13 @@ async function startMode(mode) {
 }
 
 async function createWindow() {
+  ipcMain.removeHandler('display-sleep-prevention');
+  ipcMain.handle('display-sleep-prevention', (event, enabled) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return false;
+    if (enabled && activeMode !== 'assessment') return false;
+    return setDisplaySleepPrevention(Boolean(enabled));
+  });
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -374,6 +397,7 @@ async function createWindow() {
     minHeight: 720,
     title: 'AI Student Assessment Helper',
     webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false
     }
@@ -407,6 +431,7 @@ async function createWindow() {
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
+  setDisplaySleepPrevention(false);
   stopServer();
   if (process.platform !== 'darwin') app.quit();
 });
@@ -461,6 +486,7 @@ app.on('before-quit', async (event) => {
   }
 
   if (shouldQuit) {
+    setDisplaySleepPrevention(false);
     stopServer();
     isForceQuit = true;
     app.quit();

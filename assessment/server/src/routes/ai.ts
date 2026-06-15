@@ -7,6 +7,7 @@ import { imageFileToAttachment, pdfToRedactedJpegAttachments } from '../services
 import { buildNotebookExecutionEvidence, buildTabularDataEvidence } from '../services/artifactEvidence';
 import { resolveStoredPath } from '../services/storage';
 import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
+import { parseFirstJson } from '../services/json';
 
 const router = Router();
 
@@ -160,25 +161,13 @@ async function getDomainCommentsCriteria(classContext: ClassContext | null, doma
   );
 }
 
-function extractJsonArrayText(text: string): string {
-  const stripped = text
-    .trim()
-    .replace(/^```(?:json|text)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
-  const start = stripped.indexOf('[');
-  const end = stripped.lastIndexOf(']');
-  if (start >= 0 && end > start) return stripped.slice(start, end + 1);
-  return stripped;
-}
-
 interface ScoringResultItem {
   score?: unknown;
   reason?: unknown;
 }
 
 function parseScoringResultItems(result: string): ScoringResultItem[] {
-  const parsed = JSON.parse(extractJsonArrayText(result)) as unknown;
+  const parsed = parseFirstJson<unknown>(result, 'array');
   if (!Array.isArray(parsed)) throw new Error('JSON 배열이 아닙니다.');
   return parsed.map((item) => {
     if (Array.isArray(item)) return { score: item[0], reason: item[1] };

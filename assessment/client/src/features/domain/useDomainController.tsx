@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { criteriaApi, aiApi, assignmentConfigsApi } from '../../lib/api';
+import { parseFirstJson } from '../../lib/json';
 import { useAiAction } from '../../hooks/useAiAction';
 import {
   AiPromptRow,
@@ -45,7 +46,7 @@ function createDefaultCommentsItem(sortOrder = 0): CommentsItem {
 }
 
 function parseAiJson<T>(value: string): T {
-  return JSON.parse(value.replace(/```json/g, '').replace(/```/g, '').trim());
+  return parseFirstJson<T>(value, 'array');
 }
 
 export function useDomainController() {
