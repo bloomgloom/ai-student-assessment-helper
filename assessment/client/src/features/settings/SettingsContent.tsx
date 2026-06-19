@@ -3,6 +3,7 @@ import { Save, TestTube, CheckCircle, XCircle, Loader2, RefreshCw, Trash2, Alert
 import { DEFAULT_MODELS, DEFAULT_URLS, PROVIDERS } from './constants';
 import { useSettingsController } from './useSettingsController';
 import { SettingsTab } from './types';
+import { hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
 
 interface SettingsContentProps extends ReturnType<typeof useSettingsController> {
   activeTab: SettingsTab;
@@ -463,21 +464,36 @@ export function SettingsContent({
               백업 다운로드
             </button>
 
-            <label className={`btn-secondary cursor-pointer ${backingUp || restoring ? 'opacity-50 pointer-events-none' : ''}`}>
-              {restoring ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-              백업 복원
-              <input
-                type="file"
-                accept=".zip,application/zip"
-                className="hidden"
+            {hasDesktopFileDialogs() ? (
+              <button
+                type="button"
+                className="btn-secondary"
                 disabled={backingUp || restoring}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.currentTarget.value = '';
-                  if (file) handleRestore(file);
+                onClick={async () => {
+                  const files = await openFiles({ filters: [{ name: 'ZIP', extensions: ['zip'] }] });
+                  if (files?.[0]) handleRestore(files[0]);
                 }}
-              />
-            </label>
+              >
+                {restoring ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                백업 복원
+              </button>
+            ) : (
+              <label className={`btn-secondary cursor-pointer ${backingUp || restoring ? 'opacity-50 pointer-events-none' : ''}`}>
+                {restoring ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                백업 복원
+                <input
+                  type="file"
+                  accept=".zip,application/zip"
+                  className="hidden"
+                  disabled={backingUp || restoring}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.currentTarget.value = '';
+                    if (file) handleRestore(file);
+                  }}
+                />
+              </label>
+            )}
           </div>
 
           <div className="space-y-0.5 text-xs text-gray-400">

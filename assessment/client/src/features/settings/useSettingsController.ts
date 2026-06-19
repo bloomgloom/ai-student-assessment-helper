@@ -1,5 +1,6 @@
 import { SetStateAction, useEffect, useState } from 'react';
 import { settingsApi } from '../../lib/api';
+import { saveBlob } from '../../lib/desktopFiles';
 import { DEFAULT_MODELS, DEFAULT_URLS } from './constants';
 import { SettingsState } from './types';
 
@@ -221,14 +222,7 @@ export function useSettingsController() {
       const disposition = String(r.headers['content-disposition'] || '');
       const match = disposition.match(/filename="?([^"]+)"?/);
       const filename = match?.[1] || `assessment-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await saveBlob(filename, blob);
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'response' in e

@@ -4,6 +4,7 @@ import { AlertCircle, ClipboardCheck, Download, Edit3, Eye, FileText, Loader2, P
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { assignmentConfigsApi } from '../../lib/api';
+import { filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
 import { DomainCriteriaPanel } from './DomainCriteriaPanel';
 import { DomainSubjectCommentsPanel } from './DomainSubjectCommentsPanel';
 import { AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
@@ -703,7 +704,14 @@ export function DomainContent({
                 <div className="flex shrink-0 gap-2">
                   <button
                     className="btn-secondary py-1 text-xs"
-                    onClick={() => assignmentGuideFileRef.current?.click()}
+                    onClick={async () => {
+                      if (hasDesktopFileDialogs()) {
+                        const files = await openFiles({ filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }] });
+                        if (files?.length) handleAssignmentGuideUpload(filesToInputChangeEvent(files) as any);
+                        return;
+                      }
+                      assignmentGuideFileRef.current?.click();
+                    }}
                     disabled={assignmentUploading}
                   >
                     {assignmentUploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
@@ -746,7 +754,14 @@ export function DomainContent({
                   </div>
                   <button
                     className="btn-secondary py-1 text-xs"
-                    onClick={() => assignmentResourceFileRef.current?.click()}
+                    onClick={async () => {
+                      if (hasDesktopFileDialogs()) {
+                        const files = await openFiles({ multiple: true });
+                        if (files?.length) handleAssignmentResourceUpload(filesToInputChangeEvent(files) as any);
+                        return;
+                      }
+                      assignmentResourceFileRef.current?.click();
+                    }}
                     disabled={assignmentUploading}
                   >
                     {assignmentUploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}

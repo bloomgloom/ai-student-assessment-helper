@@ -1,5 +1,6 @@
 import { ChangeEvent, useRef } from 'react';
 import { criteriaApi } from '../../lib/api';
+import { saveBlob } from '../../lib/desktopFiles';
 import { useDismissibleGuide } from '../../hooks/useDismissibleGuide';
 import { CRITERIA_GUIDE_KEY } from './constants';
 import { useCriteriaStandardsUpload } from './useCriteriaStandardsUpload';
@@ -32,15 +33,13 @@ export function useCriteriaController() {
         criteria.selected.subject,
         criteria.selected.domain_name
       );
-      const url = URL.createObjectURL(r.data);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = getDownloadFilename(
+      await saveBlob(
+        getDownloadFilename(
         r.headers['content-disposition'] || '',
         `${criteria.selected.year}_${criteria.selected.subject}_${criteria.selected.domain_name}_성취기준.xlsx`
+        ),
+        r.data
       );
-      a.click();
-      URL.revokeObjectURL(url);
     } catch {
       alert('성취 기준 작업 내용 다운로드 실패');
     }

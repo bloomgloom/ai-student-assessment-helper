@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { criteriaApi, aiApi, assignmentConfigsApi } from '../../lib/api';
+import { saveBlob } from '../../lib/desktopFiles';
 import { parseFirstJson } from '../../lib/json';
 import { useAiAction } from '../../hooks/useAiAction';
 import {
@@ -460,15 +461,13 @@ export function useDomainController() {
         selectedSubject.subject,
         domainName
       );
-      const url = URL.createObjectURL(r.data);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = getDownloadFilename(
-        r.headers['content-disposition'] || '',
-        `${selectedSubject.year}_${selectedSubject.subject}_${selectedDomain || '종합세특'}_기준.xlsx`
+      await saveBlob(
+        getDownloadFilename(
+          r.headers['content-disposition'] || '',
+          `${selectedSubject.year}_${selectedSubject.subject}_${selectedDomain || '종합세특'}_기준.xlsx`
+        ),
+        r.data
       );
-      a.click();
-      URL.revokeObjectURL(url);
     } catch {
       alert('기준 다운로드 실패');
     }

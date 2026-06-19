@@ -107,6 +107,66 @@ def read_frame(file_path, ext):
             last_error = exc
     raise last_error
 
+def text_quality(text):
+    controls = sum(1 for ch in text if ord(ch) < 32 and ch not in "\t\r\n")
+    hangul = sum(1 for ch in text if "\uac00" <= ch <= "\ud7a3")
+    replacement = text.count("\ufffd")
+    return {
+        "replacement_chars": replacement,
+        "control_chars": controls,
+        "hangul_chars": hangul,
+        "sample": text[:500],
+    }
+
+def encoding_probe(file_path, ext):
+    if ext in ("xlsx", "xls"):
+        return {
+            "kind": "binary_spreadsheet",
+            "note": "XLS/XLSX는 CSV 텍스트 인코딩 채점 대상이 아닙니다.",
+        }
+
+    raw = open(file_path, "rb").read()
+    has_non_ascii = any(byte >= 0x80 for byte in raw)
+    attempts = {}
+    for encoding in ["utf-8-sig", "utf-8", "cp949", "euc-kr"]:
+        try:
+            decoded = raw.decode(encoding, errors="strict")
+            attempts[encoding] = {
+                "success": True,
+                **text_quality(decoded),
+            }
+        except UnicodeDecodeError as exc:
+            attempts[encoding] = {
+                "success": False,
+                "error": f"UnicodeDecodeError at byte {exc.start}",
+            }
+
+    if raw.startswith(b"\xef\xbb\xbf"):
+        likely = "utf-8-sig"
+        confidence_note = "UTF-8 BOM이 있습니다."
+    elif attempts["utf-8"]["success"] and has_non_ascii:
+        likely = "utf-8"
+        confidence_note = "원본 바이트가 엄격한 UTF-8 디코딩에 성공했고 비 ASCII 바이트가 포함되어 있습니다."
+    elif attempts["cp949"]["success"] and not attempts["utf-8"]["success"]:
+        likely = "cp949"
+        confidence_note = "엄격한 UTF-8 디코딩은 실패했고 CP949 디코딩은 성공했습니다."
+    elif not has_non_ascii:
+        likely = "ascii-compatible"
+        confidence_note = "ASCII 범위 바이트만 있어 UTF-8/CP949/EUC-KR을 원본 인코딩으로 구분할 수 없습니다."
+    else:
+        likely = "ambiguous"
+        confidence_note = "여러 인코딩으로 디코딩 가능하거나 확정하기 어렵습니다. 샘플과 실행 결과를 함께 봐야 합니다."
+
+    return {
+        "kind": "raw_csv_bytes",
+        "bytes": len(raw),
+        "has_utf8_bom": raw.startswith(b"\xef\xbb\xbf"),
+        "has_non_ascii_bytes": has_non_ascii,
+        "likely_encoding": likely,
+        "confidence_note": confidence_note,
+        "decode_attempts": attempts,
+    }
+
 def damage_report(file_path, df):
     report = {
         "replacement_char_bytes": 0,
@@ -133,13 +193,14 @@ def damage_report(file_path, df):
 try:
     file_path = sys.argv[1]
     ext = os.path.splitext(file_path)[1].lower().lstrip(".")
-    df, reader = read_frame(file_path, ext)
+    df, reader_used_for_summary = read_frame(file_path, ext)
     numeric = df.select_dtypes(include="number")
     categorical = df.select_dtypes(exclude="number")
 
     result = {
         "ok": True,
-        "reader": reader,
+        "reader_used_for_summary": reader_used_for_summary,
+        "encoding_probe": encoding_probe(file_path, ext),
         "encoding_damage": damage_report(file_path, df),
         "shape": [int(df.shape[0]), int(df.shape[1])],
         "columns": [str(col) for col in df.columns],
@@ -284,7 +345,7 @@ export async function buildTabularDataEvidence(artifact: EvidenceArtifact): Prom
     if (!result.ok) {
       return `[데이터 요약 evidence]\npandas 요약 생성 실패: ${result.error || 'unknown error'}`;
     }
-    return `[데이터 요약 evidence: pandas]\n원본 CSV/XLSX 전체는 토큰 절약을 위해 전송하지 않고 아래 요약만 제공합니다.\n\`\`\`json\n${truncate(JSON.stringify(result, null, 2), 18000)}\n\`\`\``;
+    return `[데이터 요약 evidence: pandas]\n원본 CSV/XLSX 전체는 토큰 절약을 위해 전송하지 않고 아래 요약만 제공합니다.\nreader_used_for_summary는 서버가 요약 생성을 위해 성공적으로 사용한 읽기 방식이며, 원본 CSV의 확정 인코딩 판정이 아닙니다.\nCSV 인코딩 채점이 필요한 경우에는 encoding_probe를 우선 근거로 사용하세요. 다만 likely_encoding이 ascii-compatible 또는 ambiguous이면 인코딩만으로 감점하지 말고 코드 실행 가능성과 결과를 함께 판단하세요.\n\`\`\`json\n${truncate(JSON.stringify(result, null, 2), 22000)}\n\`\`\``;
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return `[데이터 요약 evidence]\npandas 요약 생성 실패: ${message}`;

@@ -2,14 +2,6 @@ let active = false;
 let wakeLock: WakeLockSentinel | null = null;
 let visibilityListenerAttached = false;
 
-declare global {
-  interface Window {
-    assessmentDesktop?: {
-      setDisplaySleepPrevention: (enabled: boolean) => Promise<boolean>;
-    };
-  }
-}
-
 async function requestWebWakeLock() {
   if (!active || document.visibilityState !== 'visible' || !('wakeLock' in navigator)) return;
   try {
@@ -35,7 +27,7 @@ function attachVisibilityListener() {
 export async function startDisplaySleepPrevention() {
   active = true;
 
-  if (window.assessmentDesktop) {
+  if (window.assessmentDesktop?.setDisplaySleepPrevention) {
     try {
       await window.assessmentDesktop.setDisplaySleepPrevention(true);
     } catch {
@@ -51,7 +43,7 @@ export async function startDisplaySleepPrevention() {
 export async function stopDisplaySleepPrevention() {
   active = false;
 
-  if (window.assessmentDesktop) {
+  if (window.assessmentDesktop?.setDisplaySleepPrevention) {
     try {
       await window.assessmentDesktop.setDisplaySleepPrevention(false);
     } catch {

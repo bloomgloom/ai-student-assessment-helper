@@ -2,6 +2,7 @@ import { lazy, Suspense, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { artifactsApi } from '../lib/api';
 import { assignmentConfigsApi } from '../lib/api';
+import { filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../lib/desktopFiles';
 import { Upload, X, Loader2, Eye, File, Download } from 'lucide-react';
 
 const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
@@ -155,12 +156,28 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
       ))}
 
       {/* 업로드 버튼 (아이콘만) */}
+      {hasDesktopFileDialogs() ? (
+        <button
+          type="button"
+          className={`flex items-center justify-center w-6 h-6 rounded border border-dashed ${
+            uploading ? 'border-gray-300 text-gray-300' : 'border-blue-300 text-blue-500 hover:bg-blue-50'
+          }`}
+          onClick={async () => {
+            const files = await openFiles({ multiple: true });
+            if (files?.length) handleUpload(filesToInputChangeEvent(files) as any);
+          }}
+          disabled={uploading}
+        >
+          {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+        </button>
+      ) : (
       <label className={`flex items-center justify-center w-6 h-6 rounded cursor-pointer border border-dashed ${
         uploading ? 'border-gray-300 text-gray-300' : 'border-blue-300 text-blue-500 hover:bg-blue-50'
       }`}>
         {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
         <input type="file" className="hidden" multiple onChange={handleUpload} disabled={uploading} />
       </label>
+      )}
 
       {/* 뷰어 모달 */}
       {viewing && (

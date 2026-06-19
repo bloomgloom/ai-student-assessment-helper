@@ -10,6 +10,7 @@ import { useRecordsHeader } from './useRecordsHeader';
 import { useAiEnabled } from '../../hooks/useAiEnabled';
 import { useRecordsTree } from './useRecordsTree';
 import { useRecordsUpload } from './useRecordsUpload';
+import { saveBlob } from '../../lib/desktopFiles';
 
 const ArtifactViewer = lazy(() => import('../../components/ArtifactViewer'));
 
@@ -786,9 +787,6 @@ export function useRecordsPage() {
       const r = await fetch(`/api/records/export/${selectedClass.id}?type=${type}`);
       if (!r.ok) throw new Error('Export failed');
       const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
       // Content-Disposition 헤더에서 원본 파일명 추출
       const disposition = r.headers.get('Content-Disposition') || '';
       const utf8Match = disposition.match(/filename\*=UTF-8''(.+)/i);
@@ -798,9 +796,7 @@ export function useRecordsPage() {
         : plainMatch
           ? plainMatch[1]
           : `${type === 'comments' ? '세특' : '채점'}_${selectedClass.year}_${selectedClass.subject}_${selectedClass.room}.xlsx`;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      await saveBlob(filename, blob);
     } catch { alert('내보내기 실패'); }
   };
 
@@ -814,15 +810,13 @@ export function useRecordsPage() {
     if (!selectedClass) return;
     try {
       const r = await recordsApi.exportFull(selectedClass.id);
-      const url = URL.createObjectURL(r.data);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = getDownloadFilename(
-        r.headers['content-disposition'] || '',
-        `전체기록_${selectedClass.year}_${selectedClass.subject}_${selectedClass.room}.xlsx`
+      await saveBlob(
+        getDownloadFilename(
+          r.headers['content-disposition'] || '',
+          `전체기록_${selectedClass.year}_${selectedClass.subject}_${selectedClass.room}.xlsx`
+        ),
+        r.data
       );
-      a.click();
-      URL.revokeObjectURL(url);
     } catch {
       alert('전체 기록 다운로드 실패');
     }

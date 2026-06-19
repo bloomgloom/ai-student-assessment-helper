@@ -24,6 +24,54 @@ let assignmentStudentPort = null;
 let activeMode = null;
 let isForceQuit = false;
 let displaySleepBlockerId = null;
+let lastFileDialogDir = null;
+let fileDialogPrefsLoaded = false;
+
+function getFileDialogPrefsPath() {
+  return path.join(app.getPath('userData'), 'file-dialog-prefs.json');
+}
+
+function loadFileDialogPrefs() {
+  if (fileDialogPrefsLoaded) return;
+  fileDialogPrefsLoaded = true;
+  try {
+    const prefs = JSON.parse(fs.readFileSync(getFileDialogPrefsPath(), 'utf8'));
+    if (typeof prefs.lastDir === 'string' && fs.existsSync(prefs.lastDir)) {
+      lastFileDialogDir = prefs.lastDir;
+    }
+  } catch {
+    lastFileDialogDir = null;
+  }
+}
+
+function saveFileDialogPrefs() {
+  if (!lastFileDialogDir) return;
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(getFileDialogPrefsPath(), JSON.stringify({ lastDir: lastFileDialogDir }, null, 2));
+  } catch {
+    // Remembering the last file dialog location is a convenience feature.
+  }
+}
+
+function getLastFileDialogDir() {
+  loadFileDialogPrefs();
+  if (lastFileDialogDir && fs.existsSync(lastFileDialogDir)) return lastFileDialogDir;
+  return app.getPath('downloads');
+}
+
+function rememberFileDialogPath(filePath) {
+  if (!filePath) return;
+  const dir = path.dirname(filePath);
+  if (fs.existsSync(dir)) {
+    lastFileDialogDir = dir;
+    saveFileDialogPrefs();
+  }
+}
+
+function fileDialogDefaultPath(filename) {
+  return path.join(getLastFileDialogDir(), filename || '');
+}
 
 function setDisplaySleepPrevention(enabled) {
   if (enabled) {
@@ -384,10 +432,40 @@ async function startMode(mode) {
 
 async function createWindow() {
   ipcMain.removeHandler('display-sleep-prevention');
+  ipcMain.removeHandler('save-file');
+  ipcMain.removeHandler('open-files');
   ipcMain.handle('display-sleep-prevention', (event, enabled) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return false;
     if (enabled && activeMode !== 'assessment') return false;
     return setDisplaySleepPrevention(Boolean(enabled));
+  });
+  ipcMain.handle('save-file', async (event, { filename, data }) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return { canceled: true };
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: fileDialogDefaultPath(filename || 'download'),
+    });
+    if (canceled || !filePath) return { canceled: true };
+    fs.writeFileSync(filePath, Buffer.from(new Uint8Array(data)));
+    rememberFileDialogPath(filePath);
+    return { canceled: false, filePath };
+  });
+  ipcMain.handle('open-files', async (event, options = {}) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return { canceled: true, files: [] };
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      defaultPath: getLastFileDialogDir(),
+      properties: ['openFile', ...(options.multiple ? ['multiSelections'] : [])],
+      filters: Array.isArray(options.filters) ? options.filters : undefined,
+    });
+    if (canceled || !filePaths.length) return { canceled: true, files: [] };
+    rememberFileDialogPath(filePaths[0]);
+    return {
+      canceled: false,
+      files: filePaths.map((filePath) => {
+        const buffer = fs.readFileSync(filePath);
+        const data = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+        return { name: path.basename(filePath), path: filePath, data };
+      }),
+    };
   });
 
   mainWindow = new BrowserWindow({
@@ -417,6 +495,20 @@ async function createWindow() {
     if (url === 'app://start/assignment') {
       startMode('assignment');
     }
+  });
+
+  mainWindow.webContents.session.on('will-download', async (event, item) => {
+    item.pause();
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: fileDialogDefaultPath(item.getFilename()),
+    });
+    if (canceled || !filePath) {
+      item.cancel();
+      return;
+    }
+    item.setSavePath(filePath);
+    rememberFileDialogPath(filePath);
+    item.resume();
   });
 
   if (process.env.APP_MODE === 'assignment') {

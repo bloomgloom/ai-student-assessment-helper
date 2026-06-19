@@ -1,5 +1,6 @@
 import { ChangeEvent, ReactNode, RefObject } from 'react';
 import { Loader2 } from 'lucide-react';
+import { acceptToFilters, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
 
 type PageHeaderActionVariant = 'primary' | 'secondary' | 'success' | 'danger' | 'rainbow';
 
@@ -71,10 +72,35 @@ function actionContent(action: PageHeaderAction) {
 }
 
 export function PageHeaderActions({ actions }: { actions: PageHeaderAction[] }) {
+  const useDesktopDialogs = hasDesktopFileDialogs();
+
   return (
     <div className="flex gap-2">
       {actions.map(action => {
         if (action.type === 'file') {
+          if (useDesktopDialogs) {
+            return (
+              <button
+                key={action.key}
+                type="button"
+                className={actionClassName(action)}
+                onClick={async () => {
+                  const files = await openFiles({
+                    multiple: action.multiple,
+                    filters: acceptToFilters(action.accept),
+                  });
+                  if (!files?.length) return;
+                  action.onChange(filesToInputChangeEvent(files) as unknown as ChangeEvent<HTMLInputElement>);
+                }}
+                disabled={action.disabled || action.loading}
+                title={action.title}
+                aria-label={action.ariaLabel}
+              >
+                {actionContent(action)}
+              </button>
+            );
+          }
+
           return (
             <label
               key={action.key}
