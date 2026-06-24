@@ -1,4 +1,4 @@
-import { Award, BookOpen, ClipboardCheck, Download, FileText, Save, School, Upload } from 'lucide-react';
+import { Award, BookOpen, ClipboardCheck, Download, FileText, Save, School, Sparkles, Upload } from 'lucide-react';
 import { PageHeaderAction } from '../../components/common/PageHeaderActions';
 import { PageTab } from '../../components/common/PageTabs';
 import { DOMAIN_PAGE_TEXT, DOMAIN_TAB_TEXT, DomainTab } from './constants';
@@ -18,11 +18,11 @@ export function useDomainPage() {
       icon: <BookOpen size={14} />,
       color: domain.isCustomDomain ? DOMAIN_TAB_TEXT.domainTabs.records.customColor : DOMAIN_TAB_TEXT.domainTabs.records.color,
     },
+    { ...DOMAIN_TAB_TEXT.domainTabs.comments, icon: <Sparkles size={14} /> },
     { ...DOMAIN_TAB_TEXT.domainTabs.assignment, icon: <FileText size={14} /> },
   ];
   const subjectTabs: PageTab<DomainTab>[] = [
     { ...DOMAIN_TAB_TEXT.subjectTabs.ratio, icon: <ClipboardCheck size={14} /> },
-    { ...DOMAIN_TAB_TEXT.subjectTabs.comments, icon: <BookOpen size={14} /> },
   ];
   const headerActions: PageHeaderAction[] = [
     ...(domain.selectedSubject ? [{
@@ -131,6 +131,12 @@ export function useDomainPage() {
       achievementStandards: domain.achievementStandards,
       standardsMetaPrompt: domain.standardsMetaPrompt,
       setStandardsMetaPrompt: domain.setStandardsMetaPrompt,
+      domainAiChats: domain.domainAiChats,
+      domainAiDrafts: domain.domainAiDrafts,
+      chattingDomainAi: domain.chattingDomainAi,
+      setDomainAiDraft: domain.setDomainAiDraft,
+      handleDomainAiChatSend: domain.handleDomainAiChatSend,
+      clearDomainAiChat: domain.clearDomainAiChat,
       generatingStandards: domain.generatingStandards,
       handleGenerateStandards: domain.handleGenerateStandards,
       addStandardRef: domain.addStandardRef,
@@ -166,9 +172,16 @@ export function useDomainPage() {
       setCommentsChecked: domain.setCommentsChecked,
       updateCommentsItem: domain.updateCommentsItem,
       removeCommentsItem: domain.removeCommentsItem,
-      handleGenerateCommon: domain.handleGenerateCommon,
-      updateSubjectCommentsMetaPrompt: domain.updateSubjectCommentsMetaPrompt,
-      updateSubjectComments: domain.updateSubjectComments,
+      subjectCommentsPrompt: domain.subjectCommentsPrompt,
+      updateSubjectCommentsPrompt: domain.updateSubjectCommentsPrompt,
+      subjectCommentsChat: domain.subjectCommentsChat,
+      subjectCommentsDraft: domain.subjectCommentsDraft,
+      setSubjectCommentsDraft: domain.setSubjectCommentsDraft,
+      chattingSubjectComments: domain.chattingSubjectComments,
+      generatingSubjectComments: domain.generatingSubjectComments,
+      handleSubjectCommentsChatSend: domain.handleSubjectCommentsChatSend,
+      handleGenerateSubjectComments: domain.handleGenerateSubjectComments,
+      clearSubjectCommentsChat: domain.clearSubjectCommentsChat,
       aiEnabled,
       assignmentGuideFileRef: domain.assignmentGuideFileRef,
       assignmentResourceFileRef: domain.assignmentResourceFileRef,

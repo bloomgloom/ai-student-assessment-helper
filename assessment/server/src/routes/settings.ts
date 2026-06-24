@@ -8,11 +8,30 @@ import multer from 'multer';
 import { execute, closeDb, initDb } from '../services/db';
 import { assignmentExecute, assignmentQueryOne } from '../services/assignmentDb';
 import { getStorageSettings, STORAGE_ROOT, UPLOADS_DIR, ensureDir } from '../services/storage';
-import { callLLM, getLLMSettings, fetchOpenAICompatibleModels } from '../services/llm';
+import {
+  callLLM,
+  getLLMSettings,
+  fetchAnthropicModels,
+  fetchGeminiModels,
+  fetchOllamaModels,
+  fetchOpenAICompatibleModels,
+  fetchOpenAIModels,
+} from '../services/llm';
 
 const UPLOADS_ROOT = UPLOADS_DIR;
 const router = Router();
 const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024 * 1024 } });
+const TEMPERATURE_KEYS = ['domainManagement', 'recordsScoring', 'recordsComments'] as const;
+
+function providerTemperatureMax(provider: string) {
+  return provider === 'anthropic' ? 1 : 2;
+}
+
+function sanitizeTemperature(provider: string, value: unknown) {
+  const numeric = parseFloat(String(value));
+  if (!Number.isFinite(numeric)) return undefined;
+  return Math.max(0, Math.min(providerTemperatureMax(provider), numeric));
+}
 
 function makeBackupFilename() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -70,6 +89,8 @@ router.put('/', async (req: Request, res: Response) => {
     model,
     baseUrl,
     maxConcurrency,
+    temperatureEnabled,
+    temperatures,
     loggingEnabled,
     artifactStripIntroBlocks,
     pdfRedactionTopCm,
@@ -95,17 +116,39 @@ router.put('/', async (req: Request, res: Response) => {
     if (model !== undefined) pairs.push([`llm_model_${provider}`, String(model)]);
     if (baseUrl !== undefined) pairs.push([`llm_base_url_${provider}`, String(baseUrl)]);
     if (concurrency != null) pairs.push([`llm_max_concurrency_${provider}`, String(concurrency)]);
+    if (temperatureEnabled !== undefined) pairs.push([`llm_temperature_enabled_${provider}`, String(temperatureEnabled)]);
+    if (temperatures && typeof temperatures === 'object') {
+      for (const key of TEMPERATURE_KEYS) {
+        const value = sanitizeTemperature(provider, temperatures[key]);
+        if (value !== undefined) pairs.push([`llm_temperature_${provider}_${key}`, String(value)]);
+      }
+    }
   }
 
   if (providerSettings && typeof providerSettings === 'object') {
     for (const [p, value] of Object.entries(providerSettings)) {
       if (!value || typeof value !== 'object') continue;
-      const item = value as { model?: unknown; baseUrl?: unknown; maxConcurrency?: unknown };
+      const item = value as {
+        model?: unknown;
+        baseUrl?: unknown;
+        maxConcurrency?: unknown;
+        temperatureEnabled?: unknown;
+        temperatures?: Record<string, unknown>;
+      };
       if (item.model !== undefined) pairs.push([`llm_model_${p}`, String(item.model)]);
       if (item.baseUrl !== undefined) pairs.push([`llm_base_url_${p}`, String(item.baseUrl)]);
       if (item.maxConcurrency !== undefined) {
         const providerConcurrency = Math.max(1, parseInt(String(item.maxConcurrency), 10) || 1);
         pairs.push([`llm_max_concurrency_${p}`, String(providerConcurrency)]);
+      }
+      if (item.temperatureEnabled !== undefined) {
+        pairs.push([`llm_temperature_enabled_${p}`, String(item.temperatureEnabled)]);
+      }
+      if (item.temperatures && typeof item.temperatures === 'object') {
+        for (const key of TEMPERATURE_KEYS) {
+          const temperature = sanitizeTemperature(p, item.temperatures[key]);
+          if (temperature !== undefined) pairs.push([`llm_temperature_${p}_${key}`, String(temperature)]);
+        }
       }
     }
   }
@@ -158,6 +201,32 @@ router.get('/compatible-models', async (req: Request, res: Response) => {
   const apiKey = (req.query.apiKey as string) || '';
   try {
     const models = await fetchOpenAICompatibleModels(baseUrl, apiKey);
+    res.json({ models });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.get('/models', async (req: Request, res: Response) => {
+  const provider = String(req.query.provider || '');
+  const baseUrl = String(req.query.baseUrl || '');
+  const apiKey = String(req.query.apiKey || '');
+  try {
+    let models: string[];
+    if (provider === 'openai') {
+      models = await fetchOpenAIModels(apiKey, baseUrl || 'https://api.openai.com/v1');
+    } else if (provider === 'anthropic') {
+      models = await fetchAnthropicModels(apiKey);
+    } else if (provider === 'gemini') {
+      models = await fetchGeminiModels(apiKey);
+    } else if (provider === 'ollama') {
+      models = await fetchOllamaModels(baseUrl || 'http://localhost:11434');
+    } else if (provider === 'openai-compatible') {
+      models = await fetchOpenAICompatibleModels(baseUrl || 'http://localhost:8000/v1', apiKey);
+    } else {
+      return res.status(400).json({ error: '지원하지 않는 공급자입니다.' });
+    }
     res.json({ models });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -253,20 +322,29 @@ router.post('/test', async (req: Request, res: Response) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : undefined;
     const hasTestSettings = body && typeof body.provider === 'string';
-    const result = await callLLM('안녕하세요! 테스트 메시지입니다. 한 문장으로 응답해주세요.', hasTestSettings ? {
-      provider: body.provider,
-      apiKey: body.apiKeys?.[body.provider] || body.apiKey || '',
-      apiKeys: body.apiKeys || {},
-      model: body.model || '',
-      baseUrl: body.baseUrl || '',
-      maxConcurrency: Math.max(1, parseInt(String(body.maxConcurrency), 10) || 1),
-      providerSettings: body.providerSettings || {},
-      sequentialMode: (parseInt(String(body.maxConcurrency), 10) || 1) <= 1,
-      loggingEnabled: body.loggingEnabled !== false,
-      artifactStripIntroBlocks: body.artifactStripIntroBlocks !== false,
-      pdfRedactionTopCm: Math.max(0, Math.min(30, parseFloat(String(body.pdfRedactionTopCm ?? '0')) || 0)),
-      aiEnabled: true,
-    } : undefined);
+    const result = await callLLM(
+      '안녕하세요! 테스트 메시지입니다. 한 문장으로 응답해주세요.',
+      hasTestSettings ? {
+        provider: body.provider,
+        apiKey: body.apiKeys?.[body.provider] || body.apiKey || '',
+        apiKeys: body.apiKeys || {},
+        model: body.model || '',
+        baseUrl: body.baseUrl || '',
+        maxConcurrency: Math.max(1, parseInt(String(body.maxConcurrency), 10) || 1),
+        temperatureEnabled: body.temperatureEnabled === true,
+        temperatures: body.temperatures || {},
+        providerSettings: body.providerSettings || {},
+        sequentialMode: (parseInt(String(body.maxConcurrency), 10) || 1) <= 1,
+        loggingEnabled: body.loggingEnabled !== false,
+        artifactStripIntroBlocks: body.artifactStripIntroBlocks !== false,
+        pdfRedactionTopCm: Math.max(0, Math.min(30, parseFloat(String(body.pdfRedactionTopCm ?? '0')) || 0)),
+        aiEnabled: true,
+      } : undefined,
+      undefined,
+      undefined,
+      [],
+      0
+    );
     res.json({ ok: true, response: result });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

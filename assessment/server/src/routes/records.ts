@@ -34,7 +34,6 @@ function headerMap(row: ExcelJS.Row): Record<string, number> {
 function parseGeneratedContentValue(contentType: string, content: string): Array<{ item: string; value: string }> {
   try {
     const parsed = JSON.parse(content || '{}');
-    if (contentType === 'comments') return [{ item: 'text', value: String(parsed.text ?? '') }];
     return Object.entries(parsed)
       .filter(([item]) => !item.startsWith('__'))
       .map(([item, value]) => ({ item, value: String(value ?? '') }));
@@ -324,9 +323,7 @@ router.post('/import-full', upload.single('file'), async (req: Request, res: Res
     let saved = 0;
     await transaction(async () => {
       for (const entry of grouped.values()) {
-        const content = entry.contentType === 'comments'
-          ? JSON.stringify({ text: entry.items.text ?? '' })
-          : JSON.stringify(entry.items);
+        const content = JSON.stringify(entry.items);
         await execute(`
           INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
           VALUES(?,?,?,?,datetime('now'))
@@ -379,9 +376,7 @@ router.post('/import-full/:classId', upload.single('file'), async (req: Request,
     let saved = 0;
     await transaction(async () => {
       for (const entry of grouped.values()) {
-        const content = entry.contentType === 'comments'
-          ? JSON.stringify({ text: entry.items.text ?? '' })
-          : JSON.stringify(entry.items);
+        const content = JSON.stringify(entry.items);
         await execute(`
           INSERT INTO generated_content(student_id, content_type, domain, content, updated_at)
           VALUES(?,?,?,?,datetime('now'))

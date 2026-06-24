@@ -903,7 +903,15 @@ router.put('/comments/bulk', async (req: Request, res: Response) => {
       'DELETE FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', 
       [year, semester, grade, subject, domainName]
     );
-    for (const item of items) {
+    const comprehensiveItem = domainName === '__SUBJECT_COMPREHENSIVE__'
+      ? items.find(item => item.type === '세특') ?? items.find(item => item.type === '종합')
+      : undefined;
+    const normalizedItems = domainName === '__SUBJECT_COMPREHENSIVE__'
+      ? comprehensiveItem
+        ? [{ ...comprehensiveItem, type: '세특', title: '세특', sort_order: 0 }]
+        : []
+      : items;
+    for (const item of normalizedItems) {
       await execute(
         'INSERT INTO domain_comments(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
         [year, semester, grade, subject, domainName, item.type, item.title, item.prompt, item.extensions, item.sort_order]
@@ -1051,7 +1059,7 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
   }
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-  const safeDomain = domainName === '__SUBJECT_COMPREHENSIVE__' ? '종합세특' : domainName;
+  const safeDomain = domainName === '__SUBJECT_COMPREHENSIVE__' ? '세특' : domainName;
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(`${year}_${semester}_${grade}_${subject}_${safeDomain}_기준.xlsx`)}`);
   res.send(buffer);
@@ -1204,7 +1212,15 @@ router.post('/domain-config/upload', tempUpload.single('file'), async (req: Requ
           [year, semester, grade, subject, domainName, '성취기준', row.code, '', extensions, row.sort_order ?? index]
         );
       }
-      for (const [index, row] of commentsRows.entries()) {
+      const importedComprehensiveItem = domainName === '__SUBJECT_COMPREHENSIVE__'
+        ? commentsRows.find(row => row.type === '세특') ?? commentsRows.find(row => row.type === '종합')
+        : undefined;
+      const normalizedCommentsRows = domainName === '__SUBJECT_COMPREHENSIVE__'
+        ? importedComprehensiveItem
+          ? [{ ...importedComprehensiveItem, type: '세특', title: '세특', sort_order: 0 }]
+          : []
+        : commentsRows;
+      for (const [index, row] of normalizedCommentsRows.entries()) {
         await execute(
           'INSERT INTO domain_comments(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
           [year, semester, grade, subject, domainName, row.type, row.title, row.prompt, row.extensions, row.sort_order ?? standardRows.length + index]

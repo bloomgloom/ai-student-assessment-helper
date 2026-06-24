@@ -97,7 +97,7 @@ ${text}
 `;
 
   try {
-    const taggedText = (await callLLM(prompt, undefined, signal)).trim();
+    const taggedText = (await callLLM(prompt, undefined, signal, undefined, [], 0)).trim();
     const parsed = parseSpellcheckResult(taggedText);
     res.json({ taggedText, ...parsed });
   } catch (e) {
@@ -114,7 +114,7 @@ router.post('/generate-prompt', async (req: Request, res: Response) => {
   try {
     const settings = await getLLMSettings();
     const fullPrompt = systemPrompt ? `[System]\n${systemPrompt}\n\n[User]\n${prompt}` : prompt;
-    const result = await callLLM(fullPrompt, settings, signal);
+    const result = await callLLM(fullPrompt, settings, signal, undefined, [], settings.temperatures.domainManagement);
     res.json({ result });
   } catch (e) {
     if (signal.aborted) return;
@@ -166,9 +166,46 @@ interface ScoringResultItem {
   reason?: unknown;
 }
 
-function parseScoringResultItems(result: string): ScoringResultItem[] {
-  const parsed = parseFirstJson<unknown>(result, 'array');
-  if (!Array.isArray(parsed)) throw new Error('JSON 배열이 아닙니다.');
+function findJsonArrays(value: string): unknown[][] {
+  const arrays: unknown[][] = [];
+  for (let start = 0; start < value.length; start += 1) {
+    if (value[start] !== '[') continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < value.length; end += 1) {
+      const char = value[end];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === '[') depth += 1;
+      else if (char === ']') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(value.slice(start, end + 1));
+            if (Array.isArray(parsed)) arrays.push(parsed);
+          } catch { /* ignore invalid candidate */ }
+          break;
+        }
+      }
+    }
+  }
+  return arrays;
+}
+
+function isScoringResultArray(value: unknown[]) {
+  return value.every((item) => {
+    if (Array.isArray(item)) return item.length >= 1;
+    return !!item && typeof item === 'object' && 'score' in item;
+  });
+}
+
+function normalizeScoringResultItems(parsed: unknown[]): ScoringResultItem[] {
   return parsed.map((item) => {
     if (Array.isArray(item)) return { score: item[0], reason: item[1] };
     if (item && typeof item === 'object') return item as ScoringResultItem;
@@ -184,7 +221,12 @@ function buildScoringContent(result: string, criteria: EvalCriterion[]): string 
   const reasons: Record<string, string> = {};
 
   try {
-    items = parseScoringResultItems(result);
+    const arrays = findJsonArrays(result);
+    const expected = llmItems.length;
+    const parsed = arrays.find((array) => array.length === expected && isScoringResultArray(array))
+      ?? arrays.find(isScoringResultArray);
+    if (!parsed) throw new Error('JSON 배열이 아닙니다.');
+    items = normalizeScoringResultItems(parsed);
   } catch (e) {
     const preview = result.replace(/\s+/g, ' ').trim().slice(0, 160);
     throw new Error(`채점 결과가 JSON 배열 형식으로 제시되지 않아 작성하지 않았습니다. 출력: ${preview || '(빈 응답)'}`);
@@ -217,6 +259,42 @@ function buildScoringContent(result: string, criteria: EvalCriterion[]): string 
 function buildStoredContent(contentType: 'scoring' | 'comments', result: string, criteria: EvalCriterion[]): string {
   if (contentType === 'scoring') return buildScoringContent(result, criteria);
   return JSON.stringify({ text: result });
+}
+
+function buildCommentsContent(result: string, criteria: CommentsCriterion[]): string {
+  const items = criteria.filter(item =>
+    item.type !== '성취기준' &&
+    item.type !== '공통' &&
+    item.type !== '종합' &&
+    item.type !== '세특'
+  );
+  if (items.length === 0) return JSON.stringify({ text: result.trim() });
+
+  let parsed: unknown;
+  try {
+    parsed = parseFirstJson<unknown>(result, 'array');
+  } catch {
+    const preview = result.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`기록 결과가 JSON 배열 형식으로 제시되지 않아 작성하지 않았습니다. 출력: ${preview || '(빈 응답)'}`);
+  }
+  if (!Array.isArray(parsed) || parsed.length !== items.length) {
+    const preview = result.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`기록 결과가 항목 수(${items.length})에 맞지 않아 작성하지 않았습니다. 출력: ${preview || '(빈 응답)'}`);
+  }
+
+  const content: Record<string, string> = {};
+  items.forEach((criterion, index) => {
+    const value = parsed[index];
+    const text = value && typeof value === 'object'
+      ? String((value as { text?: unknown; content?: unknown }).text ?? (value as { content?: unknown }).content ?? '').trim()
+      : '';
+    if (!text) {
+      const preview = result.replace(/\s+/g, ' ').trim().slice(0, 160);
+      throw new Error(`기록 결과의 "${criterion.title}" 항목이 비어 있어 작성하지 않았습니다. 출력: ${preview || '(빈 응답)'}`);
+    }
+    content[criterion.title] = text;
+  });
+  return JSON.stringify(content);
 }
 
 function buildDefaultScoringContent(criteria: EvalCriterion[]): string {
@@ -493,6 +571,7 @@ router.post('/generate', async (req: Request, res: Response) => {
   const parts: string[] = [];
   const classContext = await getClassContextByStudent(studentId);
   let evalCriteria: EvalCriterion[] = [];
+  let commentsCriteria: CommentsCriterion[] = [];
 
   // 기준에 따른 지시사항 구성
   if (criteriaSet.mode === '세특') {
@@ -510,9 +589,22 @@ router.post('/generate', async (req: Request, res: Response) => {
       parts.push(`[기록 작성 지시사항]\n${criteria.prompt}\n---`);
     } else {
       const domainCriteria = await getDomainCommentsCriteria(classContext, domain);
-      domainCriteria.forEach((item) => {
-        parts.push(`[${item.title || item.type}]\n${item.prompt}\n---`);
+      commentsCriteria = domainCriteria;
+      const commonCriterion = domainCriteria.find(item => item.type === '공통');
+      if (commonCriterion?.prompt) parts.push(`[기록 공통 기준]\n${commonCriterion.prompt}\n---`);
+      const regularCriteria = domainCriteria.filter(
+        item => !['성취기준', '공통', '종합', '세특'].includes(item.type)
+      );
+      regularCriteria.forEach((item) => {
+        if (item.prompt) parts.push(`[기록 항목: ${item.title || item.type}]\n${item.prompt}\n---`);
       });
+      if (regularCriteria.length) {
+        parts.push(
+          `반환값은 JSON 배열 텍스트만 작성하세요. 배열 원소 수와 순서는 기록 항목 순서와 정확히 같아야 하며, ` +
+          `각 원소는 {"title":"항목명","text":"해당 항목 기록문"} 형식입니다. 마크다운 코드블록이나 설명은 붙이지 마세요.`
+        );
+        parts.push('---');
+      }
       if (!domainCriteria.length) {
         parts.push(`[기록 작성 지시사항]\n${domain} 영역에 대해 학생의 역량을 기록해주세요.\n---`);
       }
@@ -539,6 +631,8 @@ router.post('/generate', async (req: Request, res: Response) => {
     evalCriteria = await getDomainEvalCriteria(classContext, domain);
     if (!evalDomain && evalCriteria.length) {
       parts.push(`[채점 기준]\n반환값은 JSON 배열 텍스트만 작성하세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 배열의 각 원소는 {"score": 숫자, "reason": "짧은 이유"} 형식입니다. 평가 항목 순서와 배열 순서는 반드시 같아야 합니다.`);
+      const commonRubric = evalCriteria.find((i) => i.item_type === 'formula')?.rubric?.trim();
+      if (commonRubric) parts.push(`[채점 공통 기준]\n${commonRubric}`);
       for (const item of evalCriteria.filter((i) => i.item_type === 'llm')) {
         parts.push(`- ${item.name} (${item.score}): ${item.rubric}`);
       }
@@ -560,16 +654,23 @@ router.post('/generate', async (req: Request, res: Response) => {
 
   parts.push(
     criteriaSet.mode === '세특'
-      ? '위 지시사항과 학생의 활동 내용을 종합하여 학생의 역량이 잘 드러나도록 기록을 작성해주세요.'
+      ? domain !== '__SUBJECT_COMPREHENSIVE__' && commentsCriteria.some(item => !['성취기준', '공통', '종합', '세특'].includes(item.type))
+        ? '위 기준과 학생 input을 종합하여 각 기록 항목에 대응하는 JSON 배열만 반환해주세요.'
+        : '위 지시사항과 학생의 활동 내용을 종합하여 학생의 역량이 잘 드러나도록 기록을 작성해주세요.'
       : '최종적으로 위 채점 기준에 따라 JSON 배열 텍스트만 반환해주세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 예시: [{"score":3,"reason":"핵심 요구 사항을 대부분 충족함"},{"score":0,"reason":"필수 구현이 확인되지 않음"}]'
   );
 
   try {
     const noArtifactScoring = contentType === 'scoring' && !hasContent;
-    const result = noArtifactScoring ? '산출물 없음: 기본점수 적용' : await callLLM(parts.join('\n\n'), settings, undefined, undefined, attachments);
+    const temperature = contentType === 'scoring'
+      ? settings.temperatures.recordsScoring
+      : settings.temperatures.recordsComments;
+    const result = noArtifactScoring ? '산출물 없음: 기본점수 적용' : await callLLM(parts.join('\n\n'), settings, undefined, undefined, attachments, temperature);
     const storedContent = noArtifactScoring
       ? buildDefaultScoringContent(evalCriteria)
-      : buildStoredContent(contentType, result, evalCriteria);
+      : contentType === 'comments' && domain !== '__SUBJECT_COMPREHENSIVE__'
+        ? buildCommentsContent(result, commentsCriteria)
+        : buildStoredContent(contentType, result, evalCriteria);
 
     res.json({ ok: true, result, content: storedContent });
   } catch (e: unknown) {
@@ -611,6 +712,8 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
       let storedContent: string | null = null;
       let error: string | null = null;
       let evalCriteria: EvalCriterion[] = [];
+      let commentsCriteria: CommentsCriterion[] = [];
+      let hasStructuredCommentsInput = false;
 
       // generate 로직 인라인
       const artifacts = await assignmentArtifactsForStudent(student.id, domain) as ArtifactRow[];
@@ -623,13 +726,16 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
 
         if (criteriaSet.mode === '세특') {
           if (domain === '__SUBJECT_COMPREHENSIVE__') {
-            // 종합 세특: 공통기준 + 종합세특기준 + 학생별 영역별 요약
+            // 세특: 과목 공통 세특 기준 + 학생별 영역 기록
             const comprehensiveCriteria = await getDomainCommentsCriteria(classContext, '__SUBJECT_COMPREHENSIVE__');
-            const commonCriterion = comprehensiveCriteria.find((c) => c.type === '공통');
-            const comprehensiveCriterion = comprehensiveCriteria.find((c) => c.type === '종합');
+            const comprehensiveCriterion =
+              comprehensiveCriteria.find((c) => c.type === '세특') ??
+              comprehensiveCriteria.find((c) => c.type === '종합');
 
-            if (commonCriterion?.prompt) parts.push(`[공통 기준]\n${commonCriterion.prompt}\n---`);
-            if (comprehensiveCriterion?.prompt) parts.push(`[종합 세특 기준]\n${comprehensiveCriterion.prompt}\n---`);
+            if (comprehensiveCriterion?.prompt) {
+              parts.push(`[세특 기준]\n${comprehensiveCriterion.prompt}\n---`);
+              hasStructuredCommentsInput = true;
+            }
 
             // 영역별 요약 수집
             const domainSummaries = await queryAll<{ domain: string; content: string }>(
@@ -637,26 +743,31 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
               [student.id]
             );
             if (domainSummaries.length) {
+              hasStructuredCommentsInput = true;
               parts.push('[학생별 영역별 수행 요약]');
               for (const ds of domainSummaries) {
                 let text = ds.content;
-                try { const parsed = JSON.parse(ds.content); text = parsed.text || ds.content; } catch { /* use raw */ }
+                try {
+                  const parsed = JSON.parse(ds.content) as Record<string, unknown>;
+                  text = parsed.text
+                    ? String(parsed.text)
+                    : Object.entries(parsed)
+                        .filter(([key]) => !key.startsWith('__'))
+                        .map(([key, value]) => `[${key}]\n${String(value ?? '')}`)
+                        .join('\n\n');
+                } catch { /* use raw */ }
                 parts.push(`[${ds.domain}]\n${text}\n---`);
               }
             }
 
-            if (!commonCriterion && !comprehensiveCriterion && !domainSummaries.length) {
+            if (!comprehensiveCriterion && !domainSummaries.length) {
               parts.push(`[기록 작성 지시사항]\n학생의 전체 교과 활동을 종합하여 세특을 작성해주세요.\n---`);
             }
           } else {
-            // 영역 세특: 공통기준 + 성취 기준 + 채점기준/획득점수 + 산출물
-            // 1) 공통기준
-            const subjectCriteria = await getDomainCommentsCriteria(classContext, '__SUBJECT_COMPREHENSIVE__');
-            const commonCriterion = subjectCriteria.find((c) => c.type === '공통');
-            if (commonCriterion?.prompt) parts.push(`[공통 기준]\n${commonCriterion.prompt}\n---`);
-
-            // 2) 성취 기준
+            // 영역 기록: 성취 기준 + 채점기준/획득점수 + 산출물
+            // 1) 성취 기준
             const domainAllCriteria = await getDomainCommentsCriteria(classContext, domain);
+            commentsCriteria = domainAllCriteria;
             const standardRefs = domainAllCriteria.filter((c) => c.type === '성취기준');
             if (standardRefs.length) {
               const stdParts: string[] = [];
@@ -669,7 +780,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
               if (stdParts.length) parts.push(`[성취 기준]\n${stdParts.join('\n')}\n---`);
             }
 
-            // 3) 채점기준 및 획득점수
+            // 2) 채점기준 및 획득점수
             evalCriteria = await getDomainEvalCriteria(classContext, domain);
             if (evalCriteria.length) {
               const scoring = await queryOne<{ content: string }>(
@@ -689,10 +800,21 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
               }
             }
 
-            // 4) 일반 세특 기준 항목
-            const regularCriteria = domainAllCriteria.filter((c) => c.type !== '성취기준' && c.type !== '공통' && c.type !== '종합');
+            // 3) 기록 공통 기준 + 항목별 기록 기준
+            const commonCriterion = domainAllCriteria.find((c) => c.type === '공통');
+            if (commonCriterion?.prompt) parts.push(`[기록 공통 기준]\n${commonCriterion.prompt}\n---`);
+            const regularCriteria = domainAllCriteria.filter(
+              (c) => c.type !== '성취기준' && c.type !== '공통' && c.type !== '종합' && c.type !== '세특'
+            );
             for (const item of regularCriteria) {
-              if (item.prompt) parts.push(`[${item.title || item.type}]\n${item.prompt}\n---`);
+              if (item.prompt) parts.push(`[기록 항목: ${item.title || item.type}]\n${item.prompt}\n---`);
+            }
+            if (regularCriteria.length) {
+              parts.push(
+                `반환값은 JSON 배열 텍스트만 작성하세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. ` +
+                `배열 원소 수와 순서는 기록 항목 순서와 정확히 같아야 하며, 각 원소는 {"title":"항목명","text":"해당 항목 기록문"} 형식입니다.`
+              );
+              parts.push('---');
             }
 
             if (!standardRefs.length && !evalCriteria.length && !regularCriteria.length && !commonCriterion) {
@@ -719,6 +841,8 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
           evalCriteria = await getDomainEvalCriteria(classContext, domain);
           if (evalCriteria.length) {
             parts.push('[채점 기준]');
+            const commonRubric = evalCriteria.find((i) => i.item_type === 'formula')?.rubric?.trim();
+            if (commonRubric) parts.push(`[채점 공통 기준]\n${commonRubric}`);
             for (const item of evalCriteria.filter((i) => i.item_type === 'llm')) {
               parts.push(`- ${item.name} (${item.score}): ${item.rubric}`);
             }
@@ -731,19 +855,28 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
         const attachments: LLMImageAttachment[] = [];
         const hasContent = await appendArtifactContents(parts, artifacts, settings, attachments);
 
-        if (hasContent || artifacts.length > 0) {
+        if (hasContent || artifacts.length > 0 || hasStructuredCommentsInput) {
           parts.push(criteriaSet.mode === '세특'
-            ? '위 내용을 종합하여 학생의 역량이 잘 드러나도록 기록을 작성해주세요.'
+            ? domain === '__SUBJECT_COMPREHENSIVE__'
+              ? '위 내용을 종합하여 학생의 역량이 잘 드러나도록 세특을 작성해주세요.'
+              : commentsCriteria.some(item => !['성취기준', '공통', '종합', '세특'].includes(item.type))
+                ? '위 기준과 학생 input을 종합하여 각 기록 항목에 대응하는 JSON 배열만 반환해주세요.'
+                : '위 내용을 종합하여 학생의 역량이 잘 드러나도록 기록을 작성해주세요.'
             : '채점 기준에 따라 JSON 배열 텍스트만 반환해주세요. 파일을 만들지 마세요. 마크다운 코드블록, 제목, 설명 문장을 붙이지 마세요. 예시: [{"score":3,"reason":"핵심 요구 사항을 대부분 충족함"},{"score":0,"reason":"필수 구현이 확인되지 않음"}]'
           );
           try {
             if (cancelled) return;
+            const temperature = contentType === 'scoring'
+              ? settings.temperatures.recordsScoring
+              : settings.temperatures.recordsComments;
             result = await callLLM(parts.join('\n\n'), settings, abortController.signal, {
               session: logSession || undefined,
               label: `학생 ${index + 1}/${students.length}`,
-            }, attachments);
+            }, attachments, temperature);
             if (cancelled) return;
-            storedContent = buildStoredContent(contentType, result, evalCriteria);
+            storedContent = contentType === 'comments' && domain !== '__SUBJECT_COMPREHENSIVE__'
+              ? buildCommentsContent(result, commentsCriteria)
+              : buildStoredContent(contentType, result, evalCriteria);
           } catch (e: unknown) {
             error = e instanceof Error ? e.message : String(e);
           }

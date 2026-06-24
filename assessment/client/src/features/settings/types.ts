@@ -1,5 +1,11 @@
 export type SettingsTab = 'ai' | 'assignment' | 'data';
 
+export interface AiTemperatures {
+  domainManagement: number;
+  recordsScoring: number;
+  recordsComments: number;
+}
+
 export interface SettingsState {
   provider: string;
   apiKey: string;
@@ -7,7 +13,15 @@ export interface SettingsState {
   model: string;
   baseUrl: string;
   maxConcurrency: number;
-  providerSettings: Record<string, { model: string; baseUrl: string; maxConcurrency: number }>;
+  temperatureEnabled: boolean;
+  temperatures: AiTemperatures;
+  providerSettings: Record<string, {
+    model: string;
+    baseUrl: string;
+    maxConcurrency: number;
+    temperatureEnabled?: boolean;
+    temperatures?: AiTemperatures;
+  }>;
   loggingEnabled: boolean;
   artifactStripIntroBlocks: boolean;
   pdfRedactionTopCm: number;

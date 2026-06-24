@@ -3,7 +3,7 @@ export const DOMAIN_GUIDE_KEY = 'hideDomainGuide.v2';
 export const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
 export const DOMAIN_SOURCE_TYPE = 'domains';
 
-export type DomainTab = 'standards' | 'scoring' | 'records' | 'assignment' | 'ratio' | 'comments';
+export type DomainTab = 'standards' | 'scoring' | 'records' | 'comments' | 'assignment' | 'ratio';
 
 export const DOMAIN_TREE_KEY_PREFIXES = {
   year: 'dy',
@@ -33,11 +33,11 @@ export const DOMAIN_TAB_TEXT = {
     standards: { value: 'standards', label: '성취 기준', color: 'amber' },
     scoring: { value: 'scoring', label: '채점 기준', color: 'green' },
     records: { value: 'records', label: '기록 기준', color: 'blue', customColor: 'purple' },
+    comments: { value: 'comments', label: '세특 기준', color: 'purple' },
     assignment: { value: 'assignment', label: '실시 관리', color: 'blue' },
   },
   subjectTabs: {
     ratio: { value: 'ratio', label: '반영비율/만점관리', color: 'green' },
-    comments: { value: 'comments', label: '세특 기준 관리', color: 'blue' },
   },
 } as const;
 
@@ -60,35 +60,3 @@ export const DOMAIN_UPLOAD_TEXT = {
     reflectedPerformanceCount: number;
   }) => `${data.year}학년도 ${data.semester}학기 ${data.grade}학년 ${data.subject}(${data.credit}): 영역 ${data.totalCount}개 업로드, 수행 반영 영역 ${data.reflectedPerformanceCount}개`,
 } as const;
-
-export const SUBJECT_COMMENTS_TEMPLATES = [
-  {
-    type: '공통',
-    label: '세특 공통 기준',
-    description: '모든 영역별 세특 및 종합 세특을 작성할 때 AI에게 공통으로 지시할 프롬프트입니다.',
-    instructionPlaceholder: '세특 공통 기준 위한 지시사항을 입력하세요.',
-    promptPlaceholder: '생성된 기준이 여기에 표시됩니다. 직접 수정도 가능합니다.',
-    sortOrder: 0,
-  },
-  {
-    type: '종합',
-    label: '종합 세특 기준',
-    description: '최종 학기말 세특을 작성할 때 사용할 프롬프트입니다.',
-    instructionPlaceholder: '종합 세특 기준 위한 지시사항을 입력하세요.',
-    promptPlaceholder: '생성된 기준이 여기에 표시됩니다. 직접 수정도 가능합니다.',
-    sortOrder: 1,
-  },
-] as const;
-
-export type SubjectCommentsType = (typeof SUBJECT_COMMENTS_TEMPLATES)[number]['type'];
-
-export function getSubjectCommentsTemplate(type: string) {
-  return SUBJECT_COMMENTS_TEMPLATES.find(template => template.type === type) ?? {
-    type,
-    label: type,
-    description: '',
-    instructionPlaceholder: `${type} 위한 지시사항을 입력하세요.`,
-    promptPlaceholder: '생성된 기준이 여기에 표시됩니다. 직접 수정도 가능합니다.',
-    sortOrder: SUBJECT_COMMENTS_TEMPLATES.length,
-  };
-}

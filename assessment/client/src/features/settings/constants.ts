@@ -18,3 +18,37 @@ export const DEFAULT_URLS: Record<string, string> = {
   ollama: 'http://localhost:11434',
   'openai-compatible': 'http://localhost:8000/v1',
 };
+
+export const TEMPERATURE_TASKS = [
+  { key: 'domainManagement', label: '평가 영역 관리' },
+  { key: 'recordsScoring', label: '채점 기록 관리 - 채점' },
+  { key: 'recordsComments', label: '채점 기록 관리 - 기록(세특)' },
+] as const;
+
+export const DEFAULT_TEMPERATURES = {
+  anthropic: {
+    domainManagement: 0.4,
+    recordsScoring: 0,
+    recordsComments: 0.5,
+  },
+  default: {
+    domainManagement: 0.5,
+    recordsScoring: 0,
+    recordsComments: 0.7,
+  },
+};
+
+export function supportsTemperature(provider: string, model: string) {
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) return true;
+  if (provider === 'anthropic') return !normalized.includes('opus');
+  if (provider === 'openai' || provider === 'openai-compatible') {
+    return !(
+      normalized.startsWith('o1') ||
+      normalized.startsWith('o3') ||
+      normalized.startsWith('o4') ||
+      normalized.startsWith('gpt-5')
+    );
+  }
+  return true;
+}

@@ -21,6 +21,8 @@ interface CriteriaItemCardProps {
   onRemove: () => void;
   extraHeader?: ReactNode;
   instructionDisabled?: boolean;
+  showCheckbox?: boolean;
+  showInstruction?: boolean;
 }
 
 export function CriteriaItemCard({
@@ -43,16 +45,20 @@ export function CriteriaItemCard({
   onRemove,
   extraHeader,
   instructionDisabled,
+  showCheckbox = true,
+  showInstruction = true,
 }: CriteriaItemCardProps) {
   return (
     <div className={`bg-white border rounded-lg p-4 shadow-sm ${checked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-gray-200'}`}>
       <div className="flex gap-3 items-center mb-3">
-        <input
-          type="checkbox"
-          className="w-4 h-4 shrink-0 accent-blue-500"
-          checked={checked}
-          onChange={e => onCheckedChange(e.target.checked)}
-        />
+        {showCheckbox && (
+          <input
+            type="checkbox"
+            className="w-4 h-4 shrink-0 accent-blue-500"
+            checked={checked}
+            onChange={e => onCheckedChange(e.target.checked)}
+          />
+        )}
         {draggable && <GripVertical size={16} className="text-gray-300 cursor-grab shrink-0" />}
         <input
           className="input flex-1 text-sm font-medium"
@@ -81,17 +87,19 @@ export function CriteriaItemCard({
         </button>
       </div>
       <div className="flex gap-3 items-start">
-        <div className="flex-1 flex flex-col gap-1">
-          <span className="text-xs text-gray-500 font-medium">지시 사항</span>
-          <textarea
-            className="textarea w-full text-sm leading-relaxed resize-y"
-            style={{ minHeight: '90px' }}
-            placeholder={instructionPlaceholder}
-            value={instruction}
-            onChange={e => onInstructionChange(e.target.value)}
-            disabled={instructionDisabled}
-          />
-        </div>
+        {showInstruction && (
+          <div className="flex-1 flex flex-col gap-1">
+            <span className="text-xs text-gray-500 font-medium">지시 사항</span>
+            <textarea
+              className="textarea w-full text-sm leading-relaxed resize-y"
+              style={{ minHeight: '90px' }}
+              placeholder={instructionPlaceholder}
+              value={instruction}
+              onChange={e => onInstructionChange(e.target.value)}
+              disabled={instructionDisabled}
+            />
+          </div>
+        )}
         <div className="flex-1 flex flex-col gap-1">
           <span className="text-xs text-gray-500 font-medium">{resultLabel}</span>
           <textarea

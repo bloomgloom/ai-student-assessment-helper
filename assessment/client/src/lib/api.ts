@@ -16,8 +16,10 @@ export const settingsApi = {
     form.append('file', file);
     return api.post('/settings/restore', form);
   },
+  getProviderModels: (provider: string, baseUrl: string, apiKey: string) =>
+    api.get('/settings/models', { params: { provider, baseUrl, apiKey } }),
   getCompatibleModels: (baseUrl: string, apiKey: string) =>
-    api.get('/settings/compatible-models', { params: { baseUrl, apiKey } }),
+    api.get('/settings/models', { params: { provider: 'openai-compatible', baseUrl, apiKey } }),
 };
 
 // Criteria (Domain Based)

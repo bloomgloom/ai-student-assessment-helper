@@ -228,6 +228,36 @@ export async function initDb(): Promise<void> {
 
   // domain_eval.excel_col → score 마이그레이션
   await ensureRenameColumn('domain_eval', 'excel_col', 'score');
+  await db.execute(
+    `DELETE FROM domain_comments
+     WHERE domain_name='__SUBJECT_COMPREHENSIVE__' AND type='공통'`
+  );
+  await db.execute(
+    `UPDATE domain_comments
+     SET type='세특', title='세특', sort_order=0
+     WHERE domain_name='__SUBJECT_COMPREHENSIVE__' AND type='종합'`
+  );
+  await db.execute(
+    `UPDATE domain_comments
+     SET title='세특', sort_order=0
+     WHERE domain_name='__SUBJECT_COMPREHENSIVE__' AND type='세특'`
+  );
+  await db.execute(
+    `DELETE FROM domain_comments
+     WHERE domain_name='__SUBJECT_COMPREHENSIVE__'
+       AND type!='세특'`
+  );
+  await db.execute(
+    `DELETE FROM domain_comments
+     WHERE domain_name='__SUBJECT_COMPREHENSIVE__'
+       AND type='세특'
+       AND id NOT IN (
+         SELECT MAX(id)
+         FROM domain_comments
+         WHERE domain_name='__SUBJECT_COMPREHENSIVE__' AND type='세특'
+         GROUP BY year, semester, grade, subject
+       )`
+  );
   await migrateStoredUploadPaths();
 
   initialized = true;

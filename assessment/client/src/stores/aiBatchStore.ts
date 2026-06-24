@@ -72,7 +72,8 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
     }
 
     const jobId = newJobId();
-    activeController = new AbortController();
+    const jobController = new AbortController();
+    activeController = jobController;
     set({
       updates: [],
       currentJob: {
@@ -97,7 +98,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
     try {
       await startDisplaySleepPrevention();
       for (const domain of domains) {
-        if (activeController.signal.aborted) break;
+        if (jobController.signal.aborted) break;
         const domainStartCompleted = aggregateCompleted;
         set((state) => state.currentJob?.id === jobId ? {
           currentJob: {
@@ -111,7 +112,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
           const response = await fetch('/api/ai/generate-batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            signal: activeController.signal,
+            signal: jobController.signal,
             body: JSON.stringify({
               classId,
               domain,
@@ -204,7 +205,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
         }
       }
 
-      const stopped = Boolean(activeController?.signal.aborted);
+      const stopped = jobController.signal.aborted;
       set((state) => state.currentJob?.id === jobId ? {
         currentJob: {
           ...state.currentJob,
@@ -235,8 +236,10 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
       } : {});
       return false;
     } finally {
-      activeController = null;
-      await stopDisplaySleepPrevention();
+      if (activeController === jobController) {
+        activeController = null;
+        await stopDisplaySleepPrevention();
+      }
     }
   },
 

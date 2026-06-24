@@ -1,8 +1,32 @@
 import { SetStateAction, useEffect, useState } from 'react';
 import { settingsApi } from '../../lib/api';
 import { saveBlob } from '../../lib/desktopFiles';
-import { DEFAULT_MODELS, DEFAULT_URLS } from './constants';
-import { SettingsState } from './types';
+import { DEFAULT_MODELS, DEFAULT_TEMPERATURES, DEFAULT_URLS, supportsTemperature } from './constants';
+import { AiTemperatures, SettingsState } from './types';
+
+function providerTemperatureMax(provider: string) {
+  return provider === 'anthropic' ? 1 : 2;
+}
+
+function defaultTemperatures(provider: string): AiTemperatures {
+  return provider === 'anthropic' ? DEFAULT_TEMPERATURES.anthropic : DEFAULT_TEMPERATURES.default;
+}
+
+function clampTemperature(provider: string, value: unknown, fallback: number) {
+  const max = providerTemperatureMax(provider);
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(max, numeric));
+}
+
+function normalizeTemperatures(provider: string, value?: Partial<AiTemperatures>): AiTemperatures {
+  const defaults = defaultTemperatures(provider);
+  return {
+    domainManagement: clampTemperature(provider, value?.domainManagement, defaults.domainManagement),
+    recordsScoring: clampTemperature(provider, value?.recordsScoring, defaults.recordsScoring),
+    recordsComments: clampTemperature(provider, value?.recordsComments, defaults.recordsComments),
+  };
+}
 
 export function useSettingsController() {
   const [settings, setSettings] = useState<SettingsState>({
@@ -12,6 +36,8 @@ export function useSettingsController() {
     model: '',
     baseUrl: '',
     maxConcurrency: 5,
+    temperatureEnabled: false,
+    temperatures: defaultTemperatures('gemini'),
     providerSettings: {},
     loggingEnabled: true,
     artifactStripIntroBlocks: true,
@@ -37,9 +63,12 @@ export function useSettingsController() {
   useEffect(() => {
     settingsApi.get().then((r) => {
       const data = r.data as SettingsState;
+      const provider = data.provider || 'gemini';
       setSettings({
         ...data,
         providerSettings: data.providerSettings || {},
+        temperatureEnabled: data.temperatureEnabled === true,
+        temperatures: normalizeTemperatures(provider, data.temperatures),
         artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
         pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
         aiEnabled: data.aiEnabled === true,
@@ -48,9 +77,47 @@ export function useSettingsController() {
     });
   }, []);
 
+  const fetchModelsForProvider = async (provider: string, baseUrl: string, apiKey: string, currentModel: string) => {
+    setFetchingModels(true);
+    setModelFetchError(null);
+    try {
+      const r = await settingsApi.getProviderModels(provider, baseUrl, apiKey);
+      const models: string[] = r.data.models || [];
+      setCompatibleModels(models);
+      if (models.length > 0 && (!currentModel || !models.includes(currentModel))) {
+        setSettings((s) => ({
+          ...s,
+          model: models[0],
+          providerSettings: {
+            ...s.providerSettings,
+            [s.provider]: {
+              model: models[0],
+              baseUrl: s.baseUrl,
+              maxConcurrency: s.maxConcurrency,
+              temperatureEnabled: s.temperatureEnabled,
+              temperatures: normalizeTemperatures(s.provider, s.temperatures),
+            },
+          },
+        }));
+      }
+    } catch (e: unknown) {
+      setCompatibleModels([]);
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? ((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? String(e))
+          : String(e);
+      setModelFetchError(msg);
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
   const handleProviderChange = (provider: string) => {
     setTestResult(null);
     setTestedSignature('');
+    let nextBaseUrl = '';
+    let nextApiKey = '';
+    let nextModel = '';
     setSettings((s) => ({
       ...s,
       provider,
@@ -61,14 +128,20 @@ export function useSettingsController() {
           model: s.model,
           baseUrl: s.baseUrl,
           maxConcurrency: s.maxConcurrency,
+          temperatureEnabled: s.temperatureEnabled,
+          temperatures: normalizeTemperatures(s.provider, s.temperatures),
         },
       },
-      model: s.providerSettings?.[provider]?.model ?? DEFAULT_MODELS[provider] ?? '',
-      baseUrl: s.providerSettings?.[provider]?.baseUrl ?? DEFAULT_URLS[provider] ?? '',
+      model: (nextModel = s.providerSettings?.[provider]?.model ?? DEFAULT_MODELS[provider] ?? ''),
+      baseUrl: (nextBaseUrl = s.providerSettings?.[provider]?.baseUrl ?? DEFAULT_URLS[provider] ?? ''),
       maxConcurrency: s.providerSettings?.[provider]?.maxConcurrency ?? (provider === 'openai-compatible' ? 1 : 5),
+      temperatureEnabled: s.providerSettings?.[provider]?.temperatureEnabled === true,
+      temperatures: normalizeTemperatures(provider, s.providerSettings?.[provider]?.temperatures),
     }));
+    nextApiKey = settings.apiKeys?.[provider] || '';
     setCompatibleModels([]);
     setModelFetchError(null);
+    void fetchModelsForProvider(provider, nextBaseUrl, nextApiKey, nextModel);
   };
 
   const withCurrentProviderSettings = (value: SettingsState): SettingsState => ({
@@ -79,6 +152,8 @@ export function useSettingsController() {
         model: value.model,
         baseUrl: value.baseUrl,
         maxConcurrency: value.maxConcurrency,
+        temperatureEnabled: value.temperatureEnabled,
+        temperatures: normalizeTemperatures(value.provider, value.temperatures),
       },
     },
   });
@@ -89,6 +164,8 @@ export function useSettingsController() {
     model: value.model,
     baseUrl: value.baseUrl,
     maxConcurrency: value.maxConcurrency,
+    temperatureEnabled: value.temperatureEnabled,
+    temperatures: normalizeTemperatures(value.provider, value.temperatures),
     providerSettings: value.providerSettings?.[value.provider],
   });
 
@@ -102,37 +179,8 @@ export function useSettingsController() {
   };
 
   const handleFetchCompatibleModels = async () => {
-    setFetchingModels(true);
-    setModelFetchError(null);
-    try {
-      const baseUrl = settings.baseUrl || DEFAULT_URLS['openai-compatible'] || 'http://localhost:8000/v1';
-      const r = await settingsApi.getCompatibleModels(baseUrl, settings.apiKey);
-      const models: string[] = r.data.models;
-      setCompatibleModels(models);
-      // 자동으로 첫 번째 모델 선택
-      if (models.length > 0 && !settings.model) {
-        setSettings((s) => ({
-          ...s,
-          model: models[0],
-          providerSettings: {
-            ...s.providerSettings,
-            [s.provider]: {
-              model: models[0],
-              baseUrl: s.baseUrl,
-              maxConcurrency: s.maxConcurrency,
-            },
-          },
-        }));
-      }
-    } catch (e: unknown) {
-      const msg =
-        e && typeof e === 'object' && 'response' in e
-          ? ((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? String(e))
-          : String(e);
-      setModelFetchError(msg);
-    } finally {
-      setFetchingModels(false);
-    }
+    const apiKey = settings.apiKeys?.[settings.provider] || settings.apiKey || '';
+    await fetchModelsForProvider(settings.provider, settings.baseUrl, apiKey, settings.model);
   };
 
   const handleSave = async () => {
@@ -176,6 +224,50 @@ export function useSettingsController() {
     } finally {
       setInputOptionsSaving(false);
     }
+  };
+
+  const handleTemperatureChange = (key: keyof AiTemperatures, value: number) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => {
+      const temperatures = normalizeTemperatures(s.provider, {
+        ...s.temperatures,
+        [key]: value,
+      });
+      return {
+        ...s,
+        temperatures,
+        providerSettings: {
+          ...s.providerSettings,
+          [s.provider]: {
+              model: s.model,
+              baseUrl: s.baseUrl,
+              maxConcurrency: s.maxConcurrency,
+              temperatureEnabled: s.temperatureEnabled,
+              temperatures,
+          },
+        },
+      };
+    });
+  };
+
+  const handleTemperatureEnabledChange = (value: boolean) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => ({
+      ...s,
+      temperatureEnabled: value,
+      providerSettings: {
+        ...s.providerSettings,
+        [s.provider]: {
+          model: s.model,
+          baseUrl: s.baseUrl,
+          maxConcurrency: s.maxConcurrency,
+          temperatureEnabled: value,
+          temperatures: normalizeTemperatures(s.provider, s.temperatures),
+        },
+      },
+    }));
   };
 
   const handleTest = async () => {
@@ -311,5 +403,9 @@ export function useSettingsController() {
     isOpenAICompatible,
     needsKey,
     needsUrl,
+    temperatureMax: providerTemperatureMax(settings.provider),
+    temperatureSupported: supportsTemperature(settings.provider, settings.model),
+    handleTemperatureChange,
+    handleTemperatureEnabledChange,
   };
 }

@@ -193,7 +193,7 @@ button,.button{height:44px;border:1px solid #2563eb;border-radius:6px;background
 button.secondary,.button.secondary{border-color:#d1d5db;background:#fff;color:#374151}
 button:disabled,.button.disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
 .resource-list{display:grid;gap:10px}.resource-card{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #dbe2ea;background:#f8fafc;border-radius:8px;padding:12px 14px;text-decoration:none;color:#111827}.resource-card:hover{border-color:#2563eb;background:#eff6ff}.resource-name{font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.resource-action{flex:0 0 auto;color:#2563eb;font-size:14px;font-weight:700}
-.file-list{display:grid;gap:10px;margin:10px 0}.upload-rule{display:grid;gap:8px;border:1px solid #dbe2ea;background:#f8fafc;border-radius:8px;padding:12px}.file-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid #e5e7eb;background:#fff;border-radius:6px;padding:10px 12px;font-size:16px}.file-row button{height:30px;border-color:#fecaca;background:#fff;color:#dc2626;padding:0 10px}.student-form{display:grid;gap:16px}.student-fields{display:grid;grid-template-columns:1fr;gap:12px}.full{grid-column:1/-1}
+.file-list{display:grid;gap:10px;margin:10px 0}.upload-rule{display:grid;gap:8px;border:1px solid #dbe2ea;background:#f8fafc;border-radius:8px;padding:12px}.file-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid #e5e7eb;background:#fff;border-radius:6px;padding:10px 12px;font-size:16px}.file-row button{height:30px;border-color:#fecaca;background:#fff;color:#dc2626;padding:0 10px}.student-form{display:grid;gap:16px}.student-fields{display:grid;grid-template-columns:1fr;gap:12px}.full{grid-column:1/-1}.no-file-option{display:flex;align-items:center;gap:9px;margin:2px 0 0;padding:12px;border:1px solid #dbe2ea;border-radius:8px;background:#f8fafc;cursor:pointer}.no-file-option input{width:18px;height:18px;margin:0;flex:0 0 auto}.no-file-option span{font-size:16px;font-weight:700}.uploads-disabled{opacity:.45;pointer-events:none}
 table{width:100%;border-collapse:collapse;background:#fff}
 th,td{border:1px solid #e5e7eb;padding:8px;text-align:left;font-size:13px}
 th{background:#f9fafb;color:#4b5563}
@@ -243,7 +243,7 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
  <section class="card"><h2>안내</h2><div class="guide">${markdown(run.guide_md)}</div></section>
  <div class="stack">
   <section class="card"><h2>다운로드 자료</h2><div class="resource-list">${resources.map(r=>`<a class="resource-card" href="/api/public/resources/${r.id}/file"><span class="resource-name">${escapeHtml(r.filename)}</span><span class="resource-action">다운로드</span></a>`).join('') || '<p class="muted">자료 없음</p>'}</div></section>
-  <section class="card"><h2>제출</h2><form id="f" class="student-form"><div class="student-fields"><div><label>반</label><input name="classNum" type="number" min="1" step="1" required inputmode="numeric"></div><div><label>번호</label><input name="seatNum" type="number" min="1" step="1" required inputmode="numeric"></div><div class="full"><label>이름</label><input name="name" required autocomplete="name" placeholder="띄어쓰기 없이 입력"></div></div><div><label>파일</label><div id="uploadGroups" class="file-list"></div></div><button>제출</button></form><p id="msg"></p></section>
+  <section class="card"><h2>제출</h2><form id="f" class="student-form"><div class="student-fields"><div><label>반</label><input name="classNum" type="number" min="1" step="1" required inputmode="numeric"></div><div><label>번호</label><input name="seatNum" type="number" min="1" step="1" required inputmode="numeric"></div><div class="full"><label>이름</label><input name="name" required autocomplete="name" placeholder="띄어쓰기 없이 입력"></div></div><div id="fileSection"><label>파일</label><div id="uploadGroups" class="file-list"></div></div><label class="no-file-option"><input id="noFile" name="noFile" type="checkbox" value="1"><span>파일 미제출</span></label><button>제출</button></form><p id="msg"></p></section>
  </div>
 </main>
 <script>
@@ -259,7 +259,8 @@ function renderFiles(){uploadGroups.innerHTML=rules.map((rule,groupIndex)=>{
 }).join('');}
 function addFiles(groupIndex,input){const rule=rules[groupIndex];for(const file of input.files||[]){if(selectedFiles[groupIndex].length<rule.max_files)selectedFiles[groupIndex].push(file);}input.value='';renderFiles();}
 function removeFile(groupIndex,fileIndex){selectedFiles[groupIndex].splice(fileIndex,1);renderFiles();}
-f.onsubmit=async(e)=>{e.preventDefault();const allFiles=selectedFiles.flat();if(allFiles.length===0){msg.textContent='파일을 추가하세요.';msg.className='danger';return;}msg.textContent='제출 중...';const fd=new FormData(f);fd.delete('files');allFiles.forEach(file=>fd.append('files',file));const r=await fetch('${submitPath}',{method:'POST',body:fd});const data=await r.json().catch(()=>({error:'제출 실패'}));msg.textContent=r.ok?data.message:data.error;msg.className=r.ok?'ok':'danger';if(r.ok){f.reset();selectedFiles=rules.map(()=>[]);renderFiles();}};
+noFile.onchange=()=>{fileSection.classList.toggle('uploads-disabled',noFile.checked);};
+f.onsubmit=async(e)=>{e.preventDefault();const allFiles=selectedFiles.flat();if(!noFile.checked&&allFiles.length===0){msg.textContent='파일을 추가하거나 파일 미제출을 체크하세요.';msg.className='danger';return;}msg.textContent='제출 중...';const fd=new FormData(f);fd.delete('files');if(!noFile.checked)allFiles.forEach(file=>fd.append('files',file));const r=await fetch('${submitPath}',{method:'POST',body:fd});const data=await r.json().catch(()=>({error:'제출 실패'}));msg.textContent=r.ok?data.message:data.error;msg.className=r.ok?'ok':'danger';if(r.ok){f.reset();selectedFiles=rules.map(()=>[]);fileSection.classList.remove('uploads-disabled');renderFiles();}};
 renderFiles();
 </script>`));
 }
@@ -403,7 +404,7 @@ function renderSummary(rows){
  const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;
  const present=total-absent;
  const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;
- const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&s.status==='accepted'&&Number(s.teacher_checked||0)===1).length;
+ const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&(s.status==='accepted'||s.status==='no_file')&&Number(s.teacher_checked||0)===1).length;
  const done=present>0&&checked>=present;
  summary.className='summary '+(done?'summary-done':'');
  summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');
@@ -411,15 +412,16 @@ function renderSummary(rows){
 function statusHtml(s){
  if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';
  if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';
+ if(s.status==='no_file')return '<span class="muted">파일 미제출</span>';
  return '<span class="ok">'+(Number(s.accepted_count||0)>1?'새로 제출됨':'제출됨')+'</span>';
 }
 function rowHtml(s){
  const isAbsent=Number(s.is_absent||0)===1;
  const submitted=!!s.submission_id;
  const checked=Number(s.teacher_checked||0)===1;
- const accepted=submitted&&s.status!=='rejected';
- const file=accepted?'<a target="_blank" href="/api/teacher/submissions/'+s.submission_id+'/file">'+s.original_filename+'</a>':(submitted?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');
- const check=accepted&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';
+ const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');
+ const file=s.status==='accepted'?'<a target="_blank" href="/api/teacher/submissions/'+s.submission_id+'/file">'+s.original_filename+'</a>':(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');
+ const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';
  const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleRunAbsent('+s.run_student_id+',this.checked)">';
  return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';
 }
@@ -476,9 +478,9 @@ teacherApp.get('/', async (req, res) => {
 <main><div id="summary" class="summary"></div><div id="submissions"></div></main>
 <script>
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json();}
-function renderSummary(rows){const total=rows.length;const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;const present=total-absent;const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&s.status==='accepted'&&Number(s.teacher_checked||0)===1).length;const done=present>0&&checked>=present;summary.className='summary '+(done?'summary-done':'');summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');}
-function statusHtml(s){if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';return '<span class="ok">'+(Number(s.accepted_count||0)>1?'새로 제출됨':'제출됨')+'</span>';}
-function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const accepted=submitted&&s.status!=='rejected';const file=accepted?'<a target="_blank" href="/api/submissions/'+s.submission_id+'/file">'+s.original_filename+'</a>':(submitted?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');const check=accepted&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
+function renderSummary(rows){const total=rows.length;const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;const present=total-absent;const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&(s.status==='accepted'||s.status==='no_file')&&Number(s.teacher_checked||0)===1).length;const done=present>0&&checked>=present;summary.className='summary '+(done?'summary-done':'');summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');}
+function statusHtml(s){if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';if(s.status==='no_file')return '<span class="muted">파일 미제출</span>';return '<span class="ok">'+(Number(s.accepted_count||0)>1?'새로 제출됨':'제출됨')+'</span>';}
+function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');const file=s.status==='accepted'?'<a target="_blank" href="/api/submissions/'+s.submission_id+'/file">'+s.original_filename+'</a>':(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
 async function load(){const rows=await j('/api/submissions?sort='+sort.value);renderSummary(rows);submissions.innerHTML='<table><thead><tr><th>결시 여부</th><th>제출 확인</th><th>제출 상태</th><th>제출 시간</th><th>반</th><th>번호</th><th>이름</th><th>IP</th><th>파일</th></tr></thead><tbody>'+rows.map(rowHtml).join('')+'</tbody></table>'}
 async function toggleCheck(id,checked){await j('/api/submissions/'+id+'/check',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({checked})});await load();}
 async function toggleAbsent(id,absent){await j('/api/students/'+id+'/absent',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({absent})});await load();}
@@ -726,6 +728,49 @@ async function recordRejectedSubmission(req: any, run: any, student: any, studen
   });
 }
 
+async function recordNoFileSubmission(req: any, run: any, student: any, studentNum: number, classNum: number, seatNum: number, name: string) {
+  const inserted = await execute(
+    `INSERT INTO assignment_submissions(
+       run_id, assignment_student_id, student_num, class_num, seat_num, name, ip_address,
+       original_filename, stored_filename, filepath, mime_type, size, status, reject_reason,
+       user_agent, teacher_checked, teacher_checked_at
+     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'')`,
+    [
+      run.id,
+      student?.id || null,
+      studentNum,
+      classNum,
+      seatNum,
+      name,
+      clientIp(req),
+      '',
+      '',
+      '',
+      '',
+      0,
+      'no_file',
+      '',
+      String(req.headers['user-agent'] || '')
+    ]
+  );
+  writeAssignmentLog('submission_no_file', {
+    run_id: run.id,
+    submission_id: Number(inserted.lastInsertRowid),
+    year: run.year,
+    semester: run.semester,
+    grade: run.grade,
+    subject: run.subject,
+    domain_name: run.domain_name,
+    room: run.room,
+    student_num: studentNum,
+    class_num: classNum,
+    seat_num: seatNum,
+    name,
+    ip_address: clientIp(req),
+    user_agent: String(req.headers['user-agent'] || '')
+  });
+}
+
 async function handleSubmission(req: any, res: any, run: any) {
   const files = req.files as any[];
   if (!run || !run.is_open) return res.status(403).json({ error: '제출이 열려 있지 않습니다.' });
@@ -745,6 +790,12 @@ async function handleSubmission(req: any, res: any, run: any) {
   if (!runStudent) {
     cleanupTempFiles(files);
     return res.status(403).json({ error: '현재 수행 대상 학생이 아닙니다.' });
+  }
+  const noFile = ['1', 'true', 'on'].includes(String(req.body.noFile || '').toLowerCase());
+  if (noFile) {
+    cleanupTempFiles(files);
+    await recordNoFileSubmission(req, run, student, studentNum, classNum, seatNum, name);
+    return res.json({ message: '파일 미제출로 기록했습니다.' });
   }
   if (!files?.length) {
     await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, null, '파일이 없습니다.');

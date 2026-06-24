@@ -5,9 +5,8 @@ import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { assignmentConfigsApi } from '../../lib/api';
 import { filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
-import { DomainCriteriaPanel } from './DomainCriteriaPanel';
-import { DomainSubjectCommentsPanel } from './DomainSubjectCommentsPanel';
-import { AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
+import { DomainCriteriaPanel, DomainCriteriaPromptView } from './DomainCriteriaPanel';
+import { AiChatMessage, AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
 
 const ArtifactPreviewContent = lazy(() => import('../../components/ArtifactPreviewContent'));
 
@@ -38,6 +37,12 @@ interface DomainContentProps {
   achievementStandards: any[];
   standardsMetaPrompt: string;
   setStandardsMetaPrompt: (value: string) => void;
+  domainAiChats: Record<'standards' | 'scoring' | 'records', AiChatMessage[]>;
+  domainAiDrafts: Record<'standards' | 'scoring' | 'records', string>;
+  chattingDomainAi: 'standards' | 'scoring' | 'records' | null;
+  setDomainAiDraft: (kind: 'standards' | 'scoring' | 'records', value: string) => void;
+  handleDomainAiChatSend: (kind: 'standards' | 'scoring' | 'records') => void;
+  clearDomainAiChat: (kind: 'standards' | 'scoring' | 'records') => void;
   generatingStandards: boolean;
   handleGenerateStandards: () => void;
   addStandardRef: () => void;
@@ -73,9 +78,16 @@ interface DomainContentProps {
   setCommentsChecked: Dispatch<SetStateAction<Set<number>>>;
   updateCommentsItem: (idx: number, field: keyof CommentsItem, value: string) => void;
   removeCommentsItem: (idx: number) => void;
-  handleGenerateCommon: (type: string, metaPrompt: string) => void;
-  updateSubjectCommentsMetaPrompt: (type: string, metaPrompt: string) => void;
-  updateSubjectComments: (type: string, prompt: string) => void;
+  subjectCommentsPrompt: string;
+  updateSubjectCommentsPrompt: (prompt: string) => void;
+  subjectCommentsChat: AiChatMessage[];
+  subjectCommentsDraft: string;
+  setSubjectCommentsDraft: (value: string) => void;
+  chattingSubjectComments: boolean;
+  generatingSubjectComments: boolean;
+  handleSubjectCommentsChatSend: () => void;
+  handleGenerateSubjectComments: () => void;
+  clearSubjectCommentsChat: () => void;
   aiEnabled: boolean;
   assignmentGuideFileRef: RefObject<HTMLInputElement>;
   assignmentResourceFileRef: RefObject<HTMLInputElement>;
@@ -97,14 +109,14 @@ function EmptySelection() {
       <div className="text-center">
         <ClipboardCheck size={40} className="mx-auto mb-3 opacity-30" />
         <p className="text-sm">왼쪽 트리에서 영역이나 과목명을 선택하세요</p>
-        <p className="text-xs mt-2">과목을 선택하면 종합 세특 기준을, 영역을 선택하면 해당 영역의 기준을 설정합니다.</p>
+        <p className="text-xs mt-2">과목 또는 영역을 선택해 평가 기준을 설정합니다.</p>
       </div>
     </div>
   );
 }
 
-function Section({ children }: { children: ReactNode }) {
-  return <section>{children}</section>;
+function Section({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <section className={className}>{children}</section>;
 }
 
 const mdRenderer = new MarkdownIt({ html: true, linkify: true, breaks: false, typographer: false });
@@ -216,6 +228,12 @@ export function DomainContent({
   achievementStandards,
   standardsMetaPrompt,
   setStandardsMetaPrompt,
+  domainAiChats,
+  domainAiDrafts,
+  chattingDomainAi,
+  setDomainAiDraft,
+  handleDomainAiChatSend,
+  clearDomainAiChat,
   generatingStandards,
   handleGenerateStandards,
   addStandardRef,
@@ -251,9 +269,16 @@ export function DomainContent({
   setCommentsChecked,
   updateCommentsItem,
   removeCommentsItem,
-  handleGenerateCommon,
-  updateSubjectCommentsMetaPrompt,
-  updateSubjectComments,
+  subjectCommentsPrompt,
+  updateSubjectCommentsPrompt,
+  subjectCommentsChat,
+  subjectCommentsDraft,
+  setSubjectCommentsDraft,
+  chattingSubjectComments,
+  generatingSubjectComments,
+  handleSubjectCommentsChatSend,
+  handleGenerateSubjectComments,
+  clearSubjectCommentsChat,
   aiEnabled,
   assignmentGuideFileRef,
   assignmentResourceFileRef,
@@ -320,9 +345,11 @@ export function DomainContent({
     return <EmptySelection />;
   }
 
+  const useFullHeightCriteriaLayout = !!selectedDomain && ['standards', 'scoring', 'records', 'comments'].includes(activeTab);
+
   return (
-    <div className="flex-1 min-h-0 overflow-auto scrollbar-stable px-6 pt-6 pb-32">
-      <div className="min-w-[760px] space-y-8">
+    <div className={`flex-1 min-h-0 px-6 pt-6 ${useFullHeightCriteriaLayout ? 'overflow-hidden pb-6' : 'overflow-auto pb-32 scrollbar-stable'}`}>
+      <div className={`min-w-[760px] ${useFullHeightCriteriaLayout ? 'h-full min-h-0' : 'space-y-8'}`}>
       {!selectedDomain && activeTab === 'ratio' && (
         <Section>
           <div className="mb-4">
@@ -471,7 +498,7 @@ export function DomainContent({
       )}
 
       {selectedDomain && activeTab === 'standards' && (
-        <Section>
+        <Section className="h-full min-h-0">
           <DomainCriteriaPanel
             prompt={achievementStandards.length === 0 ? (
               <p className="text-xs text-gray-400 text-center py-2 bg-gray-50 rounded border border-dashed border-gray-200">
@@ -480,14 +507,15 @@ export function DomainContent({
             ) : (
               {
                 label: '성취 기준 항목 자동 생성',
-                placeholder: "성취 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 이 영역의 핵심 성취기준 2~3개를 골라줘)",
-                value: standardsMetaPrompt,
-                onChange: (value) => {
-                  setStandardsMetaPrompt(value);
-                  setIsDirty(true);
-                },
+                placeholder: "예: 이 영역의 핵심 성취기준 2~3개를 골라줘",
+                messages: domainAiChats.standards,
+                draft: domainAiDrafts.standards,
+                onDraftChange: (value) => setDomainAiDraft('standards', value),
+                onSend: () => handleDomainAiChatSend('standards'),
                 onGenerate: handleGenerateStandards,
+                onClearChat: () => clearDomainAiChat('standards'),
                 generating: generatingStandards,
+                chatting: chattingDomainAi === 'standards',
                 disabled: !aiEnabled,
               }
             )}
@@ -545,50 +573,57 @@ export function DomainContent({
       )}
 
       {selectedDomain && !isCustomDomain && activeTab === 'scoring' && (
-        <Section>
+        <Section className="h-full min-h-0">
           <DomainCriteriaPanel
             top={(() => {
               const formulaIdx = evalItems.findIndex(i => i.item_type === 'formula');
               if (formulaIdx < 0) return null;
               const formulaItem = evalItems[formulaIdx];
               return (
-                <div className={`border rounded-lg p-4 shadow-sm flex gap-3 items-center ${isScoreMismatch ? 'bg-red-50 border-red-300' : 'bg-blue-50 border-blue-200'}`}>
-                  <div className={`font-bold w-24 ${isScoreMismatch ? 'text-red-800' : 'text-blue-800'}`}>만점</div>
-                  <div className={`text-sm flex-1 font-medium ${isScoreMismatch ? 'text-red-700' : 'text-blue-700'}`}>
-                    {currentMaxScore}점
-                    {isScoreMismatch && <span className="ml-2 font-bold">(합계 {calculatedScore}점)</span>}
+                <div className={`space-y-3 rounded-lg border p-4 shadow-sm ${isScoreMismatch ? 'bg-red-50 border-red-300' : 'bg-blue-50 border-blue-200'}`}>
+                  <div className="flex h-9 items-center gap-3">
+                    <div className={`w-24 text-sm font-semibold ${isScoreMismatch ? 'text-red-800' : 'text-blue-800'}`}>공통</div>
+                    <div className={`text-sm flex-1 font-medium ${isScoreMismatch ? 'text-red-700' : 'text-blue-700'}`}>
+                      만점 {currentMaxScore}점
+                      {isScoreMismatch && <span className="ml-2 font-bold">(합계 {calculatedScore}점)</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-medium ${isScoreMismatch ? 'text-red-800' : 'text-blue-800'}`}>기본점수:</span>
+                      <input
+                        className="input w-20 text-sm text-center"
+                        type="number"
+                        placeholder="0"
+                        value={formulaItem.score}
+                        onChange={e => updateEvalItem(formulaIdx, 'score', e.target.value)}
+                      />
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-sm font-medium ${isScoreMismatch ? 'text-red-800' : 'text-blue-800'}`}>기본점수:</span>
-                    <input
-                      className="input w-20 text-sm text-center"
-                      type="number"
-                      placeholder="0"
-                      value={formulaItem.score}
-                      onChange={e => updateEvalItem(formulaIdx, 'score', e.target.value)}
-                    />
-                  </div>
+                  <textarea
+                    className="textarea min-h-[86px] w-full resize-y bg-white text-sm leading-relaxed"
+                    placeholder="공통 채점 기준 내용"
+                    value={formulaItem.rubric}
+                    onChange={e => updateEvalItem(formulaIdx, 'rubric', e.target.value)}
+                  />
                 </div>
               );
             })()}
             prompt={{
               label: '채점 기준 항목 자동 생성',
-              placeholder: '채점 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 코드 기반 수행평가, 4단계 루브릭으로)',
-              value: evalMetaPrompts[-1] || '',
-              onChange: (value) => {
-                setEvalMetaPrompts(p => ({ ...p, [-1]: value }));
-                setIsDirty(true);
-              },
+              placeholder: '예: 코드 기반 수행평가, 4단계 루브릭으로',
+              messages: domainAiChats.scoring,
+              draft: domainAiDrafts.scoring,
+              onDraftChange: (value) => setDomainAiDraft('scoring', value),
+              onSend: () => handleDomainAiChatSend('scoring'),
               onGenerate: handleGenerateEvalItems,
+              onClearChat: () => clearDomainAiChat('scoring'),
               generating: generatingEval,
+              chatting: chattingDomainAi === 'scoring',
               disabled: !aiEnabled,
             }}
             items={{
               title: '채점 기준 항목',
               addLabel: '항목 추가',
               generating: generatingEval,
-              generateDisabled: !aiEnabled || evalItems.filter(i => i.item_type !== 'formula').length === 0,
-              onGenerate: handleGenerateEvalRubrics,
               onAdd: addEvalItem,
               empty: evalItems.filter(i => i.item_type !== 'formula').length === 0 && (
                 <p className="text-center py-6 text-gray-400 text-sm">채점 항목을 추가하거나 AI로 생성하세요.</p>
@@ -619,6 +654,8 @@ export function DomainContent({
                       setIsDirty(true);
                     }}
                     instructionDisabled={!aiEnabled}
+                    showCheckbox={false}
+                    showInstruction={false}
                     onResultChange={(value) => updateEvalItem(idx, 'rubric', value)}
                     onScoreChange={(value) => updateEvalItem(idx, 'score', value)}
                     onRemove={() => removeEvalItem(idx)}
@@ -631,31 +668,49 @@ export function DomainContent({
       )}
 
       {selectedDomain && activeTab === 'records' && (
-        <Section>
+        <Section className="h-full min-h-0">
           <DomainCriteriaPanel
+            top={(() => {
+              const commonIdx = commentsItems.findIndex(item => item.type === '공통');
+              if (commonIdx < 0) return null;
+              const commonItem = commentsItems[commonIdx];
+              return (
+                <div className="space-y-3 rounded-lg border border-purple-200 bg-purple-50 p-4 shadow-sm">
+                  <div className="flex h-9 items-center gap-3">
+                    <div className="w-24 text-sm font-semibold text-purple-800">공통</div>
+                  </div>
+                  <textarea
+                    className="textarea min-h-[96px] w-full resize-y bg-white text-sm leading-relaxed"
+                    placeholder="모든 기록 기준에 공통으로 적용할 내용"
+                    value={commonItem.prompt}
+                    onChange={e => updateCommentsItem(commonIdx, 'prompt', e.target.value)}
+                  />
+                </div>
+              );
+            })()}
             prompt={{
               label: '기록 기준 항목 자동 생성',
-              placeholder: '기록 기준 항목 생성을 위한 지시사항을 입력하세요. (예: 보고서와 코드를 각각 기록하는 항목으로 구성)',
-              value: commentsMetaPrompts[-1] || '',
-              onChange: (value) => {
-                setCommentsMetaPrompts(p => ({ ...p, [-1]: value }));
-                setIsDirty(true);
-              },
+              placeholder: '예: 보고서와 코드를 각각 기록하는 항목으로 구성',
+              messages: domainAiChats.records,
+              draft: domainAiDrafts.records,
+              onDraftChange: (value) => setDomainAiDraft('records', value),
+              onSend: () => handleDomainAiChatSend('records'),
               onGenerate: handleGenerateCommentsItems,
+              onClearChat: () => clearDomainAiChat('records'),
               generating: generatingComments,
+              chatting: chattingDomainAi === 'records',
               disabled: !aiEnabled,
             }}
             items={{
               title: '기록 기준 항목',
               addLabel: '항목 추가',
               generating: generatingComments,
-              generateDisabled: !aiEnabled || commentsItems.length === 0,
-              onGenerate: handleGenerateCommentsCriteria,
               onAdd: addDomainCommentsItem,
-              empty: commentsItems.length === 0 && (
+              empty: commentsItems.filter(item => item.type !== '공통').length === 0 && (
                 <p className="text-center py-6 text-gray-400 text-sm">활동 기록 항목을 추가하거나 AI로 생성하세요.</p>
               ),
               children: commentsItems.map((item, idx) => {
+                if (item.type === '공통') return null;
                 const isChecked = commentsChecked.has(idx);
                 return (
                   <CriteriaItemCard
@@ -680,6 +735,8 @@ export function DomainContent({
                       setIsDirty(true);
                     }}
                     instructionDisabled={!aiEnabled}
+                    showCheckbox={false}
+                    showInstruction={false}
                     onResultChange={(value) => updateCommentsItem(idx, 'prompt', value)}
                     onRemove={() => removeCommentsItem(idx)}
                   />
@@ -687,6 +744,42 @@ export function DomainContent({
               }),
             }}
           />
+        </Section>
+      )}
+
+      {selectedDomain && activeTab === 'comments' && (
+        <Section className="h-full min-h-0">
+          <div className="grid h-full min-h-0 grid-cols-[minmax(280px,0.9fr)_minmax(0,1.4fr)] gap-4">
+            <div className="min-h-0 min-w-0">
+              <DomainCriteriaPromptView
+                prompt={{
+                  label: '세특 기준 생성',
+                  placeholder: '예: 학생의 탐구 과정과 성장, 과목 역량이 구체적으로 드러나게 작성해줘',
+                  generateLabel: '세특 생성',
+                  messages: subjectCommentsChat,
+                  draft: subjectCommentsDraft,
+                  onDraftChange: setSubjectCommentsDraft,
+                  onSend: handleSubjectCommentsChatSend,
+                  onGenerate: handleGenerateSubjectComments,
+                  onClearChat: clearSubjectCommentsChat,
+                  generating: generatingSubjectComments,
+                  chatting: chattingSubjectComments,
+                  disabled: !aiEnabled,
+                }}
+              />
+            </div>
+            <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-purple-200 bg-purple-50 p-4 shadow-sm">
+              <div className="mb-3 flex h-9 shrink-0 items-center gap-3">
+                <div className="w-24 text-sm font-semibold text-purple-800">공통</div>
+              </div>
+              <textarea
+                className="textarea min-h-0 flex-1 resize-none bg-white text-sm leading-relaxed"
+                placeholder="생성된 세특 기준이 여기에 표시됩니다. 직접 수정할 수도 있습니다."
+                value={subjectCommentsPrompt}
+                onChange={e => updateSubjectCommentsPrompt(e.target.value)}
+              />
+            </div>
+          </div>
         </Section>
       )}
 
@@ -1001,17 +1094,6 @@ export function DomainContent({
         </Section>
       )}
 
-      {!selectedDomain && activeTab === 'comments' && (
-        <Section>
-          <DomainSubjectCommentsPanel
-            items={commentsItems}
-            onMetaPromptChange={updateSubjectCommentsMetaPrompt}
-            onPromptChange={updateSubjectComments}
-            onGenerate={handleGenerateCommon}
-            aiDisabled={!aiEnabled}
-          />
-        </Section>
-      )}
       </div>
     </div>
   );

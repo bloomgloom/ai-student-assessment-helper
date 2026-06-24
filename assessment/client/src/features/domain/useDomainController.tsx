@@ -5,6 +5,7 @@ import { parseFirstJson } from '../../lib/json';
 import { useAiAction } from '../../hooks/useAiAction';
 import {
   AiPromptRow,
+  AiChatMessage,
   AssignmentClassSnapshot,
   AssignmentConfig,
   AssignmentResource,
@@ -18,7 +19,6 @@ import {
   DOMAIN_GUIDE_KEY,
   DOMAIN_SELECTION_KEY,
   DomainTab,
-  getSubjectCommentsTemplate,
   SUBJECT_COMPREHENSIVE_DOMAIN,
 } from './constants';
 import { useDomainDomainsUpload } from './useDomainDomainsUpload';
@@ -46,8 +46,45 @@ function createDefaultCommentsItem(sortOrder = 0): CommentsItem {
   return { type: '항목', title: '기록', prompt: '', extensions: '', sort_order: sortOrder };
 }
 
+function createDefaultCommentsCommonItem(): CommentsItem {
+  return { type: '공통', title: '공통', prompt: '', extensions: '', sort_order: -1 };
+}
+
 function parseAiJson<T>(value: string): T {
   return parseFirstJson<T>(value, 'array');
+}
+
+type DomainAiChatKind = 'standards' | 'scoring' | 'records';
+
+const DOMAIN_AI_CHAT_KINDS: DomainAiChatKind[] = ['standards', 'scoring', 'records'];
+
+function domainAiChatPromptKey(kind: DomainAiChatKind) {
+  return `chat:${kind}`;
+}
+
+function messagesToPrompt(messages: AiChatMessage[], fallback: string) {
+  if (messages.length === 0) return fallback;
+  return messages
+    .map(message => `${message.role === 'user' ? '사용자' : 'AI'}: ${message.content}`)
+    .join('\n\n');
+}
+
+function parseSavedDomainAiChat(value?: string): AiChatMessage[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((message): message is AiChatMessage =>
+        !!message &&
+        typeof message === 'object' &&
+        (message.role === 'user' || message.role === 'assistant') &&
+        typeof message.content === 'string',
+      )
+      .map(message => ({ role: message.role, content: message.content }));
+  } catch {
+    return [];
+  }
 }
 
 export function useDomainController() {
@@ -77,7 +114,22 @@ export function useDomainController() {
   const [commentsChecked, setCommentsChecked] = useState<Set<number>>(new Set());
   const [standardsMetaPrompt, setStandardsMetaPrompt] = useState<string>('');
   const [subjectDomainsMetaPrompt, setSubjectDomainsMetaPrompt] = useState<string>('');
-  const [subjectCommonPrompt, setSubjectCommonPrompt] = useState<string>('');
+  const [subjectCommentsPrompt, setSubjectCommentsPrompt] = useState<string>('');
+  const [subjectCommentsChat, setSubjectCommentsChat] = useState<AiChatMessage[]>([]);
+  const [subjectCommentsDraft, setSubjectCommentsDraft] = useState('');
+  const [chattingSubjectComments, setChattingSubjectComments] = useState(false);
+  const [generatingSubjectComments, setGeneratingSubjectComments] = useState(false);
+  const [domainAiChats, setDomainAiChats] = useState<Record<DomainAiChatKind, AiChatMessage[]>>({
+    standards: [],
+    scoring: [],
+    records: [],
+  });
+  const [domainAiDrafts, setDomainAiDrafts] = useState<Record<DomainAiChatKind, string>>({
+    standards: '',
+    scoring: '',
+    records: '',
+  });
+  const [chattingDomainAi, setChattingDomainAi] = useState<DomainAiChatKind | null>(null);
   const [generatingStandards, setGeneratingStandards] = useState(false);
   const [generatingSubjectDomains, setGeneratingSubjectDomains] = useState(false);
   const [generatingEval, setGeneratingEval] = useState(false);
@@ -133,8 +185,36 @@ export function useDomainController() {
     }
   }, []);
 
+  const loadSubjectComments = useCallback(async (sub: SubjectItem) => {
+    try {
+      const commentsRes = await criteriaApi.getComments(
+        sub.year,
+        sub.semester,
+        sub.grade,
+        sub.subject,
+        SUBJECT_COMPREHENSIVE_DOMAIN
+      );
+      const items = commentsRes.data as CommentsItem[];
+      const criterion = items.find(item => item.type === '세특') ?? items.find(item => item.type === '종합');
+      setSubjectCommentsPrompt(criterion?.prompt || '');
+      let savedChat = '';
+      try { savedChat = JSON.parse(criterion?.extensions || '{}').chat || ''; } catch { /* ignore */ }
+      setSubjectCommentsChat(parseSavedDomainAiChat(savedChat));
+      setSubjectCommentsDraft('');
+    } catch {
+      setSubjectCommentsPrompt('');
+      setSubjectCommentsChat([]);
+      setSubjectCommentsDraft('');
+    }
+    setChattingSubjectComments(false);
+  }, []);
+
   const loadCriteria = useCallback(async (sub: SubjectItem, domainName: string, isCustom: boolean) => {
     setIsDirty(false);
+    setDomainAiChats({ standards: [], scoring: [], records: [] });
+    setDomainAiDrafts({ standards: '', scoring: '', records: '' });
+    setChattingDomainAi(null);
+    await loadSubjectComments(sub);
     const sr = await criteriaApi.getComments(sub.year, sub.semester, sub.grade, sub.subject, domainName);
     const allItems = sr.data as CommentsItem[];
 
@@ -143,12 +223,19 @@ export function useDomainController() {
       .filter(i => i.type === '성취기준')
       .map(i => { try { return JSON.parse(i.extensions || '{}'); } catch { return { domain_name_ref: '', code: '', content: '' }; } });
     setStandardRefs(refs);
-    const editableComments = allItems.filter(i => i.type !== '성취기준' && i.type !== '활동공통');
+    const editableComments = allItems
+      .filter(i => i.type !== '성취기준' && i.type !== '활동공통')
+      .map(item => item.type === '공통' ? { ...item, title: '공통' } : item);
+    const hasCommonItem = editableComments.some(i => i.type === '공통');
     const hasRecordItem = editableComments.some(i => i.type === '항목');
-    setCommentsItems(domainName !== SUBJECT_COMPREHENSIVE_DOMAIN && !hasRecordItem
-      ? [...editableComments, createDefaultCommentsItem(editableComments.length)]
-      : editableComments
-    );
+    const domainComments = domainName !== SUBJECT_COMPREHENSIVE_DOMAIN
+      ? [
+        ...(hasCommonItem ? [] : [createDefaultCommentsCommonItem()]),
+        ...editableComments,
+        ...(hasRecordItem ? [] : [createDefaultCommentsItem(editableComments.length + 1)]),
+      ]
+      : editableComments;
+    setCommentsItems(domainComments);
 
     // 성취기준 관리 데이터 로드 (과목/영역 자동 생성 모두 성취기준을 참조)
     try {
@@ -165,15 +252,8 @@ export function useDomainController() {
       }
       setEvalItems(loaded);
 
-      // 과목 공통 세특 기준 로드 (AI 생성 context용)
-      try {
-        const subjRes = await criteriaApi.getComments(sub.year, sub.semester, sub.grade, sub.subject, SUBJECT_COMPREHENSIVE_DOMAIN);
-        const commonItem = (subjRes.data as CommentsItem[]).find(i => i.type === '공통');
-        setSubjectCommonPrompt(commonItem?.prompt || '');
-      } catch { setSubjectCommonPrompt(''); }
     } else {
       setEvalItems([]);
-      setSubjectCommonPrompt('');
     }
 
     try {
@@ -191,11 +271,17 @@ export function useDomainController() {
           .filter(([key]) => key === 'comments_items' || key.startsWith('comments_item:'))
           .map(([key, value]) => [key === 'comments_items' ? -1 : Number(key.slice('comments_item:'.length)), value])
       ));
+      setDomainAiChats({
+        standards: parseSavedDomainAiChat(savedPrompts[domainAiChatPromptKey('standards')]),
+        scoring: parseSavedDomainAiChat(savedPrompts[domainAiChatPromptKey('scoring')]),
+        records: parseSavedDomainAiChat(savedPrompts[domainAiChatPromptKey('records')]),
+      });
     } catch {
       setSubjectDomainsMetaPrompt('');
       setStandardsMetaPrompt('');
       setEvalMetaPrompts({});
       setCommentsMetaPrompts({});
+      setDomainAiChats({ standards: [], scoring: [], records: [] });
     }
     if (domainName !== SUBJECT_COMPREHENSIVE_DOMAIN) {
       await loadAssignment(sub, domainName);
@@ -204,7 +290,7 @@ export function useDomainController() {
       setAssignmentResources([]);
       setAssignmentClasses([]);
     }
-  }, [loadAssignment]);
+  }, [loadAssignment, loadSubjectComments]);
 
   const handleSelectDomain = useCallback((sub: SubjectItem, domain: string, isCustom: boolean) => {
     if (isDirty && !confirm('저장되지 않은 변경 사항이 있습니다. 이동하시겠습니까?')) return;
@@ -288,19 +374,36 @@ export function useDomainController() {
         await loadSubjects();
       }
 
-      // standardRefs를 '성취기준' 타입 아이템으로 변환 후 앞에 붙임
-      const refItems: CommentsItem[] = standardRefs.map((r, i) => ({
-        type: '성취기준',
-        title: r.code,
-        prompt: '',
-        extensions: JSON.stringify(r),
-        sort_order: i,
-      }));
-      const sItems = [
-        ...refItems,
-        ...commentsItems.map((item, i) => ({ ...item, sort_order: refItems.length + i })),
-      ];
-      await criteriaApi.bulkSaveComments(selectedSubject.year, selectedSubject.semester, selectedSubject.grade, selectedSubject.subject, domainToSave, sItems);
+      if (selectedDomain) {
+        // standardRefs를 '성취기준' 타입 아이템으로 변환 후 앞에 붙임
+        const refItems: CommentsItem[] = standardRefs.map((r, i) => ({
+          type: '성취기준',
+          title: r.code,
+          prompt: '',
+          extensions: JSON.stringify(r),
+          sort_order: i,
+        }));
+        const sItems = [
+          ...refItems,
+          ...commentsItems.map((item, i) => ({ ...item, sort_order: refItems.length + i })),
+        ];
+        await criteriaApi.bulkSaveComments(selectedSubject.year, selectedSubject.semester, selectedSubject.grade, selectedSubject.subject, domainToSave, sItems);
+      }
+
+      await criteriaApi.bulkSaveComments(
+        selectedSubject.year,
+        selectedSubject.semester,
+        selectedSubject.grade,
+        selectedSubject.subject,
+        SUBJECT_COMPREHENSIVE_DOMAIN,
+        [{
+          type: '세특',
+          title: '세특',
+          prompt: subjectCommentsPrompt,
+          extensions: JSON.stringify({ chat: JSON.stringify(subjectCommentsChat) }),
+          sort_order: 0,
+        }]
+      );
 
       const aiPromptRows = compactPromptRows([
         ...(!selectedDomain ? [{ prompt_key: 'subject_domains', prompt: subjectDomainsMetaPrompt }] : []),
@@ -312,6 +415,10 @@ export function useDomainController() {
         ...(selectedDomain ? Object.entries(commentsMetaPrompts).map(([key, prompt]) => ({
           prompt_key: Number(key) === -1 ? 'comments_items' : `comments_item:${key}`,
           prompt,
+        })) : []),
+        ...(selectedDomain ? DOMAIN_AI_CHAT_KINDS.map(kind => ({
+          prompt_key: domainAiChatPromptKey(kind),
+          prompt: JSON.stringify(domainAiChats[kind]),
         })) : []),
       ]);
       await criteriaApi.bulkSaveAiPrompts(
@@ -464,7 +571,7 @@ export function useDomainController() {
       await saveBlob(
         getDownloadFilename(
           r.headers['content-disposition'] || '',
-          `${selectedSubject.year}_${selectedSubject.subject}_${selectedDomain || '종합세특'}_기준.xlsx`
+          `${selectedSubject.year}_${selectedSubject.subject}_${selectedDomain || '세특'}_기준.xlsx`
         ),
         r.data
       );
@@ -633,6 +740,114 @@ export function useDomainController() {
     });
   };
 
+  const setDomainAiDraft = (kind: DomainAiChatKind, value: string) => {
+    setDomainAiDrafts(prev => ({ ...prev, [kind]: value }));
+  };
+
+  const setDomainAiFallbackPrompt = (kind: DomainAiChatKind, value: string) => {
+    if (kind === 'standards') setStandardsMetaPrompt(value);
+    if (kind === 'scoring') setEvalMetaPrompts(prev => ({ ...prev, [-1]: value }));
+    if (kind === 'records') setCommentsMetaPrompts(prev => ({ ...prev, [-1]: value }));
+    setIsDirty(true);
+  };
+
+  const getDomainAiFallbackPrompt = (kind: DomainAiChatKind) => {
+    if (kind === 'standards') return standardsMetaPrompt;
+    if (kind === 'scoring') return evalMetaPrompts[-1] || '';
+    return commentsMetaPrompts[-1] || '';
+  };
+
+  const buildCurrentStandardsItemsContext = () => {
+    const items = standardRefs
+      .filter(item => item.code || item.content)
+      .map(item => `  - ${item.code || '(코드 없음)'}${item.domain_name_ref ? ` [${item.domain_name_ref}]` : ''}${item.content ? `: ${item.content}` : ''}`);
+    return items.length > 0 ? `현재 성취 기준 항목:\n${items.join('\n')}` : '';
+  };
+
+  const buildCurrentScoringItemsContext = () => {
+    const items = evalItems
+      .filter(item => item.item_type === 'llm' && (item.name || item.score || item.rubric))
+      .map(item => `  - ${item.name || '(항목명 없음)'}(${item.score || '?'}점)${item.rubric ? `: ${item.rubric}` : ''}`);
+    const common = evalItems.find(item => item.item_type === 'formula');
+    const parts: string[] = [];
+    if (common && (common.score || common.rubric)) {
+      parts.push(`  공통(${common.score || '0'}점): ${common.rubric || '(내용 없음)'}`);
+    }
+    if (items.length > 0) parts.push(...items);
+    return parts.length > 0 ? `현재 채점 기준 항목:\n${parts.join('\n')}` : '';
+  };
+
+  const buildCurrentRecordsItemsContext = () => {
+    const items = commentsItems
+      .filter(item => item.type !== '공통' && (item.title || item.prompt))
+      .map(item => `  - ${item.title || '(항목명 없음)'}${item.prompt ? `: ${item.prompt}` : ''}`);
+    const common = commentsItems.find(item => item.type === '공통');
+    const parts: string[] = [];
+    if (common?.prompt?.trim()) parts.push(`  공통: ${common.prompt.trim()}`);
+    if (items.length > 0) parts.push(...items);
+    return parts.length > 0 ? `현재 기록 기준 항목:\n${parts.join('\n')}` : '';
+  };
+
+  const buildCurrentGeneratedCriteriaContext = (kind: DomainAiChatKind) => {
+    if (kind === 'standards') return buildCurrentStandardsItemsContext();
+    if (kind === 'scoring') return buildCurrentScoringItemsContext();
+    return buildCurrentRecordsItemsContext();
+  };
+
+  const buildDomainAiBaseContext = (kind: DomainAiChatKind) => {
+    const stdCtx = buildStandardsContext();
+    const actCtx = buildActivityContext();
+    const currentCriteriaCtx = buildCurrentGeneratedCriteriaContext(kind);
+    const parts = [
+      `과목: ${selectedSubject?.subject || ''}`,
+      `영역: ${selectedDomain || ''}`,
+      stdCtx && kind !== 'standards' ? `성취 기준:\n${stdCtx}` : '',
+      actCtx && kind === 'records' ? actCtx : '',
+      currentCriteriaCtx,
+    ].filter(Boolean);
+    return parts.join('\n\n');
+  };
+
+  const handleDomainAiChatSend = async (kind: DomainAiChatKind) => {
+    const content = domainAiDrafts[kind].trim();
+    if (!content) return;
+    const nextMessages: AiChatMessage[] = [...domainAiChats[kind], { role: 'user', content }];
+    setDomainAiChats(prev => ({ ...prev, [kind]: nextMessages }));
+    setDomainAiDraft(kind, '');
+    setDomainAiFallbackPrompt(kind, messagesToPrompt(nextMessages, content));
+    setChattingDomainAi(kind);
+    try {
+      const label = kind === 'standards' ? '성취 기준' : kind === 'scoring' ? '채점 기준' : '기록 기준';
+      const systemPrompt = `당신은 ${label} 생성을 돕는 교육 평가 설계 AI입니다. 사용자의 요구를 구체화하고, 부족한 조건이 있으면 짧게 확인 질문을 하세요. 최종 JSON은 생성 버튼을 눌렀을 때 만들 예정이므로 지금은 대화 응답만 하세요.`;
+      const prompt = [
+        buildDomainAiBaseContext(kind),
+        `대화 기록:\n${messagesToPrompt(nextMessages, content)}`,
+      ].filter(Boolean).join('\n\n');
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt });
+      const assistantMessage: AiChatMessage = { role: 'assistant', content: String(res.data.result || '').trim() };
+      const withAssistant = [...nextMessages, assistantMessage];
+      setDomainAiChats(prev => ({ ...prev, [kind]: withAssistant }));
+      setDomainAiFallbackPrompt(kind, messagesToPrompt(withAssistant, content));
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? ((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? String(e))
+          : String(e);
+      alert(`채팅 응답 생성 실패: ${msg}`);
+    } finally {
+      setChattingDomainAi(null);
+    }
+  };
+
+  const clearDomainAiChat = (kind: DomainAiChatKind) => {
+    setDomainAiChats(prev => ({ ...prev, [kind]: [] }));
+    setDomainAiDraft(kind, '');
+    if (kind === 'standards') setStandardsMetaPrompt('');
+    if (kind === 'scoring') setEvalMetaPrompts(prev => ({ ...prev, [-1]: '' }));
+    if (kind === 'records') setCommentsMetaPrompts(prev => ({ ...prev, [-1]: '' }));
+    setIsDirty(true);
+  };
+
   const handleGenerateSubjectDomains = async () => {
     if (!selectedSubject) return;
     const existingRows = allSubjectDomains.map(row => ({
@@ -714,35 +929,8 @@ export function useDomainController() {
     const seen = new Set<string>();
     return achievementStandards.filter(s => s.domain_name === domain && !seen.has(s.code) && seen.add(s.code));
   };
-  const updateSubjectComments = (type: string, prompt: string) => {
-    const template = getSubjectCommentsTemplate(type);
-    setCommentsItems(prev => {
-      if (prev.find(i => i.type === type)) {
-        return prev.map(i => i.type === type ? { ...i, prompt } : i);
-      }
-      return [...prev, { type, title: template.label, prompt, extensions: '', sort_order: template.sortOrder }];
-    });
-    setIsDirty(true);
-  };
-  const updateSubjectCommentsMetaPrompt = (type: string, metaPrompt: string) => {
-    const template = getSubjectCommentsTemplate(type);
-    setCommentsItems(prev => {
-      if (prev.find(i => i.type === type)) {
-        return prev.map(i => {
-          if (i.type !== type) return i;
-          let extensions = {};
-          try { extensions = JSON.parse(i.extensions || '{}'); } catch { /* ignore */ }
-          return { ...i, extensions: JSON.stringify({ ...extensions, metaPrompt }) };
-        });
-      }
-      return [...prev, {
-        type,
-        title: template.label,
-        prompt: '',
-        extensions: JSON.stringify({ metaPrompt }),
-        sort_order: template.sortOrder,
-      }];
-    });
+  const updateSubjectCommentsPrompt = (prompt: string) => {
+    setSubjectCommentsPrompt(prompt);
     setIsDirty(true);
   };
 
@@ -775,7 +963,8 @@ export function useDomainController() {
         `{"code":"${s.code}","domain":"${s.domain_name}","content":${JSON.stringify(s.content)}}`
       ).join('\n');
       const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
-      const extra = standardsMetaPrompt.trim() ? `\n추가 요청: ${standardsMetaPrompt.trim()}` : '\n위 과목과 영역에 가장 관련성 높은 성취기준을 2~4개 선택해주세요.';
+      const chatContext = messagesToPrompt(domainAiChats.standards, standardsMetaPrompt);
+      const extra = chatContext.trim() ? `\n대화 맥락 및 추가 요청:\n${chatContext.trim()}` : '\n위 과목과 영역에 가장 관련성 높은 성취기준을 2~4개 선택해주세요.';
       return `${base}${extra}\n\n사용 가능한 성취기준 목록:\n${stdList}`;
       })(),
       emptyMessage: '선택된 성취기준이 없습니다. 다시 시도해보세요.',
@@ -794,17 +983,59 @@ export function useDomainController() {
     });
   };
 
-  const handleGenerateCommon = async (type: string, metaPrompt: string) => {
-    const { label } = getSubjectCommentsTemplate(type);
+  const handleSubjectCommentsChatSend = async () => {
+    const content = subjectCommentsDraft.trim();
+    if (!content || !selectedSubject) return;
+    const nextMessages: AiChatMessage[] = [...subjectCommentsChat, { role: 'user', content }];
+    setSubjectCommentsChat(nextMessages);
+    setSubjectCommentsDraft('');
+    setChattingSubjectComments(true);
+    setIsDirty(true);
+    try {
+      const prompt = [
+        `과목: ${selectedSubject.subject}`,
+        subjectCommentsPrompt.trim() ? `현재 세특 기준:\n${subjectCommentsPrompt.trim()}` : '',
+        `대화 기록:\n${messagesToPrompt(nextMessages, content)}`,
+      ].filter(Boolean).join('\n\n');
+      const systemPrompt = '당신은 과목 세특 작성 기준 설계를 돕는 교육 AI입니다. 사용자의 요구를 구체화하고, 부족한 조건이 있으면 짧게 확인 질문을 하세요. 최종 기준은 생성 버튼을 눌렀을 때 만들 예정이므로 지금은 대화 응답만 하세요.';
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt });
+      setSubjectCommentsChat(messages => [
+        ...messages,
+        { role: 'assistant', content: String(res.data.result || '').trim() },
+      ]);
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'response' in e
+          ? ((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? String(e))
+          : String(e);
+      alert(`채팅 응답 생성 실패: ${msg}`);
+    } finally {
+      setChattingSubjectComments(false);
+    }
+  };
+
+  const clearSubjectCommentsChat = () => {
+    setSubjectCommentsChat([]);
+    setSubjectCommentsDraft('');
+    setIsDirty(true);
+  };
+
+  const handleGenerateSubjectComments = async () => {
+    if (!selectedSubject) return;
     await runAiAction({
-      title: `${label} 생성 중`,
-      errorMessage: '기준 생성에 실패했습니다.',
+      title: '세특 기준 생성 중',
+      errorMessage: '세특 기준 생성에 실패했습니다.',
+      setLoading: setGeneratingSubjectComments,
     }, async ({ signal }) => {
-      const systemPrompt = `당신은 ${label} 생성 AI입니다. 주어진 과목/조건에 맞게 AI 기록 작성 지시 프롬프트를 작성하세요. 부가적인 설명 없이 생성된 프롬프트 내용만 반환하세요.`;
-      const base = `과목: ${selectedSubject?.subject}\n기준 유형: ${label}`;
-      const extra = metaPrompt.trim() ? `\n추가 요청: ${metaPrompt.trim()}` : '';
-      const res = await aiApi.generatePrompt({ prompt: base + extra, systemPrompt }, signal);
-      updateSubjectComments(type, res.data.result.trim());
+      const systemPrompt = '당신은 과목 세특 작성 기준 생성 AI입니다. 과목과 대화 내용을 바탕으로 학생별 세특을 작성할 때 적용할 하나의 통합 지시 프롬프트를 작성하세요. 개별 항목이나 번호 목록으로 나누지 말고, 부가 설명 없이 기준 내용만 반환하세요.';
+      const prompt = [
+        `과목: ${selectedSubject.subject}`,
+        subjectCommentsPrompt.trim() ? `현재 세특 기준:\n${subjectCommentsPrompt.trim()}` : '',
+        subjectCommentsChat.length > 0 ? `대화 기록:\n${messagesToPrompt(subjectCommentsChat, '')}` : '',
+        subjectCommentsChat.length === 0 ? '학생의 과목 활동 전체를 종합하여 구체적이고 근거 중심으로 작성할 수 있는 세특 기준을 생성해주세요.' : '',
+      ].filter(Boolean).join('\n\n');
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
+      updateSubjectCommentsPrompt(res.data.result.trim());
     });
   };
 
@@ -812,12 +1043,9 @@ export function useDomainController() {
   const buildStandardsContext = () =>
     standardRefs.filter(r => r.content).map(r => `[${r.code}] ${r.content}`).join('\n');
 
-  // 세특 공통 기준 + 채점 기준 컨텍스트 빌더
+  // 채점 기준 컨텍스트 빌더
   const buildActivityContext = () => {
     const parts: string[] = [];
-    if (subjectCommonPrompt.trim()) {
-      parts.push(`세특 공통 기준:\n${subjectCommonPrompt.trim()}`);
-    }
     const formulaRubric = evalItems.find(i => i.item_type === 'formula')?.rubric?.trim();
     const itemRubrics = evalItems
       .filter(i => i.item_type === 'llm' && (i.name || i.rubric))
@@ -832,7 +1060,7 @@ export function useDomainController() {
     return parts.join('\n\n');
   };
 
-  // 채점 항목 목록 AI 생성 (상단 버튼)
+  // 채점 항목 목록 AI 생성
   const handleGenerateEvalItems = async () => {
     const formulaItem = evalItems.find(i => i.item_type === 'formula');
     const stdCtx = buildStandardsContext();
@@ -840,20 +1068,30 @@ export function useDomainController() {
     const stdPart = stdCtx ? `\n\n성취 기준:\n${stdCtx}` : '';
     const maxScore = currentMaxScore > 0 ? `${currentMaxScore}점` : '미설정';
     const baseScore = formulaItem ? `${formulaItem.score}점` : '0점';
-    const extra = evalMetaPrompts[-1]?.trim() ? `\n추가 요청: ${evalMetaPrompts[-1]}` : '';
+    const chatContext = messagesToPrompt(domainAiChats.scoring, evalMetaPrompts[-1] || '');
+    const extra = chatContext.trim() ? `\n\n대화 맥락 및 추가 요청:\n${chatContext.trim()}` : '';
     await runAiJsonArrayGeneration<any>({
       title: '채점 항목 생성 중',
       errorMessage: '생성 실패',
       setLoading: setGeneratingEval,
-      systemPrompt: `당신은 채점 기준 생성 AI입니다. 과목·영역·성취기준을 참고하여 채점 항목 목록(이름, 배점, 루브릭)을 JSON 배열로 생성하세요. 배점 합계는 만점에서 기본점수를 뺀 값이어야 합니다. 반드시 아래 형식만 반환하세요: [{"name":"항목명","score":"배점","rubric":"루브릭 내용"}]`,
+      systemPrompt: `당신은 채점 기준 생성 AI입니다. 과목·영역·성취기준을 참고하여 공통 채점 기준 1개와 항목별 채점 기준을 JSON 배열로 생성하세요. 반환값은 JSON 배열만 작성하세요. 첫 원소는 {"type":"common","title":"공통","score":"기본점수","rubric":"공통 채점 기준 내용"} 형식입니다. 이후 원소는 {"type":"item","title":"항목명","score":"배점","rubric":"항목별 채점 기준 내용"} 형식입니다. item 배점 합계는 만점에서 기본점수를 뺀 값이어야 합니다.`,
       prompt: `${base}\n만점: ${maxScore}, 기본점수: ${baseScore}${stdPart}${extra}`,
       onGenerated: (newItems) => {
       setEvalItems(prev => {
         const fItems = prev.filter(i => i.item_type === 'formula');
-        return [...fItems, ...newItems.map((item: any, j: number) => ({
-          name: item.name || '',
+        const generatedCommon = newItems.find((item: any) => item?.type === 'common');
+        const common = fItems[0] || { name: '공통', score: '0', item_type: 'formula' as const, rubric: '', sort_order: -1 };
+        const nextCommon = {
+          ...common,
+          name: '공통',
+          score: String(generatedCommon?.score ?? common.score ?? '0'),
+          rubric: String(generatedCommon?.rubric ?? generatedCommon?.content ?? common.rubric ?? ''),
+        };
+        const itemRows = newItems.filter((item: any) => item?.type !== 'common');
+        return [nextCommon, ...itemRows.map((item: any, j: number) => ({
+          name: item.title || item.name || '',
           score: String(item.score ?? '2'),
-          rubric: item.rubric || '',
+          rubric: item.rubric || item.content || '',
           item_type: 'llm' as const,
           sort_order: j,
         }))];
@@ -892,28 +1130,39 @@ export function useDomainController() {
     });
   };
 
-  // 활동 기록 항목 목록 AI 생성 (상단 버튼)
+  // 활동 기록 항목 목록 AI 생성
   const handleGenerateCommentsItems = async () => {
     const stdCtx = buildStandardsContext();
     const actCtx = buildActivityContext();
     const base = `과목: ${selectedSubject?.subject}\n영역: ${selectedDomain}`;
     const stdPart = stdCtx ? `\n\n성취 기준:\n${stdCtx}` : '';
     const actPart = actCtx ? `\n\n${actCtx}` : '';
-    const extra = commentsMetaPrompts[-1]?.trim() ? `\n\n추가 요청: ${commentsMetaPrompts[-1]}` : '';
+    const chatContext = messagesToPrompt(domainAiChats.records, commentsMetaPrompts[-1] || '');
+    const extra = chatContext.trim() ? `\n\n대화 맥락 및 추가 요청:\n${chatContext.trim()}` : '';
     await runAiJsonArrayGeneration<any>({
       title: '기록 기준 항목 생성 중',
       errorMessage: '생성 실패',
       setLoading: setGeneratingComments,
-      systemPrompt: `당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준을 참고하여 활동 기록 항목 목록(제목, 기록 작성 지시사항)을 JSON 배열로 생성하세요. 반드시 아래 형식만 반환하세요: [{"title":"항목명","prompt":"기록 작성 지시사항"}]`,
+      systemPrompt: `당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준을 참고하여 공통 기록 기준 1개와 항목별 기록 기준을 JSON 배열로 생성하세요. 반환값은 JSON 배열만 작성하세요. 첫 원소는 {"type":"common","title":"공통","prompt":"공통 기록 기준 내용"} 형식입니다. 이후 원소는 {"type":"item","title":"기준항목 제목","prompt":"항목별 기록 기준 내용"} 형식입니다.`,
       prompt: `${base}${stdPart}${actPart}${extra}`,
       onGenerated: (newItems) => {
-      setCommentsItems(newItems.map((item: any, j: number) => ({
-        title: item.title || '',
-        prompt: item.prompt || '',
-        type: '항목',
-        extensions: '',
-        sort_order: j,
-      })));
+      const generatedCommon = newItems.find((item: any) => item?.type === 'common');
+      const common = {
+        ...createDefaultCommentsCommonItem(),
+        title: '공통',
+        prompt: generatedCommon?.prompt || generatedCommon?.content || '',
+      };
+      const itemRows = newItems.filter((item: any) => item?.type !== 'common');
+      setCommentsItems([
+        common,
+        ...itemRows.map((item: any, j: number) => ({
+          title: item.title || '',
+          prompt: item.prompt || item.content || '',
+          type: '항목',
+          extensions: '',
+          sort_order: j,
+        })),
+      ]);
       },
     });
   };
@@ -1006,6 +1255,12 @@ export function useDomainController() {
     achievementStandards,
     standardsMetaPrompt,
     setStandardsMetaPrompt,
+    domainAiChats,
+    domainAiDrafts,
+    chattingDomainAi,
+    setDomainAiDraft,
+    handleDomainAiChatSend,
+    clearDomainAiChat,
     generatingStandards,
     handleGenerateStandards,
     addStandardRef,
@@ -1041,9 +1296,16 @@ export function useDomainController() {
     setCommentsChecked,
     updateCommentsItem,
     removeCommentsItem,
-    handleGenerateCommon,
-    updateSubjectCommentsMetaPrompt,
-    updateSubjectComments,
+    subjectCommentsPrompt,
+    updateSubjectCommentsPrompt,
+    subjectCommentsChat,
+    subjectCommentsDraft,
+    setSubjectCommentsDraft,
+    chattingSubjectComments,
+    generatingSubjectComments,
+    handleSubjectCommentsChatSend,
+    handleGenerateSubjectComments,
+    clearSubjectCommentsChat,
     assignmentConfig,
     assignmentResources,
     assignmentClasses,

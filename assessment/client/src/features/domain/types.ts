@@ -87,3 +87,8 @@ export interface AiPromptRow {
   prompt_key: string;
   prompt: string;
 }
+
+export interface AiChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}

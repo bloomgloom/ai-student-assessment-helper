@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Save, TestTube, CheckCircle, XCircle, Loader2, RefreshCw, Trash2, AlertTriangle, Eye, EyeOff, Download, Upload } from 'lucide-react';
-import { DEFAULT_MODELS, DEFAULT_URLS, PROVIDERS } from './constants';
+import { DEFAULT_MODELS, DEFAULT_URLS, PROVIDERS, TEMPERATURE_TASKS } from './constants';
 import { useSettingsController } from './useSettingsController';
 import { SettingsTab } from './types';
 import { hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
@@ -41,6 +41,10 @@ export function SettingsContent({
   isOpenAICompatible,
   needsKey,
   needsUrl,
+  temperatureMax,
+  temperatureSupported,
+  handleTemperatureChange,
+  handleTemperatureEnabledChange,
 }: SettingsContentProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [teacherPassword, setTeacherPassword] = useState('');
@@ -48,6 +52,7 @@ export function SettingsContent({
   const [savingTeacherPassword, setSavingTeacherPassword] = useState(false);
   const aiDisabled = !settings.aiEnabled;
   const disabledPanelClass = aiDisabled ? 'opacity-45 grayscale select-none' : '';
+  const temperatureControlsDisabled = aiDisabled || !settings.temperatureEnabled || !temperatureSupported;
 
   return (
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable">
@@ -222,72 +227,57 @@ export function SettingsContent({
         <div>
           <label className="label">모델</label>
 
-          {isOpenAICompatible ? (
-            <div className="space-y-2">
-              <div className="flex gap-2">
-                {compatibleModels.length > 0 ? (
-                  <select
-                    className="select flex-1"
-                    disabled={aiDisabled}
-                    value={settings.model}
-                    onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
-                  >
-                    <option value="">모델을 선택하세요</option>
-                    {compatibleModels.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    className="input flex-1"
-                    disabled={aiDisabled}
-                    placeholder="모델명 직접 입력"
-                    value={settings.model}
-                    onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
-                  />
-                )}
-                <button
-                  className="btn-secondary shrink-0"
-                  onClick={handleFetchCompatibleModels}
-                  disabled={fetchingModels || aiDisabled}
-                  title="OpenAI 호환 서버에서 모델 목록 가져오기"
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              {compatibleModels.length > 0 ? (
+                <select
+                  className="select flex-1"
+                  disabled={aiDisabled}
+                  value={settings.model}
+                  onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
                 >
-                  {fetchingModels
-                    ? <Loader2 size={14} className="animate-spin" />
-                    : <RefreshCw size={14} />}
-                  {fetchingModels ? '조회 중...' : '모델 가져오기'}
-                </button>
-              </div>
-              {modelFetchError && (
-                <p className="text-xs text-red-600 flex items-center gap-1">
-                  <XCircle size={12} /> {modelFetchError}
-                </p>
+                  <option value="">모델을 선택하세요</option>
+                  {compatibleModels.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  className="input flex-1"
+                  disabled={aiDisabled}
+                  placeholder={DEFAULT_MODELS[settings.provider] || '모델명 직접 입력'}
+                  value={settings.model}
+                  onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
+                />
               )}
-              {compatibleModels.length > 0 && (
-                <p className="text-xs text-green-600">
-                  {compatibleModels.length}개 모델 로드됨
-                </p>
-              )}
+              <button
+                className="btn-secondary shrink-0"
+                onClick={handleFetchCompatibleModels}
+                disabled={fetchingModels || aiDisabled}
+                title="현재 공급자에서 사용 가능한 모델 목록 가져오기"
+              >
+                {fetchingModels
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <RefreshCw size={14} />}
+                {fetchingModels ? '조회 중...' : '모델 가져오기'}
+              </button>
             </div>
-          ) : (
-            /* 그 외 공급자: 텍스트 입력 */
-            <>
-              <input
-                type="text"
-                className="input"
-                disabled={aiDisabled}
-                placeholder={DEFAULT_MODELS[settings.provider] || '모델명 입력'}
-                value={settings.model}
-                onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
-              />
-              {DEFAULT_MODELS[settings.provider] && (
-                <p className="text-xs text-gray-400 mt-1">
-                  비워두면 기본값({DEFAULT_MODELS[settings.provider]})이 사용됩니다.
-                </p>
-              )}
-            </>
-          )}
+            {modelFetchError && (
+              <p className="text-xs text-red-600 flex items-center gap-1">
+                <XCircle size={12} /> {modelFetchError}
+              </p>
+            )}
+            {compatibleModels.length > 0 ? (
+              <p className="text-xs text-green-600">
+                {compatibleModels.length}개 모델 로드됨
+              </p>
+            ) : DEFAULT_MODELS[settings.provider] ? (
+              <p className="text-xs text-gray-400">
+                비워두면 기본값({DEFAULT_MODELS[settings.provider]})이 사용됩니다.
+              </p>
+            ) : null}
+          </div>
         </div>
 
         {/* 최대 동시 요청 수 */}
@@ -307,6 +297,65 @@ export function SettingsContent({
           <p className="text-xs text-gray-400 mt-1">
             1이면 순차 처리, 2 이상이면 병렬 처리합니다. 로컬 LLM은 1~3 권장.
           </p>
+        </div>
+
+        {/* Temperature */}
+        <div className="space-y-3">
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <label className="label mb-0">Temperature</label>
+              <label className={`flex items-center gap-2 text-xs ${aiDisabled || !temperatureSupported ? 'text-gray-400' : 'text-gray-700 cursor-pointer'}`}>
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 rounded"
+                  checked={settings.temperatureEnabled && temperatureSupported}
+                  disabled={aiDisabled || !temperatureSupported}
+                  onChange={(e) => handleTemperatureEnabledChange(e.target.checked)}
+                />
+                사용
+              </label>
+            </div>
+            <p className="text-xs text-gray-400">
+              낮을수록 일관성이 높고, 높을수록 표현이 다양해집니다. Claude는 0~1.0, 나머지는 0~2.0 범위입니다.
+            </p>
+            {!temperatureSupported && (
+              <p className="text-xs text-amber-600 mt-1">
+                선택한 모델은 temperature 설정을 지원하지 않는 것으로 처리되어 요청에 temperature를 보내지 않습니다.
+              </p>
+            )}
+          </div>
+          <div className="space-y-4">
+            {TEMPERATURE_TASKS.map((task) => (
+              <div key={task.key} className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-xs font-medium text-gray-600" htmlFor={`temperature-${task.key}`}>
+                    {task.label}
+                  </label>
+                  <input
+                    type="number"
+                    className="input h-8 w-20 text-right text-xs"
+                    min={0}
+                    max={temperatureMax}
+                    step={0.1}
+                    value={settings.temperatures[task.key]}
+                    disabled={temperatureControlsDisabled}
+                    onChange={(e) => handleTemperatureChange(task.key, Number(e.target.value))}
+                  />
+                </div>
+                <input
+                  id={`temperature-${task.key}`}
+                  type="range"
+                  className="w-full accent-gray-800"
+                  min={0}
+                  max={temperatureMax}
+                  step={0.1}
+                  value={settings.temperatures[task.key]}
+                  disabled={temperatureControlsDisabled}
+                  onChange={(e) => handleTemperatureChange(task.key, Number(e.target.value))}
+                />
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* 저장 / 테스트 */}
