@@ -49,6 +49,10 @@ let activeController: AbortController | null = null;
 let clearTimer: number | null = null;
 let unloadListenerAttached = false;
 
+function displayDomainName(domain: string) {
+  return domain === '__SUBJECT_COMPREHENSIVE__' ? '세특' : domain;
+}
+
 function newJobId() {
   return `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -86,7 +90,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
         completed: 0,
         total: domains.length * studentIds.length,
         errorCount: 0,
-        message: `[${domains[0]}] 준비 중...`,
+        message: `[${displayDomainName(domains[0])}] 준비 중...`,
         status: 'running',
         startedAt: Date.now(),
       },
@@ -99,12 +103,13 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
       await startDisplaySleepPrevention();
       for (const domain of domains) {
         if (jobController.signal.aborted) break;
+        const domainLabel = displayDomainName(domain);
         const domainStartCompleted = aggregateCompleted;
         set((state) => state.currentJob?.id === jobId ? {
           currentJob: {
             ...state.currentJob,
             completed: aggregateCompleted,
-            message: `[${domain}] 준비 중...`,
+            message: `[${domainLabel}] 준비 중...`,
           },
         } : {});
 
@@ -173,8 +178,8 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
                         completed: aggregateCompleted,
                         errorCount: aggregateErrors,
                         message: event.type === 'error'
-                          ? `[${domain}] ${event.name || '학생'} 오류: ${event.error || '생성 실패'}`
-                          : `[${domain}] ${event.name} 완료`,
+                          ? `[${domainLabel}] ${event.name || '학생'} 오류: ${event.error || '생성 실패'}`
+                          : `[${domainLabel}] ${event.name} 완료`,
                       },
                     };
                   });
@@ -186,8 +191,8 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
                       completed: aggregateCompleted,
                       errorCount: aggregateErrors,
                       message: aggregateErrors > 0
-                        ? `[${domain}] 완료, 오류 ${aggregateErrors}건`
-                        : `[${domain}] 완료`,
+                        ? `[${domainLabel}] 완료, 오류 ${aggregateErrors}건`
+                        : `[${domainLabel}] 완료`,
                     },
                   } : {});
                 } else if (event.type === 'fatal') {

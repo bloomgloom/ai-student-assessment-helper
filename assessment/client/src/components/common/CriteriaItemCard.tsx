@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { DragEvent, ReactNode } from 'react';
 import { GripVertical, Trash2 } from 'lucide-react';
 
 interface CriteriaItemCardProps {
@@ -23,6 +23,12 @@ interface CriteriaItemCardProps {
   instructionDisabled?: boolean;
   showCheckbox?: boolean;
   showInstruction?: boolean;
+  dragActive?: boolean;
+  dragOver?: boolean;
+  onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: () => void;
+  onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
+  onDrop?: (event: DragEvent<HTMLDivElement>) => void;
 }
 
 export function CriteriaItemCard({
@@ -47,9 +53,27 @@ export function CriteriaItemCard({
   instructionDisabled,
   showCheckbox = true,
   showInstruction = true,
+  dragActive,
+  dragOver,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
 }: CriteriaItemCardProps) {
   return (
-    <div className={`bg-white border rounded-lg p-4 shadow-sm ${checked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-gray-200'}`}>
+    <div
+      className={`bg-white border rounded-lg p-4 shadow-sm transition-all ${
+        dragActive
+          ? 'border-blue-300 opacity-50'
+          : dragOver
+            ? 'border-blue-500 ring-2 ring-blue-200'
+            : checked
+              ? 'border-blue-400 ring-1 ring-blue-200'
+              : 'border-gray-200'
+      }`}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
       <div className="flex gap-3 items-center mb-3">
         {showCheckbox && (
           <input
@@ -59,7 +83,17 @@ export function CriteriaItemCard({
             onChange={e => onCheckedChange(e.target.checked)}
           />
         )}
-        {draggable && <GripVertical size={16} className="text-gray-300 cursor-grab shrink-0" />}
+        {draggable && (
+          <div
+            className="shrink-0 cursor-grab rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-500 active:cursor-grabbing"
+            draggable
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            title="드래그하여 순서 변경"
+          >
+            <GripVertical size={16} />
+          </div>
+        )}
         <input
           className="input flex-1 text-sm font-medium"
           placeholder={titlePlaceholder}

@@ -1,4 +1,4 @@
-import { Dispatch, lazy, ReactNode, RefObject, SetStateAction, Suspense, useEffect, useState } from 'react';
+import { Dispatch, DragEvent, lazy, ReactNode, RefObject, SetStateAction, Suspense, useEffect, useState } from 'react';
 import MarkdownIt from 'markdown-it';
 import { AlertCircle, ClipboardCheck, Download, Edit3, Eye, FileText, Loader2, Plus, Save, Trash2, Upload, X } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
@@ -67,6 +67,7 @@ interface DomainContentProps {
   evalChecked: Set<number>;
   setEvalChecked: Dispatch<SetStateAction<Set<number>>>;
   removeEvalItem: (idx: number) => void;
+  moveEvalItem: (from: number, to: number) => void;
   commentsMetaPrompts: Record<number, string>;
   setCommentsMetaPrompts: Dispatch<SetStateAction<Record<number, string>>>;
   handleGenerateCommentsItems: () => void;
@@ -78,6 +79,7 @@ interface DomainContentProps {
   setCommentsChecked: Dispatch<SetStateAction<Set<number>>>;
   updateCommentsItem: (idx: number, field: keyof CommentsItem, value: string) => void;
   removeCommentsItem: (idx: number) => void;
+  moveCommentsItem: (from: number, to: number) => void;
   subjectCommentsPrompt: string;
   updateSubjectCommentsPrompt: (prompt: string) => void;
   subjectCommentsChat: AiChatMessage[];
@@ -258,6 +260,7 @@ export function DomainContent({
   evalChecked,
   setEvalChecked,
   removeEvalItem,
+  moveEvalItem,
   commentsMetaPrompts,
   setCommentsMetaPrompts,
   handleGenerateCommentsItems,
@@ -269,6 +272,7 @@ export function DomainContent({
   setCommentsChecked,
   updateCommentsItem,
   removeCommentsItem,
+  moveCommentsItem,
   subjectCommentsPrompt,
   updateSubjectCommentsPrompt,
   subjectCommentsChat,
@@ -300,6 +304,28 @@ export function DomainContent({
   const [resourceCodeContent, setResourceCodeContent] = useState('');
   const [resourceCodeLoading, setResourceCodeLoading] = useState(false);
   const [resourcePdfPages, setResourcePdfPages] = useState(0);
+  const [draggedItem, setDraggedItem] = useState<{ kind: 'scoring' | 'records'; index: number } | null>(null);
+  const [dragOverItem, setDragOverItem] = useState<{ kind: 'scoring' | 'records'; index: number } | null>(null);
+
+  const startItemDrag = (kind: 'scoring' | 'records', index: number, event: DragEvent<HTMLDivElement>) => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', `${kind}:${index}`);
+    setDraggedItem({ kind, index });
+    setDragOverItem({ kind, index });
+  };
+
+  const finishItemDrag = () => {
+    setDraggedItem(null);
+    setDragOverItem(null);
+  };
+
+  const dropItem = (kind: 'scoring' | 'records', index: number, event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (!draggedItem || draggedItem.kind !== kind) return finishItemDrag();
+    if (kind === 'scoring') moveEvalItem(draggedItem.index, index);
+    else moveCommentsItem(draggedItem.index, index);
+    finishItemDrag();
+  };
 
   useEffect(() => {
     if (!viewingResource) return;
@@ -639,6 +665,17 @@ export function DomainContent({
                     instruction={evalMetaPrompts[idx] || ''}
                     result={item.rubric}
                     score={item.score}
+                    draggable
+                    dragActive={draggedItem?.kind === 'scoring' && draggedItem.index === idx}
+                    dragOver={dragOverItem?.kind === 'scoring' && dragOverItem.index === idx && draggedItem?.index !== idx}
+                    onDragStart={(event) => startItemDrag('scoring', idx, event)}
+                    onDragEnd={finishItemDrag}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                      setDragOverItem({ kind: 'scoring', index: idx });
+                    }}
+                    onDrop={(event) => dropItem('scoring', idx, event)}
                     titlePlaceholder="채점 항목명 (예: 코드 완성도)"
                     instructionPlaceholder="채점 기준 내용 생성을 위한 지시사항을 입력하세요. (예: 코드 완성도 기준으로 4단계로 나눠줘)"
                     resultPlaceholder="루브릭 내용 (예: A(10점): 코드가 완벽히 동작하고 예외 처리가 됨, B(8점): ...)"
@@ -720,6 +757,16 @@ export function DomainContent({
                     instruction={commentsMetaPrompts[idx] || ''}
                     result={item.prompt}
                     draggable
+                    dragActive={draggedItem?.kind === 'records' && draggedItem.index === idx}
+                    dragOver={dragOverItem?.kind === 'records' && dragOverItem.index === idx && draggedItem?.index !== idx}
+                    onDragStart={(event) => startItemDrag('records', idx, event)}
+                    onDragEnd={finishItemDrag}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                      setDragOverItem({ kind: 'records', index: idx });
+                    }}
+                    onDrop={(event) => dropItem('records', idx, event)}
                     titlePlaceholder="항목 이름 (예: 자료수집 및 분석)"
                     instructionPlaceholder="기록 기준 내용 생성을 위한 지시사항을 입력하세요. (예: 학생의 탐구 과정 중심으로 작성 기준 생성)"
                     resultPlaceholder="이 항목의 기록 작성 기준 (예: 학생이 제출한 산출물을 분석하여 성취수준을 평가하고...)"

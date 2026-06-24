@@ -706,6 +706,44 @@ export function useDomainController() {
     setIsDirty(true);
   };
 
+  const moveIndexedState = <T,>(
+    values: Record<number, T>,
+    from: number,
+    to: number,
+    length: number,
+  ) => {
+    const order = Array.from({ length }, (_, index) => index);
+    const [moved] = order.splice(from, 1);
+    order.splice(to, 0, moved);
+    return Object.fromEntries(
+      order.flatMap((oldIndex, newIndex) =>
+        values[oldIndex] === undefined ? [] : [[newIndex, values[oldIndex]]]
+      )
+    ) as Record<number, T>;
+  };
+
+  const moveCheckedState = (values: Set<number>, from: number, to: number, length: number) => {
+    const order = Array.from({ length }, (_, index) => index);
+    const [moved] = order.splice(from, 1);
+    order.splice(to, 0, moved);
+    const oldToNew = new Map(order.map((oldIndex, newIndex) => [oldIndex, newIndex]));
+    return new Set([...values].map(index => oldToNew.get(index)).filter((index): index is number => index !== undefined));
+  };
+
+  const moveCommentsItem = (from: number, to: number) => {
+    if (from === to) return;
+    const length = commentsItems.length;
+    setCommentsItems(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+    setCommentsMetaPrompts(values => moveIndexedState(values, from, to, length));
+    setCommentsChecked(values => moveCheckedState(values, from, to, length));
+    setIsDirty(true);
+  };
+
   const runAiJsonArrayGeneration = async <T,>({
     title,
     errorMessage,
@@ -944,6 +982,20 @@ export function useDomainController() {
   };
   const removeEvalItem = (idx: number) => {
     setEvalItems(p => p.filter((item, i) => i !== idx || item.item_type === 'formula'));
+    setIsDirty(true);
+  };
+  const moveEvalItem = (from: number, to: number) => {
+    if (from === to) return;
+    if (evalItems[from]?.item_type === 'formula' || evalItems[to]?.item_type === 'formula') return;
+    const length = evalItems.length;
+    setEvalItems(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+    setEvalMetaPrompts(values => moveIndexedState(values, from, to, length));
+    setEvalChecked(values => moveCheckedState(values, from, to, length));
     setIsDirty(true);
   };
 
@@ -1285,6 +1337,7 @@ export function useDomainController() {
     evalChecked,
     setEvalChecked,
     removeEvalItem,
+    moveEvalItem,
     commentsMetaPrompts,
     setCommentsMetaPrompts,
     handleGenerateCommentsItems,
@@ -1296,6 +1349,7 @@ export function useDomainController() {
     setCommentsChecked,
     updateCommentsItem,
     removeCommentsItem,
+    moveCommentsItem,
     subjectCommentsPrompt,
     updateSubjectCommentsPrompt,
     subjectCommentsChat,
