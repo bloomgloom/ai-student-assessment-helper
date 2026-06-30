@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { artifactsApi } from '../lib/api';
 import { assignmentConfigsApi } from '../lib/api';
-import { filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../lib/desktopFiles';
+import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../lib/desktopFiles';
 import { Upload, X, Loader2, Eye, File, Download } from 'lucide-react';
 
 const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
@@ -132,6 +132,14 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
     }
   };
 
+  const handleDownload = async (artifact: Artifact) => {
+    try {
+      await downloadUrl(artifactFileUrl(artifact), artifact.filename);
+    } catch (error: any) {
+      alert(error?.message || '파일 다운로드에 실패했습니다.');
+    }
+  };
+
   return (
     <div className="flex flex-wrap gap-1.5 items-center justify-center">
       {/* 파일 배지 */}
@@ -196,9 +204,9 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
                 <a href={artifactViewerUrl(viewing)} target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs py-1">
                   <Eye size={13} /> 새 탭
                 </a>
-                <a href={artifactFileUrl(viewing)} download={viewing.filename} className="btn-secondary text-xs py-1">
+                <button type="button" onClick={() => handleDownload(viewing)} className="btn-secondary text-xs py-1">
                   <Download size={13} /> 다운로드
-                </a>
+                </button>
                 <button className="btn-secondary text-xs py-1" onClick={() => setViewing(null)}>
                   <X size={13} /> 닫기
                 </button>
@@ -251,9 +259,13 @@ export function ArtifactStandalonePage() {
     <div className="h-screen flex flex-col bg-white">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
         <span className="font-medium text-sm text-gray-800 truncate">{artifact.filename}</span>
-        <a href={artifactsApi.fileUrl(artifact.id)} download={artifact.filename} className="btn-secondary text-xs py-1">
+        <button
+          type="button"
+          onClick={() => downloadUrl(artifactsApi.fileUrl(artifact.id), artifact.filename).catch((error) => alert(error.message))}
+          className="btn-secondary text-xs py-1"
+        >
           <Download size={13} /> 다운로드
-        </a>
+        </button>
       </div>
       <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 size={24} className="animate-spin text-gray-400" /></div>}>
         <ArtifactPreviewContent

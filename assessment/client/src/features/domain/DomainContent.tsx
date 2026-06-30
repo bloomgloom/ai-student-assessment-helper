@@ -4,7 +4,7 @@ import { AlertCircle, ClipboardCheck, Download, Edit3, Eye, FileText, Loader2, P
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { assignmentConfigsApi } from '../../lib/api';
-import { filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
+import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
 import { DomainCriteriaPanel, DomainCriteriaPromptView } from './DomainCriteriaPanel';
 import { AiChatMessage, AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
 
@@ -929,14 +929,17 @@ export function DomainContent({
                           >
                             <Eye size={13} />
                           </button>
-                          <a
+                          <button
+                            type="button"
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                            href={assignmentConfigsApi.resourceFileUrl(resource.id)}
-                            download={resource.filename}
+                            onClick={() => downloadUrl(
+                              assignmentConfigsApi.resourceFileUrl(resource.id),
+                              resource.filename,
+                            ).catch((error) => alert(error.message))}
                             title="다운로드"
                           >
                             <Download size={13} />
-                          </a>
+                          </button>
                           <button
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white text-red-500 hover:bg-red-50"
                             onClick={() => deleteAssignmentResource(resource.id)}
@@ -963,13 +966,16 @@ export function DomainContent({
                     <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
                       <div className="font-medium text-sm text-gray-800 truncate max-w-[60%]">{viewingResource.filename}</div>
                       <div className="flex gap-2 shrink-0">
-                        <a
-                          href={assignmentConfigsApi.resourceFileUrl(viewingResource.id)}
-                          download={viewingResource.filename}
+                        <button
+                          type="button"
+                          onClick={() => downloadUrl(
+                            assignmentConfigsApi.resourceFileUrl(viewingResource.id),
+                            viewingResource.filename,
+                          ).catch((error) => alert(error.message))}
                           className="btn-secondary text-xs py-1 inline-flex items-center gap-1"
                         >
                           <Download size={13} /> 다운로드
-                        </a>
+                        </button>
                         <button className="btn-secondary text-xs py-1 inline-flex items-center gap-1" onClick={() => setViewingResource(null)}>
                           <X size={13} /> 닫기
                         </button>

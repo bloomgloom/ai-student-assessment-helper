@@ -18,6 +18,37 @@ export async function saveBlob(filename: string, blob: Blob) {
   URL.revokeObjectURL(url);
 }
 
+function filenameFromDisposition(disposition: string, fallback: string) {
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+  return plainMatch?.[1] || fallback;
+}
+
+export async function downloadUrl(url: string, fallbackFilename: string) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    let message = `다운로드에 실패했습니다. (${response.status})`;
+    try {
+      const data = await response.json();
+      if (data?.error) message = data.error;
+    } catch {}
+    throw new Error(message);
+  }
+
+  const filename = filenameFromDisposition(
+    response.headers.get('Content-Disposition') || '',
+    fallbackFilename,
+  );
+  await saveBlob(filename, await response.blob());
+}
+
 export async function openFiles(options?: DesktopOpenFilesOptions): Promise<File[] | null> {
   if (!window.assessmentDesktop?.openFiles) return null;
   const result = await window.assessmentDesktop.openFiles(options);

@@ -7,6 +7,7 @@ import {
 } from '../../components/common/academicTree';
 import { AcademicTreeControllerHelpers, useAcademicTreeController } from '../../hooks/useAcademicTreeController';
 import { clearStoredSelection, saveStoredSelection, useStoredSelectionRestore } from '../../hooks/useStoredSelectionRestore';
+import { saveBlob } from '../../lib/desktopFiles';
 import {
   CRITERIA_SELECTION_KEY,
   CRITERIA_SOURCE_TYPE,
@@ -17,6 +18,12 @@ import { CriteriaStandardRow, CriteriaSubjectItem } from './types';
 
 type CriteriaTreeNode = AcademicTreeNode<CriteriaSubjectItem>;
 type StoredCriteriaSelection = Pick<CriteriaSubjectItem, 'year' | 'semester' | 'grade' | 'subject' | 'domain_name'>;
+
+function downloadFilename(disposition: string, fallback: string) {
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return utf8Match ? decodeURIComponent(utf8Match[1]) : plainMatch ? plainMatch[1] : fallback;
+}
 
 function buildCriteriaTree(items: CriteriaSubjectItem[]): CriteriaTreeNode[] {
   return buildAcademicTree(items, {
@@ -171,8 +178,32 @@ export function useCriteriaTree() {
     },
     subjectDownloadAction: {
       visible: (subject) => !!subject.has_source,
-      onDownload: (subject) => {
-        window.location.href = criteriaApi.sourceUrl(CRITERIA_SOURCE_TYPE, subject.year, subject.semester, subject.grade, subject.subject);
+      onDownload: async (subject) => {
+        try {
+          const response = await criteriaApi.downloadSource(
+            CRITERIA_SOURCE_TYPE,
+            subject.year,
+            subject.semester,
+            subject.grade,
+            subject.subject,
+          );
+          await saveBlob(
+            downloadFilename(
+              response.headers['content-disposition'] || '',
+              `${subject.year}_${subject.semester}_${subject.grade}_${subject.subject}_성취기준.xlsx`,
+            ),
+            response.data,
+          );
+        } catch (error: any) {
+          const blob = error?.response?.data;
+          let message = '성취 기준 원본 파일 다운로드에 실패했습니다.';
+          if (blob instanceof Blob && blob.type.includes('application/json')) {
+            try {
+              message = JSON.parse(await blob.text())?.error || message;
+            } catch {}
+          }
+          alert(message);
+        }
       },
     },
   });

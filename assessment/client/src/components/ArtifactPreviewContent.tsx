@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { File, Loader2 } from 'lucide-react';
 import { artifactsApi, assignmentConfigsApi } from '../lib/api';
+import { downloadUrl } from '../lib/desktopFiles';
 
 const CodeArtifactPreview = lazy(() => import('./preview/CodeArtifactPreview'));
 const MarkdownArtifactPreview = lazy(() => import('./preview/MarkdownArtifactPreview'));
@@ -102,7 +103,13 @@ export default function ArtifactPreviewContent({
         <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-500">
           <File size={48} className="text-gray-300" />
           <p>이 파일 형식은 뷰어에서 지원하지 않습니다.</p>
-          <a href={fileUrl} className="btn-primary" download={artifact.filename}>다운로드</a>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => downloadUrl(fileUrl, artifact.filename).catch((error) => alert(error.message))}
+          >
+            다운로드
+          </button>
         </div>
       )}
     </div>

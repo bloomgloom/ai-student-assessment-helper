@@ -57,6 +57,11 @@ export const criteriaApi = {
   },
   sourceUrl: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
     `/api/criteria/${kind}/source-file?year=${year}&semester=${semester}&grade=${grade}&subject=${encodeURIComponent(subject)}`,
+  downloadSource: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
+    api.get(`/criteria/${kind}/source-file`, {
+      params: { year, semester, grade, subject },
+      responseType: 'blob',
+    }),
   deleteSource: (kind: 'domains' | 'standards', year: number, semester: number, grade: number, subject: string) =>
     api.delete(`/criteria/${kind}/source-file`, { params: { year, semester, grade, subject } }),
   getStandards: (year: number, semester: number, grade: number, subject: string) =>

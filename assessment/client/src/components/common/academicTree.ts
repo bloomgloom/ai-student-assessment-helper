@@ -64,8 +64,12 @@ export function getAcademicTreeDisplayValue<TSubject>(node: AcademicTreeNode<TSu
 }
 
 function parseAcademicTreeNumber(value: string, label: string) {
+  if (!/^\d+$/.test(value)) {
+    alert(`${label}는 숫자로 입력하세요.`);
+    return null;
+  }
   const parsed = Number(value);
-  if (!parsed) {
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     alert(`${label}는 숫자로 입력하세요.`);
     return null;
   }

@@ -1,4 +1,4 @@
-import { Dispatch, SetStateAction, useMemo, useState } from 'react';
+import { Dispatch, SetStateAction, useMemo, useRef, useState } from 'react';
 import {
   AcademicTreeNode,
   createAcademicDraftNode,
@@ -78,6 +78,7 @@ export function useAcademicTreeController<TSubject>({
 }: UseAcademicTreeControllerOptions<TSubject>) {
   const [draftNodes, setDraftNodes] = useState<AcademicTreeNode<TSubject>[]>([]);
   const [editing, setEditing] = useState<EditingTreeItem | null>(null);
+  const committingRef = useRef(false);
   const visibleTree = useMemo(() => mergeAcademicDraftNodes(tree, draftNodes), [tree, draftNodes]);
 
   const removeDraftSubtree = (key: string) => {
@@ -147,18 +148,23 @@ export function useAcademicTreeController<TSubject>({
   };
 
   const commitEditing = async () => {
-    if (!editing) return;
-    const current = editing;
-    const node = findAcademicTreeNodeByKey(visibleTree, current.key);
-    if (!node) {
-      setEditing(null);
-      return;
+    if (!editing || committingRef.current) return;
+    committingRef.current = true;
+    try {
+      const current = editing;
+      const node = findAcademicTreeNodeByKey(visibleTree, current.key);
+      if (!node) {
+        setEditing(null);
+        return;
+      }
+      const ok = current.mode === 'add'
+        ? await commitAddNode(node, current.value)
+        : await commitEditNode(node, current.value);
+      if (ok !== false) setEditing(null);
+      else setEditing(current);
+    } finally {
+      committingRef.current = false;
     }
-    const ok = current.mode === 'add'
-      ? await commitAddNode(node, current.value)
-      : await commitEditNode(node, current.value);
-    if (ok !== false) setEditing(null);
-    else setEditing(current);
   };
 
   const cancelEditing = () => {

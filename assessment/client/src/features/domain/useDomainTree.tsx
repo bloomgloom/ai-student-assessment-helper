@@ -6,6 +6,7 @@ import {
   createAcademicParentPathDrafts,
 } from '../../components/common/academicTree';
 import { AcademicTreeControllerHelpers, useAcademicTreeController } from '../../hooks/useAcademicTreeController';
+import { saveBlob } from '../../lib/desktopFiles';
 import {
   DOMAIN_SOURCE_TYPE,
   DOMAIN_TREE_KEY_PREFIXES,
@@ -14,6 +15,12 @@ import {
 import { SubjectItem } from './types';
 
 type DomainTreeNode = AcademicTreeNode<SubjectItem>;
+
+function downloadFilename(disposition: string, fallback: string) {
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return utf8Match ? decodeURIComponent(utf8Match[1]) : plainMatch ? plainMatch[1] : fallback;
+}
 
 interface UseDomainTreeOptions {
   subjects: SubjectItem[];
@@ -136,8 +143,32 @@ export function useDomainTree({
     onAfterCommit: reloadSubjects,
     subjectDownloadAction: {
       visible: (subject) => !!subject.has_source,
-      onDownload: (subject) => {
-        window.location.href = criteriaApi.sourceUrl(DOMAIN_SOURCE_TYPE, subject.year, subject.semester, subject.grade, subject.subject);
+      onDownload: async (subject) => {
+        try {
+          const response = await criteriaApi.downloadSource(
+            DOMAIN_SOURCE_TYPE,
+            subject.year,
+            subject.semester,
+            subject.grade,
+            subject.subject,
+          );
+          await saveBlob(
+            downloadFilename(
+              response.headers['content-disposition'] || '',
+              `${subject.year}_${subject.semester}_${subject.grade}_${subject.subject}_평가영역.xlsx`,
+            ),
+            response.data,
+          );
+        } catch (error: any) {
+          const blob = error?.response?.data;
+          let message = '평가 영역 원본 파일 다운로드에 실패했습니다.';
+          if (blob instanceof Blob && blob.type.includes('application/json')) {
+            try {
+              message = JSON.parse(await blob.text())?.error || message;
+            } catch {}
+          }
+          alert(message);
+        }
       },
     },
   });
