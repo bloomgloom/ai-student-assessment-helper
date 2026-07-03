@@ -67,6 +67,42 @@ router.get('/classes/:classId/content', async (req: Request, res: Response) => {
   res.json(content);
 });
 
+router.get('/classes/:classId/written-exams', async (req: Request, res: Response) => {
+  const classId = Number(req.params.classId);
+  const cls = await queryOne<{ year: number; semester: number; grade: number; subject: string }>(
+    'SELECT year, semester, grade, subject FROM classes WHERE id=?',
+    [classId]
+  );
+  if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
+
+  const exams = await queryAll<{
+    domain_name: string; max_score: number; ratio: number; sort_order: number;
+    file_id: number | null; filename: string | null; uploaded_at: string | null;
+  }>(
+    `SELECT sd.name AS domain_name,
+            sd.max_score AS max_score,
+            sd.ratio AS ratio,
+            sd.sort_order AS sort_order,
+            wf.id AS file_id,
+            wf.filename AS filename,
+            wf.uploaded_at AS uploaded_at
+     FROM subject_domains sd
+     LEFT JOIN written_exam_files wf
+       ON wf.class_id=? AND wf.domain_name=sd.name
+     WHERE sd.year=? AND sd.semester=? AND sd.grade=? AND sd.subject=? AND sd.eval_type='지필'
+     ORDER BY sd.sort_order, sd.id`,
+    [classId, cls.year, cls.semester, cls.grade, cls.subject]
+  );
+
+  const scores = await queryAll<{ student_id: number; domain_name: string; score: string; source_file_id: number | null }>(
+    `SELECT student_id, domain_name, score, source_file_id
+     FROM written_exam_scores
+     WHERE class_id=?`,
+    [classId]
+  );
+  res.json({ exams, scores });
+});
+
 router.put('/students/:studentId/content', async (req: Request, res: Response) => {
   const { content_type, domain, content } = req.body as { content_type: string; domain: string; content: string };
   await execute(`
@@ -76,6 +112,34 @@ router.put('/students/:studentId/content', async (req: Request, res: Response) =
     DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
   `, [req.params.studentId, content_type, domain, content]);
   res.json({ ok: true });
+});
+
+router.put('/classes/:classId/written-scores', async (req: Request, res: Response) => {
+  const classId = Number(req.params.classId);
+  const items = Array.isArray(req.body?.items) ? req.body.items as Array<{ student_id: number; domain_name: string; score: string }> : [];
+  const lockedRows = await queryAll<{ student_id: number; domain_name: string }>(
+    `SELECT student_id, domain_name
+     FROM written_exam_scores
+     WHERE class_id=? AND source_file_id IS NOT NULL`,
+    [classId]
+  );
+  const locked = new Set(lockedRows.map(row => `${row.student_id}::${row.domain_name}`));
+
+  await transaction(async () => {
+    for (const item of items) {
+      const studentId = Number(item.student_id);
+      const domainName = String(item.domain_name || '').trim();
+      if (!studentId || !domainName || locked.has(`${studentId}::${domainName}`)) continue;
+      await execute(
+        `INSERT INTO written_exam_scores(class_id, student_id, domain_name, score, source_file_id, updated_at)
+         VALUES(?,?,?,?,NULL,datetime('now'))
+         ON CONFLICT(class_id, student_id, domain_name)
+         DO UPDATE SET score=excluded.score, source_file_id=NULL, updated_at=excluded.updated_at`,
+        [classId, studentId, domainName, String(item.score ?? '')]
+      );
+    }
+  });
+  res.json({ ok: true, saved: items.length });
 });
 
 router.get('/export/:classId', async (req: Request, res: Response) => {

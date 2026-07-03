@@ -23,7 +23,7 @@ echo "Creating DMG: $DMG_PATH"
 
 set +e
 create-dmg \
-  --volname "AI Assessment Helper Install" \
+  --volname "AI Assessment Assistant Installer" \
   --background "scripts/resources/background.png" \
   --window-size 560 360 \
   --icon-size 86 \

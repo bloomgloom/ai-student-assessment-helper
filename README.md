@@ -1,4 +1,4 @@
-# AI 학생 평가 도우미
+# AI Assessment Assistant
 
 **나이스(NEIS)의 작업 형식을 유지하는 수행평가·채점·세특 작성 앱입니다.**  
 나이스에서 내려받은 성취기준, 반영비율/만점관리, 수행평가 채점 파일, 과목세특 파일을 한곳에 모아 평가 기준 정리부터 학생별 기록 작성까지 이어서 작업할 수 있습니다.
@@ -44,8 +44,8 @@
 
 ## 다운로드 / 설치
 
-- [Windows 다운로드 (.exe)](https://github.com/bloomgloom/ai-student-assessment-helper/releases/download/v0.1.0/AI.Student.Assessment.Helper.Setup.0.1.0.exe)
-- [macOS 다운로드 (.dmg)](https://github.com/bloomgloom/ai-student-assessment-helper/releases/download/v0.1.0/AI.Student.Assessment.Helper-0.1.0-arm64.dmg)
+- [Windows 다운로드 (.exe)](https://github.com/bloomgloom/ai-assessment-assistant/releases/download/v0.1.0/AI%20Assessment%20Assistant%20Setup%200.1.0.exe)
+- [macOS 다운로드 (.dmg)](https://github.com/bloomgloom/ai-assessment-assistant/releases/download/v0.1.0/AI%20Assessment%20Assistant-0.1.0-arm64.dmg)
 
 macOS에서 “확인되지 않은 개발자” 경고가 나오면 Finder에서 앱을 우클릭한 뒤 `열기`를 선택합니다.
 

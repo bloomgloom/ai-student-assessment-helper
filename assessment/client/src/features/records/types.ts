@@ -25,6 +25,23 @@ export interface EvalItem {
   sort_order: number;
 }
 
+export interface WrittenExam {
+  domain_name: string;
+  max_score: number;
+  ratio: number;
+  sort_order: number;
+  file_id?: number | null;
+  filename?: string | null;
+  uploaded_at?: string | null;
+}
+
+export interface WrittenExamScore {
+  student_id: number;
+  domain_name: string;
+  score: string;
+  source_file_id?: number | null;
+}
+
 export interface ScoringContent {
   [key: string]: string | number | Record<string, string> | undefined;
   total?: string | number;

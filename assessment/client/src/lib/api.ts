@@ -182,6 +182,9 @@ export const recordsApi = {
     form.append('file', file);
     return api.post('/records/import-full', form);
   },
+  getWrittenExams: (classId: number) => api.get(`/records/classes/${classId}/written-exams`, { params: { t: Date.now() } }),
+  saveWrittenScores: (classId: number, items: { student_id: number; domain_name: string; score: string }[]) =>
+    api.put(`/records/classes/${classId}/written-scores`, { items }),
   deleteStudentContent: (data: {
     classId: number;
     studentIds?: number[];
@@ -257,9 +260,15 @@ export const classesApi = {
     form.append('file', file);
     return api.post('/classes/upload/comments', form);
   },
+  uploadWrittenExam: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/classes/upload/written-exam', form);
+  },
   delete: (id: number) => api.delete(`/classes/${id}`),
   deleteScoring: (id: number) => api.delete(`/classes/${id}/scoring`),
   deleteComments: (id: number) => api.delete(`/classes/${id}/comments`),
+  deleteWrittenExam: (id: number, domainName: string) => api.delete(`/classes/${id}/written-exams/${encodeURIComponent(domainName)}`),
   syncSession: (classId: number, sessionId: number) =>
     api.post(`/classes/${classId}/sync-session/${sessionId}`),
 };

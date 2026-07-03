@@ -12,8 +12,8 @@ const DEFAULT_ASSIGNMENT_ADMIN_PORT = 3002;
 const DEFAULT_ASSIGNMENT_TEACHER_PORT = 3003;
 const DEFAULT_ASSIGNMENT_STUDENT_PORT = 3004;
 
-app.setName('ai-student-assessment-helper');
-app.setPath('userData', path.join(app.getPath('appData'), 'ai-student-assessment-helper'));
+app.setName('ai-assessment-assistant');
+app.setPath('userData', path.join(app.getPath('appData'), 'ai-assessment-assistant'));
 
 let mainWindow = null;
 let serverProcess = null;
@@ -289,7 +289,7 @@ function launcherHtml() {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AI Student Assessment Helper</title>
+<title>AI Assessment Assistant</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -473,7 +473,7 @@ async function createWindow() {
     height: 960,
     minWidth: 1100,
     minHeight: 720,
-    title: 'AI Student Assessment Helper',
+    title: 'AI Assessment Assistant',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

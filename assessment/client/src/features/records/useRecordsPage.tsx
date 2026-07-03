@@ -2,10 +2,10 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } fro
 import { recordsApi, criteriaApi, classesApi, aiApi } from '../../lib/api';
 import { useAiBatchStore } from '../../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
-import { Loader2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Loader2, PanelLeftClose, PanelLeftOpen, Trash2 } from 'lucide-react';
 import { RECORDS_GUIDE_KEY, RECORDS_LAST_CLASS_KEY, RECORDS_PAGE_TEXT, RECORDS_VIEW_PREFS_PREFIX, SUBJECT_COMPREHENSIVE_DOMAIN } from './constants';
 import { RecordsCollapsedTree } from './RecordsCollapsedTree';
-import { ClassItem, ContentItem, EvalItem, RecordsTreeNode, ScoringContent, SpellcheckResult, Student } from './types';
+import { ClassItem, ContentItem, EvalItem, RecordsTreeNode, ScoringContent, SpellcheckResult, Student, WrittenExam, WrittenExamScore } from './types';
 import { useRecordsHeader } from './useRecordsHeader';
 import { useAiEnabled } from '../../hooks/useAiEnabled';
 import { useRecordsTree } from './useRecordsTree';
@@ -25,6 +25,7 @@ function getDomainColumnDefaultWidth(type: string) {
   if (type === 'comments' || type === 'comments_item') return 200;
   if (type === 'artifact') return 56;
   if (type === 'total') return 64;
+  if (type === 'written') return 76;
   return 80;
 }
 
@@ -54,6 +55,19 @@ function stableContentStringify(value: unknown): string {
       .join(',')}}`;
   }
   return JSON.stringify(value ?? '');
+}
+
+function weightedScore(rawScore: unknown, maxScore: unknown, ratio: unknown): number {
+  const score = Number(rawScore) || 0;
+  const max = Number(maxScore) || 0;
+  const weight = Number(ratio) || 0;
+  if (!max || !weight) return 0;
+  return score * weight / max;
+}
+
+function formatScore(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return '';
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
 }
 
 interface RecordsViewPrefs {
@@ -100,6 +114,9 @@ export function useRecordsPage() {
   const [savedContents, setSavedContents] = useState<Record<string, any>>({});
   const [evalItemsMap, setEvalItemsMap] = useState<Record<string, EvalItem[]>>({});
   const [commentsItemsMap, setCommentsItemsMap] = useState<Record<string, Array<{ title: string }>>>({});
+  const [writtenExams, setWrittenExams] = useState<WrittenExam[]>([]);
+  const [writtenScores, setWrittenScores] = useState<Record<string, string>>({});
+  const [savedWrittenScores, setSavedWrittenScores] = useState<Record<string, string>>({});
 
   const [saving, setSaving] = useState(false);
   const [uploadingZip, setUploadingZip] = useState(false);
@@ -134,8 +151,9 @@ export function useRecordsPage() {
   const restoringViewPrefsRef = useRef(false);
   const batchGenerating = aiBatchJob?.status === 'running' || aiBatchJob?.status === 'stopping';
   const isDirty = useMemo(
-    () => stableContentStringify(contents) !== stableContentStringify(savedContents),
-    [contents, savedContents]
+    () => stableContentStringify(contents) !== stableContentStringify(savedContents)
+      || stableContentStringify(writtenScores) !== stableContentStringify(savedWrittenScores),
+    [contents, savedContents, writtenScores, savedWrittenScores]
   );
 
   useEffect(() => {
@@ -252,7 +270,11 @@ export function useRecordsPage() {
     setSelectedStudentIds(new Set());
 
     const subj = subjects.find(s => s.year === c.year && s.semester === c.semester && s.grade === c.grade && s.subject === c.subject);
-    if (!subj) return { evalItemsMap: {}, commentsItemsMap: {} };
+    if (!subj) return {
+      evalItemsMap: {} as Record<string, EvalItem[]>,
+      commentsItemsMap: {} as Record<string, Array<{ title: string }>>,
+      writtenExams: [] as WrittenExam[],
+    };
 
     // Load eval items for all fixed domains
     const eMap: Record<string, EvalItem[]> = {};
@@ -274,15 +296,26 @@ export function useRecordsPage() {
     setCommentsItemsMap(siMap);
 
     // Load all content
-    const cr = await fetch(`/api/records/classes/${c.id}/content`);
+    const [cr, wr] = await Promise.all([
+      fetch(`/api/records/classes/${c.id}/content`),
+      recordsApi.getWrittenExams(c.id),
+    ]);
     const cData = await cr.json() as ContentItem[];
     const map: Record<string, any> = {};
     for (const item of cData) {
       map[`${item.student_id}_${item.content_type}_${item.domain}`] = parseContent(item.content);
     }
+    const writtenData = wr.data as { exams: WrittenExam[]; scores: WrittenExamScore[] };
+    const writtenScoreMap: Record<string, string> = {};
+    for (const item of writtenData.scores || []) {
+      writtenScoreMap[`${item.student_id}_${item.domain_name}`] = item.score ?? '';
+    }
+    setWrittenExams(writtenData.exams || []);
+    setWrittenScores(writtenScoreMap);
+    setSavedWrittenScores(writtenScoreMap);
     setContents(map);
     setSavedContents(map);
-    return { evalItemsMap: eMap, commentsItemsMap: siMap };
+    return { evalItemsMap: eMap, commentsItemsMap: siMap, writtenExams: writtenData.exams || [] };
   }, [subjects]);
 
   const handleSelectClass = useCallback(async (c: ClassItem) => {
@@ -299,7 +332,8 @@ export function useRecordsPage() {
     const subj = subjects.find(s => s.year === c.year && s.semester === c.semester && s.grade === c.grade && s.subject === c.subject);
     const fixedDomains = subj?.fixedDomains || [];
     const allDomains = [...fixedDomains, ...(subj?.customDomains || [])];
-    const defaultShowScoring = fixedDomains.some((d: any) => hasScoringCriteria(loaded.evalItemsMap[d.name]));
+    const defaultShowScoring = fixedDomains.some((d: any) => hasScoringCriteria(loaded.evalItemsMap[d.name]))
+      || loaded.writtenExams.length > 0;
     const defaultShowComments = allDomains.some((d: any) => (loaded.commentsItemsMap[d.name] || []).length > 0);
     const savedPrefs = readRecordsViewPrefs(c);
     const restoredShowScoring = savedPrefs?.showScoring ?? defaultShowScoring;
@@ -307,6 +341,7 @@ export function useRecordsPage() {
     const restoredShowComprehensive = savedPrefs?.showComprehensive ?? true;
     const allowedDomains = [
       ...fixedDomains,
+      ...loaded.writtenExams.map((exam: WrittenExam) => ({ name: exam.domain_name })),
       ...(restoredShowComments ? (subj?.customDomains || []) : []),
     ].map((d: any) => d.name);
     const restoredDomain = savedPrefs?.domainFilter && (savedPrefs.domainFilter === 'all' || allowedDomains.includes(savedPrefs.domainFilter))
@@ -367,6 +402,9 @@ export function useRecordsPage() {
         setStudents([]);
         setContents({});
         setSavedContents({});
+        setWrittenExams([]);
+        setWrittenScores({});
+        setSavedWrittenScores({});
       }
       await loadData();
     } catch (err: any) {
@@ -412,6 +450,17 @@ export function useRecordsPage() {
     // Legacy support if needed, but tree no longer calls this.
   }, []);
 
+  const handleDeleteWrittenExam = useCallback(async (domainName: string) => {
+    if (!selectedClass) return;
+    if (!confirm(`"${domainName}" 지필 평가 파일을 삭제하시겠습니까?\n기존 점수는 유지되고 수동 수정 가능 상태로 바뀝니다.`)) return;
+    try {
+      await classesApi.deleteWrittenExam(selectedClass.id, domainName);
+      await loadDomainData(selectedClass);
+    } catch (err: any) {
+      alert(err?.response?.data?.error || '지필 평가 파일 삭제 중 오류가 발생했습니다.');
+    }
+  }, [selectedClass, loadDomainData]);
+
   const updateContent = (studentId: number, type: 'scoring' | 'comments', field: string, value: string, explicitDomain?: string) => {
     setContents(prev => {
       const targetDomain = explicitDomain || selectedDomain;
@@ -438,6 +487,10 @@ export function useRecordsPage() {
 
       return { ...prev, [key]: newObj };
     });
+  };
+
+  const updateWrittenScore = (studentId: number, domainName: string, value: string) => {
+    setWrittenScores(prev => ({ ...prev, [`${studentId}_${domainName}`]: value }));
   };
 
   const selectedStudents = useMemo(
@@ -631,12 +684,31 @@ export function useRecordsPage() {
           }
         }
       }
+      if (showScoring && writtenExams.length > 0) {
+        const visibleWrittenExams = domainFilter === 'all'
+          ? writtenExams
+          : writtenExams.filter(exam => exam.domain_name === domainFilter);
+        const manualWrittenItems: { student_id: number; domain_name: string; score: string }[] = [];
+        for (const exam of visibleWrittenExams) {
+          if (exam.file_id) continue;
+          for (const s of students) {
+            const key = `${s.id}_${exam.domain_name}`;
+            if (writtenScores[key] !== undefined) {
+              manualWrittenItems.push({ student_id: s.id, domain_name: exam.domain_name, score: writtenScores[key] });
+            }
+          }
+        }
+        if (manualWrittenItems.length) {
+          promises.push(recordsApi.saveWrittenScores(selectedClass.id, manualWrittenItems));
+        }
+      }
       await Promise.all(promises);
       setSavedContents(prev => {
         const next = { ...prev };
         for (const key of savedKeys) next[key] = contents[key];
         return next;
       });
+      setSavedWrittenScores(writtenScores);
       alert('저장되었습니다.');
     } catch (e) {
       alert('저장 중 오류가 발생했습니다.');
@@ -859,15 +931,27 @@ export function useRecordsPage() {
       s.year === selectedClass.year && s.semester === selectedClass.semester &&
       s.grade === selectedClass.grade && s.subject === selectedClass.subject
     );
-    const fixedDomains: any[] = subj?.fixedDomains || [];
+    const fixedDomains: any[] = (subj?.fixedDomains || []).map((domain: any) => ({ ...domain, __kind: 'performance' }));
     const customDomains: any[] = subj?.customDomains || [];
-    const allDomains = [...fixedDomains, ...(showComments ? customDomains : [])];
+    const writtenDomains: any[] = showScoring
+      ? writtenExams.map(exam => ({
+        name: exam.domain_name,
+        max_score: exam.max_score,
+        ratio: exam.ratio,
+        sort_order: exam.sort_order,
+        __kind: 'written',
+        file_id: exam.file_id,
+        filename: exam.filename,
+      }))
+      : [];
+    const allDomains = [...fixedDomains, ...writtenDomains, ...(showComments ? customDomains : [])];
     const visibleDomains = domainFilter === 'all' ? allDomains : allDomains.filter((d: any) => d.name === domainFilter);
 
     let fi = 0;
     const domainCols = new Map<string, Array<{ id: string; label: string; type: string; fi: number; itemTitle?: string }>>();
     for (const d of visibleDomains) {
-      const isFixed = !!fixedDomains.find((fd: any) => fd.name === d.name);
+      const isFixed = d.__kind === 'performance';
+      const isWritten = d.__kind === 'written';
       const evalList = (evalItemsMap[d.name] || []) as EvalItem[];
       const cols: Array<{ id: string; label: string; type: string; fi: number; itemTitle?: string }> = [];
       if (showScoring && isFixed) {
@@ -877,6 +961,9 @@ export function useRecordsPage() {
         );
         if (evalList.some(e => e.item_type === 'formula'))
           cols.push({ id: 'total', label: '합계', type: 'total', fi: -1 });
+      }
+      if (showScoring && isWritten) {
+        cols.push({ id: 'written', label: `점수 (${d.max_score || 0})`, type: 'written', fi: fi++ });
       }
       if (showComments) {
         if (!cols.find(c => c.id === 'artifact'))
@@ -891,7 +978,7 @@ export function useRecordsPage() {
       domainCols.set(d.name, cols);
     }
     return { visibleDomains, domainCols, compCommentsColIdx: showComprehensive ? fi : -1 };
-  }, [selectedClass, subjects, domainFilter, evalItemsMap, commentsItemsMap, showScoring, showComments, showComprehensive]);
+  }, [selectedClass, subjects, domainFilter, evalItemsMap, commentsItemsMap, writtenExams, showScoring, showComments, showComprehensive]);
 
   // ── Frozen column widths & sticky left offsets ─────────────────────────────
   const cw = {
@@ -940,12 +1027,13 @@ export function useRecordsPage() {
     if (!selectedSubject) return [] as any[];
     const allDomains = [
       ...(selectedSubject.fixedDomains || []),
+      ...writtenExams.map(exam => ({ name: exam.domain_name })),
       ...(selectedSubject.customDomains || []),
     ];
     return domainFilter === 'all'
       ? allDomains
       : allDomains.filter((d: any) => d.name === domainFilter);
-  }, [selectedSubject, domainFilter]);
+  }, [selectedSubject, writtenExams, domainFilter]);
 
   const canShowScoring = useMemo(() => {
     if (!selectedSubject) return false;
@@ -953,8 +1041,11 @@ export function useRecordsPage() {
     const targetDomains = domainFilter === 'all'
       ? fixedDomains
       : fixedDomains.filter((d: any) => d.name === domainFilter);
-    return targetDomains.some((d: any) => hasScoringCriteria(evalItemsMap[d.name]));
-  }, [selectedSubject, domainFilter, evalItemsMap]);
+    const hasWritten = domainFilter === 'all'
+      ? writtenExams.length > 0
+      : writtenExams.some(exam => exam.domain_name === domainFilter);
+    return hasWritten || targetDomains.some((d: any) => hasScoringCriteria(evalItemsMap[d.name]));
+  }, [selectedSubject, writtenExams, domainFilter, evalItemsMap]);
 
   const canShowComments = useMemo(() => {
     return domainsInFilter.some((d: any) => (commentsItemsMap[d.name] || []).length > 0);
@@ -971,10 +1062,11 @@ export function useRecordsPage() {
     if (!selectedSubject || domainFilter === 'all') return;
     const allowedDomains = [
       ...(selectedSubject.fixedDomains || []),
+      ...(showScoring ? writtenExams.map(exam => ({ name: exam.domain_name })) : []),
       ...(showComments ? (selectedSubject.customDomains || []) : []),
     ].map((d: any) => d.name);
     if (!allowedDomains.includes(domainFilter)) setDomainFilter('all');
-  }, [selectedSubject, showComments, domainFilter]);
+  }, [selectedSubject, showScoring, showComments, writtenExams, domainFilter]);
 
   useEffect(() => {
     if (!selectedClass) return;
@@ -990,6 +1082,7 @@ export function useRecordsPage() {
   const recordsHeader = useRecordsHeader({
     selectedClass,
     selectedSubject,
+    writtenExams,
     showScoring,
     showComments,
     showComprehensive,
@@ -1083,14 +1176,14 @@ export function useRecordsPage() {
               onToggleOpen: recordsTree.toggleNodeOpen,
               actions: (item: RecordsTreeNode) => item.kind === 'room' && item.classItem ? [
                 {
-                  title: '채점 파일 삭제',
+                  title: '채점 삭제',
                   icon: 'trash' as const,
                   variant: 'blue' as const,
                   visible: item.classItem.scoring_filename ? 'always' as const : 'hidden' as const,
                   onClick: (node: RecordsTreeNode) => handleDeleteScoring(node.classItem!),
                 },
                 {
-                  title: '세특 파일 삭제',
+                  title: '세특 삭제',
                   icon: 'trash' as const,
                   variant: 'purple' as const,
                   visible: item.classItem.comments_filename ? 'always' as const : 'hidden' as const,
@@ -1180,7 +1273,19 @@ export function useRecordsPage() {
                       return (
                         <th key={d.name} colSpan={cols.length}
                           className="px-2 py-1.5 font-semibold text-gray-700 text-center border-b border-r bg-gray-100/50 select-none">
-                          {d.name}
+                          <div className="flex items-center justify-center gap-1">
+                            <span className="truncate">{d.name}</span>
+                            {d.__kind === 'written' && d.file_id && (
+                              <button
+                                type="button"
+                                className="inline-flex h-5 w-5 items-center justify-center rounded border border-red-200 bg-white text-red-500 hover:bg-red-50"
+                                title="지필 파일 삭제"
+                                onClick={() => handleDeleteWrittenExam(d.name)}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
                         </th>
                       );
                     })}
@@ -1349,6 +1454,27 @@ export function useRecordsPage() {
                                 </td>
                               );
                             }
+                            if (c.type === 'written') {
+                              const key = `${s.id}_${d.name}`;
+                              const locked = !!d.file_id;
+                              const dirty = normalizeStoredValue(writtenScores[key]) !== normalizeStoredValue(savedWrittenScores[key]);
+                              return (
+                                <td key={`${d.name}_written`} className="border-r align-middle p-1"
+                                  style={{ width: w, minWidth: w }}>
+                                  <input
+                                    type="text"
+                                    className={`input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`}
+                                    value={writtenScores[key] ?? ''}
+                                    onChange={ev => updateWrittenScore(s.id, d.name, ev.target.value)}
+                                    disabled={locked}
+                                    data-row={rowIdx}
+                                    data-col={c.fi}
+                                    onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
+                                    title={locked ? '지필 파일에서 가져온 점수라 파일 삭제 전까지 수정할 수 없습니다.' : undefined}
+                                  />
+                                </td>
+                              );
+                            }
                             if (c.type === 'comments') {
                               const locked = selectedClass
                                 ? isAiCellLocked(selectedClass.id, s.id, 'comments', d.name)
@@ -1398,15 +1524,18 @@ export function useRecordsPage() {
 
                         {/* Grand total */}
                         {showScoring && (() => {
-                          const grandTotal = ((selectedSubject?.fixedDomains || []) as any[])
+                          const performanceTotal = ((selectedSubject?.fixedDomains || []) as any[])
                             .reduce((sum: number, d: any) => {
                               const scoreData = (contents[`${s.id}_scoring_${d.name}`] || {}) as ScoringContent;
-                              return sum + (Number(scoreData.total) || 0);
+                              return sum + weightedScore(scoreData.total, d.max_score, d.ratio);
                             }, 0);
+                          const writtenTotal = writtenExams
+                            .reduce((sum, exam) => sum + weightedScore(writtenScores[`${s.id}_${exam.domain_name}`], exam.max_score, exam.ratio), 0);
+                          const grandTotal = performanceTotal + writtenTotal;
                           return (
                             <td className="border-r text-center font-bold text-green-700 align-middle p-2 bg-green-50/30"
                               style={{ width: grandTotalWidth, minWidth: grandTotalWidth }}>
-                              {grandTotal || ''}
+                              {formatScore(grandTotal)}
                             </td>
                           );
                         })()}

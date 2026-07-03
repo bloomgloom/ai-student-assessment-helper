@@ -17,6 +17,19 @@ export interface CommentsFileInfo extends ClassInfo {
   timestamp: string;
 }
 
+export interface WrittenExamInfo extends ClassInfo {
+  examName: string;
+  credit: number;
+  maxScore: number;
+}
+
+export interface WrittenExamStudent {
+  studentNum: number;
+  name: string;
+  score: string;
+  excelRow: number;
+}
+
 export interface AssessmentDomain {
   name: string;
   maxScore: number;
@@ -523,6 +536,74 @@ export async function parseCommentsExcel(filePath: string): Promise<CommentsStud
   });
 
   return students;
+}
+
+export async function parseWrittenExamExcel(filePath: string): Promise<{
+  info: WrittenExamInfo;
+  students: WrittenExamStudent[];
+}> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  const sheet = wb.worksheets[0];
+  if (!sheet) throw new Error('엑셀 파일에 시트가 없습니다.');
+
+  const contextText = cellText(sheet.getCell('B6').value);
+  const examText = cellText(sheet.getCell('B7').value);
+  const maxScoreText = cellText(sheet.getCell('B8').value);
+
+  const year = Number(contextText.match(/(\d{4})학년도/)?.[1] || 0);
+  const semester = Number(contextText.match(/(\d+)학기/)?.[1] || 0);
+  const grade = Number(contextText.match(/(?:^|[^\d])(\d+)학년(?!도)/)?.[1] || 0);
+  const room = (contextText.match(/(\S*?\d+강의실)/)?.[1] || '').trim();
+  const examName = (examText.match(/고사\s*:\s*(.*?)\s+교과목\s*:/)?.[1] || '').trim();
+  const subjectRaw = (examText.match(/교과목\s*:\s*(.+)$/)?.[1] || '').trim();
+  const subjectCreditMatch = subjectRaw.match(/(?:^|:)([^:()]+)\((\d+(?:\.\d+)?)\)\s*$/);
+  const subject = (subjectCreditMatch?.[1] || '').trim();
+  const credit = Number(subjectCreditMatch?.[2] || 0);
+  const maxScore = Number(maxScoreText.match(/(\d+(?:\.\d+)?)/)?.[1] || 0);
+
+  if (!year || !semester || !grade || !room) throw new Error('B6 셀에서 학년도/학기/학년/강의실 정보를 찾을 수 없습니다.');
+  if (!examName || !subject || !credit) throw new Error('B7 셀에서 고사명/교과목/학점 정보를 찾을 수 없습니다.');
+
+  let headerRowIdx = 0;
+  let classNumCol = 0;
+  let nameCol = 0;
+  let scoreCol = 0;
+  for (let r = 1; r <= Math.min(sheet.rowCount, 20); r++) {
+    const row = sheet.getRow(r);
+    row.eachCell((cell, colIdx) => {
+      const text = cellText(cell.value);
+      if (!classNumCol && text === '반/번호') classNumCol = colIdx;
+      if (!nameCol && ['성명', '이름'].includes(text)) nameCol = colIdx;
+      if (!scoreCol && text === '점수') scoreCol = colIdx;
+    });
+    if (classNumCol && nameCol && scoreCol) {
+      headerRowIdx = r;
+      break;
+    }
+  }
+  if (!headerRowIdx || !classNumCol || !nameCol || !scoreCol) {
+    throw new Error('지필 평가 헤더(반/번호, 성명, 점수)를 찾을 수 없습니다.');
+  }
+
+  const students: WrittenExamStudent[] = [];
+  sheet.eachRow((row, rowIdx) => {
+    if (rowIdx <= headerRowIdx) return;
+    const classNumText = cellText(row.getCell(classNumCol).value);
+    const name = cleanStudentName(cellText(row.getCell(nameCol).value));
+    if (!classNumText || !name || !isKoreanName(name)) return;
+    const match = classNumText.match(/(\d+)\s*\/\s*(\d+)/);
+    if (!match) return;
+    const classNum = Number(match[1]) || 0;
+    const num = Number(match[2]) || 0;
+    const score = cellText(row.getCell(scoreCol).value);
+    students.push({ studentNum: classNum * 100 + num, name, score, excelRow: rowIdx });
+  });
+
+  return {
+    info: { year, semester, grade, subject, room, examName, credit, maxScore },
+    students,
+  };
 }
 
 export interface StudentRow {

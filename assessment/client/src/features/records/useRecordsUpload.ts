@@ -41,24 +41,20 @@ export function useRecordsUpload({
         const normalizedName = file.name.normalize('NFC');
         const isComments = normalizedName.includes('과목세특');
         const isScoring = normalizedName.includes('수행평가 파일일괄등록');
-        if (!isComments && !isScoring) {
-          hasError = true;
-          messages.push(
-            `[실패] ${normalizedName}\n  채점 기록 관리 파일은 파일명에 "과목세특" 또는 "수행평가 파일일괄등록"이 포함되어야 합니다. 나이스에서 내려받은 파일명을 유지하세요.`
-          );
-          continue;
-        }
         try {
           const res = isComments
             ? await classesApi.uploadComments(file)
-            : await classesApi.uploadScoring(file);
+            : isScoring
+              ? await classesApi.uploadScoring(file)
+              : await classesApi.uploadWrittenExam(file);
           const d = res.data;
           const warnings: string[] = [];
           if (d.domainMismatch) warnings.push(`영역 불일치: ${d.domainMismatch}`);
           if (d.studentMismatch?.length) warnings.push(`학생 명단 불일치: ${d.studentMismatch.join(', ')}`);
+          if (d.missingStudents?.length) warnings.push(`학생 명단 불일치: ${d.missingStudents.join(', ')}`);
           if (warnings.length) hasWarn = true;
           messages.push(
-            `[완료] ${isComments ? '세특' : '채점'} - ${normalizedName}` +
+            `[완료] ${isComments ? '세특' : isScoring ? '채점' : '지필'} - ${normalizedName}` +
             (warnings.length ? `\n  ${warnings.join('\n  ')}` : '')
           );
         } catch (err: any) {

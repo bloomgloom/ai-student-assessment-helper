@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { UPLOADS_DIR, ensureDir, resolveStoredPath, toStoredPath } from '../services/storage';
-import { parseClassFilename, parseScoringExcel, parseCommentsFilename, parseCommentsExcel } from '../services/excel';
+import { parseClassFilename, parseScoringExcel, parseCommentsFilename, parseCommentsExcel, parseWrittenExamExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 import {
   deleteAssignmentSnapshotForAssessmentClass,
@@ -14,14 +14,20 @@ import { assignmentExecute, assignmentQueryAll } from '../services/assignmentDb'
 
 const SCORING_UPLOAD_DIR = path.join(UPLOADS_DIR, 'scoring');
 const RECORDS_UPLOAD_DIR = path.join(UPLOADS_DIR, 'records');
+const WRITTEN_UPLOAD_DIR = path.join(UPLOADS_DIR, 'written-exams');
 ensureDir(SCORING_UPLOAD_DIR);
 ensureDir(RECORDS_UPLOAD_DIR);
+ensureDir(WRITTEN_UPLOAD_DIR);
 
 function classUpload(defaultDir: string) {
   return multer({
     storage: multer.diskStorage({
       destination: (_req, file, cb) => {
-        const dir = file.fieldname === 'commentsFile' ? RECORDS_UPLOAD_DIR : defaultDir;
+        const dir = file.fieldname === 'commentsFile'
+          ? RECORDS_UPLOAD_DIR
+          : file.fieldname === 'writtenExamFile'
+            ? WRITTEN_UPLOAD_DIR
+            : defaultDir;
         cb(null, dir);
       },
       filename: (_req, file, cb) => {
@@ -34,6 +40,7 @@ function classUpload(defaultDir: string) {
 
 const scoringUpload = classUpload(SCORING_UPLOAD_DIR);
 const commentsUpload = classUpload(RECORDS_UPLOAD_DIR);
+const writtenExamUpload = classUpload(WRITTEN_UPLOAD_DIR);
 
 const router = Router();
 
@@ -43,6 +50,123 @@ function isScoringFilename(filename: string): boolean {
 
 function isCommentsFilename(filename: string): boolean {
   return filename.normalize('NFC').includes('과목세특');
+}
+
+async function saveWrittenExamFile(file: Express.Multer.File) {
+  const originalName = decodeUploadFilename(file.originalname);
+  const parsed = await parseWrittenExamExcel(file.path);
+  const { info, students } = parsed;
+  if (!students.length) throw new Error('지필 평가 파일에서 학생 명단을 찾을 수 없습니다.');
+
+  const domain = await queryOne<{ name: string; max_score: number }>(
+    `SELECT name, max_score FROM subject_domains
+     WHERE year=? AND semester=? AND grade=? AND subject=? AND eval_type='지필' AND name=?
+     ORDER BY sort_order LIMIT 1`,
+    [info.year, info.semester, info.grade, info.subject, info.examName]
+  );
+  if (!domain) {
+    throw new Error(`평가 영역 관리에서 지필 영역 "${info.examName}"을 찾을 수 없습니다.`);
+  }
+  if (domain.max_score && info.maxScore && Number(domain.max_score) !== Number(info.maxScore)) {
+    throw new Error(`지필 영역 "${info.examName}"의 만점이 평가 영역 관리(${domain.max_score})와 파일(${info.maxScore})에서 다릅니다.`);
+  }
+
+  let cls = await queryOne<{ id: number }>(
+    'SELECT id FROM classes WHERE year=? AND semester=? AND grade=? AND subject=? AND room=?',
+    [info.year, info.semester, info.grade, info.subject, info.room]
+  );
+
+  let classId: number;
+  if (!cls) {
+    const managedDomains = await queryAll<{ name: string; max_score: number; sort_order: number }>(
+      `SELECT name, max_score, sort_order FROM subject_domains
+       WHERE year=? AND semester=? AND grade=? AND subject=? AND eval_type='수행' AND reflected='O'
+       ORDER BY sort_order`,
+      [info.year, info.semester, info.grade, info.subject]
+    );
+    const inserted = await transaction(async () => {
+      const r = await execute(
+        `INSERT INTO classes(year, semester, grade, subject, room, filename, scoring_filename, scoring_filepath, comments_filename, comments_filepath)
+         VALUES(?,?,?,?,?,?,?,?,?,?)`,
+        [info.year, info.semester, info.grade, info.subject, info.room, originalName, '', '', '', '']
+      );
+      const cid = Number(r.lastInsertRowid);
+      for (const d of managedDomains) {
+        await execute(
+          'INSERT INTO assessment_domains(class_id, name, max_score, excel_col, sort_order) VALUES(?,?,?,?,?)',
+          [cid, d.name, Number(d.max_score) || 0, '', d.sort_order]
+        );
+      }
+      for (const s of students) {
+        await execute(
+          'INSERT INTO class_students(class_id, student_num, name, excel_row, personal_num) VALUES(?,?,?,?,?)',
+          [cid, info.grade * 10000 + s.studentNum, s.name, s.excelRow, '']
+        );
+      }
+      return cid;
+    });
+    classId = inserted;
+  } else {
+    classId = cls.id;
+    const existingStudents = await queryAll<{ id: number; name: string; student_num: number }>(
+      'SELECT id, name, student_num FROM class_students WHERE class_id=?',
+      [classId]
+    );
+    if (!existingStudents.length) {
+      for (const s of students) {
+        await execute(
+          'INSERT INTO class_students(class_id, student_num, name, excel_row, personal_num) VALUES(?,?,?,?,?)',
+          [classId, info.grade * 10000 + s.studentNum, s.name, s.excelRow, '']
+        );
+      }
+    }
+  }
+
+  const existingStudents = await queryAll<{ id: number; name: string; student_num: number }>(
+    'SELECT id, name, student_num FROM class_students WHERE class_id=?',
+    [classId]
+  );
+  const studentByNum = new Map(existingStudents.map(student => [student.student_num, student]));
+  const missing: string[] = [];
+
+  await transaction(async () => {
+    const previous = await queryOne<{ id: number; filepath: string }>(
+      'SELECT id, filepath FROM written_exam_files WHERE class_id=? AND domain_name=?',
+      [classId, domain.name]
+    );
+    if (previous?.filepath) {
+      try { fs.unlinkSync(resolveStoredPath(previous.filepath)); } catch { /* ignore */ }
+    }
+    await execute('DELETE FROM written_exam_files WHERE class_id=? AND domain_name=?', [classId, domain.name]);
+    const fileRow = await execute(
+      `INSERT INTO written_exam_files(class_id, domain_name, exam_name, filename, filepath, max_score)
+       VALUES(?,?,?,?,?,?)`,
+      [classId, domain.name, info.examName, originalName, toStoredPath(file.path), info.maxScore || domain.max_score || 0]
+    );
+    const fileId = Number(fileRow.lastInsertRowid);
+    await execute('DELETE FROM written_exam_scores WHERE class_id=? AND domain_name=?', [classId, domain.name]);
+    for (const s of students) {
+      const fullNum = info.grade * 10000 + s.studentNum;
+      const student = studentByNum.get(fullNum) || existingStudents.find(item => item.name === s.name);
+      if (!student) {
+        missing.push(`${s.name}(${fullNum})`);
+        continue;
+      }
+      await execute(
+        `INSERT INTO written_exam_scores(class_id, student_id, domain_name, score, source_file_id, updated_at)
+         VALUES(?,?,?,?,?,datetime('now'))`,
+        [classId, student.id, domain.name, s.score, fileId]
+      );
+    }
+  });
+
+  return {
+    classId,
+    ...info,
+    domainName: domain.name,
+    studentsCount: students.length,
+    missingStudents: missing,
+  };
 }
 
 // ── 수업 목록 조회 (트리 구성용) ─────────────────────────────────────────
@@ -542,6 +666,25 @@ router.post('/upload/comments', commentsUpload.single('file'), async (req: Reque
   });
 });
 
+// ── 지필 평가 파일 업로드 (파일명 구분 없이 내용으로 검증) ───────────────
+router.post('/upload/written-exam', writtenExamUpload.single('file'), async (req: Request, res: Response) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: '지필 평가 파일이 없습니다.' });
+
+  const originalName = decodeUploadFilename(file.originalname);
+  if (isScoringFilename(originalName) || isCommentsFilename(originalName)) {
+    return res.status(400).json({ error: '지필 평가 파일은 채점/세특 파일명 키워드가 없는 파일이어야 합니다.' });
+  }
+
+  try {
+    const result = await saveWrittenExamFile(file);
+    res.json(result);
+  } catch (e: unknown) {
+    try { fs.unlinkSync(file.path); } catch { /* ignore */ }
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 // ── 채점 파일만 삭제 ──────────────────────────────────────────────────────
 router.delete('/:id/scoring', async (req: Request, res: Response) => {
   const cls = await queryOne<{ scoring_filepath: string; comments_filename: string }>(
@@ -578,6 +721,30 @@ router.delete('/:id/comments', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// ── 지필 평가 파일 삭제: 해당 지필 칼럼은 수동 입력 가능 상태로 전환 ───────
+router.delete('/:id/written-exams/:domainName', async (req: Request, res: Response) => {
+  const classId = Number(req.params.id);
+  const domainName = decodeURIComponent(req.params.domainName);
+  const file = await queryOne<{ id: number; filepath: string }>(
+    'SELECT id, filepath FROM written_exam_files WHERE class_id=? AND domain_name=?',
+    [classId, domainName]
+  );
+  if (!file) return res.status(404).json({ error: '지필 평가 원본 파일을 찾을 수 없습니다.' });
+  if (file.filepath) {
+    try { fs.unlinkSync(resolveStoredPath(file.filepath)); } catch { /* ignore */ }
+  }
+  await transaction(async () => {
+    await execute('DELETE FROM written_exam_files WHERE id=?', [file.id]);
+    await execute(
+      `UPDATE written_exam_scores
+       SET source_file_id=NULL, updated_at=datetime('now')
+       WHERE class_id=? AND domain_name=?`,
+      [classId, domainName]
+    );
+  });
+  res.json({ ok: true });
+});
+
 // ── 수업 삭제 ─────────────────────────────────────────────────────────────
 router.delete('/:id', async (req: Request, res: Response) => {
   const cls = await queryOne<{
@@ -611,6 +778,13 @@ router.delete('/:id', async (req: Request, res: Response) => {
   }
   if (cls.comments_filepath) {
     try { fs.unlinkSync(resolveStoredPath(cls.comments_filepath)); } catch { /* ignore */ }
+  }
+  const writtenFiles = await queryAll<{ filepath: string }>(
+    'SELECT filepath FROM written_exam_files WHERE class_id=?',
+    [req.params.id]
+  );
+  for (const file of writtenFiles) {
+    try { if (file.filepath) fs.unlinkSync(resolveStoredPath(file.filepath)); } catch { /* ignore */ }
   }
 
   // DB 삭제 (generated_content는 ON DELETE CASCADE)

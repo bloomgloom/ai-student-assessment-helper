@@ -7,6 +7,7 @@ import { ClassItem } from './types';
 interface UseRecordsHeaderOptions {
   selectedClass: ClassItem | null;
   selectedSubject: any;
+  writtenExams: Array<{ domain_name: string }>;
   showScoring: boolean;
   showComments: boolean;
   showComprehensive: boolean;
@@ -41,6 +42,7 @@ interface UseRecordsHeaderOptions {
 export function useRecordsHeader({
   selectedClass,
   selectedSubject,
+  writtenExams,
   showScoring,
   showComments,
   showComprehensive,
@@ -121,6 +123,9 @@ export function useRecordsHeader({
           <option value="all">전체 영역 보기</option>
           {selectedSubject?.fixedDomains.map((d: any) => (
             <option key={d.name} value={d.name}>{d.name}</option>
+          ))}
+          {showScoring && writtenExams.map((d) => (
+            <option key={`written-${d.domain_name}`} value={d.domain_name}>{d.domain_name} (지필)</option>
           ))}
           {showComments && selectedSubject?.customDomains.map((d: any) => (
             <option key={d.name} value={d.name}>{d.name} (기록)</option>

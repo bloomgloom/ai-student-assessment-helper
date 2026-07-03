@@ -216,6 +216,29 @@ export async function initDb(): Promise<void> {
       updated_at   TEXT    DEFAULT (datetime('now')),
       UNIQUE(student_id, content_type, domain)
     );
+
+    CREATE TABLE IF NOT EXISTS written_exam_files (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      domain_name TEXT    NOT NULL,
+      exam_name   TEXT    NOT NULL DEFAULT '',
+      filename    TEXT    NOT NULL,
+      filepath    TEXT    NOT NULL,
+      max_score   REAL    NOT NULL DEFAULT 0,
+      uploaded_at TEXT    DEFAULT (datetime('now')),
+      UNIQUE(class_id, domain_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS written_exam_scores (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id       INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      student_id     INTEGER NOT NULL REFERENCES class_students(id) ON DELETE CASCADE,
+      domain_name    TEXT    NOT NULL,
+      score          TEXT    NOT NULL DEFAULT '',
+      source_file_id INTEGER REFERENCES written_exam_files(id) ON DELETE SET NULL,
+      updated_at     TEXT    DEFAULT (datetime('now')),
+      UNIQUE(class_id, student_id, domain_name)
+    );
   `);
 
   await ensureColumn('classes', 'scoring_filename', "TEXT NOT NULL DEFAULT ''");
@@ -270,6 +293,7 @@ async function migrateStoredUploadPaths(): Promise<void> {
     ['classes', 'scoring_filepath'],
     ['classes', 'comments_filepath'],
     ['artifacts', 'filepath'],
+    ['written_exam_files', 'filepath'],
   ] as const;
 
   for (const [table, column] of pairs) {

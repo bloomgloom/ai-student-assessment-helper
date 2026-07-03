@@ -125,8 +125,8 @@ router.get('/subjects', async (req: Request, res: Response) => {
 
   const result = [];
   for (const sub of subjects) {
-    let fixedDomains = await queryAll<{ name: string; max_score: number; sort_order: number }>(
-      `SELECT name, max_score, sort_order
+    let fixedDomains = await queryAll<{ name: string; max_score: number; ratio: number; sort_order: number }>(
+      `SELECT name, max_score, ratio, sort_order
        FROM subject_domains
        WHERE year=? AND semester=? AND grade=? AND subject=? AND eval_type='수행' AND reflected='O'
        ORDER BY sort_order`,

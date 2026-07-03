@@ -1,5 +1,5 @@
 {
-  "name": "ai-student-assessment-helper-desktop",
+  "name": "ai-assessment-assistant-desktop",
   "version": "0.1.0",
   "private": true,
   "main": "electron/main.js",
@@ -41,8 +41,8 @@
     "sharp": "^0.34.5"
   },
   "build": {
-    "appId": "kr.co.teacher.assessment-helper",
-    "productName": "AI Student Assessment Helper",
+    "appId": "io.github.bloomgloom.ai-assessment-assistant",
+    "productName": "AI Assessment Assistant",
     "asar": true,
     "asarUnpack": [
       "node_modules/**/*.node",
