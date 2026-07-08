@@ -20,6 +20,7 @@ const FROZEN_DEFAULT_WIDTHS = {
   num: 40,
   name: 64,
 };
+const RECORD_TEXTAREA_MIN_HEIGHT = 80;
 
 function getDomainColumnDefaultWidth(type: string) {
   if (type === 'comments' || type === 'comments_item') return 200;
@@ -142,6 +143,7 @@ export function useRecordsPage() {
   const fullRecordsInputRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
+  const [rowTextareaHeights, setRowTextareaHeights] = useState<Record<number, number>>({});
   const aiBatchJob = useAiBatchStore(state => state.currentJob);
   const aiBatchUpdates = useAiBatchStore(state => state.updates);
   const startAiBatch = useAiBatchStore(state => state.startBatch);
@@ -174,6 +176,7 @@ export function useRecordsPage() {
   // ── Column resize ──────────────────────────────────────────────────────────
   const handleResizeStart = (e: React.MouseEvent, key: string, defW: number) => {
     e.preventDefault();
+    e.stopPropagation();
     const sx = e.clientX;
     const sw = colWidths[key] ?? defW;
     const minWidth = key.startsWith('_') ? 24 : 30;
@@ -186,6 +189,45 @@ export function useRecordsPage() {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   };
+
+  const handleRowResizeStart = (e: React.MouseEvent, studentId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const sy = e.clientY;
+    const sh = rowTextareaHeights[studentId] ?? RECORD_TEXTAREA_MIN_HEIGHT;
+    const onMove = (mv: MouseEvent) =>
+      setRowTextareaHeights(p => ({
+        ...p,
+        [studentId]: Math.max(RECORD_TEXTAREA_MIN_HEIGHT, sh + mv.clientY - sy),
+      }));
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  const renderRowResizeHandle = (studentId: number) => (
+    <div
+      className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-row-resize bg-transparent hover:bg-blue-400"
+      onMouseDown={e => handleRowResizeStart(e, studentId)}
+    />
+  );
+
+  const renderColumnResizeHandle = (key: string, defW: number) => (
+    <div
+      className="absolute bottom-0 right-0 top-0 z-10 w-1 cursor-col-resize bg-transparent hover:bg-blue-400"
+      onMouseDown={e => handleResizeStart(e, key, defW)}
+    />
+  );
+
+  const renderCellResizeHandles = (studentId: number, colKey: string, defW: number) => (
+    <>
+      {renderColumnResizeHandle(colKey, defW)}
+      {renderRowResizeHandle(studentId)}
+    </>
+  );
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
   const handleKeyNav = (e: React.KeyboardEvent, ri: number, ci: number) => {
@@ -1356,9 +1398,11 @@ export function useRecordsPage() {
                     const spellcheckResult = spellcheckResults[s.id];
                     const classNum = Math.floor((s.student_num % 10000) / 100);
                     const stuNum = s.student_num % 100;
+                    const rowTextareaHeight = rowTextareaHeights[s.id];
+                    const rowTableHeight = rowTextareaHeight ? rowTextareaHeight + 10 : undefined;
 
                     return (
-                      <tr key={s.id} className="records-table-row">
+                      <tr key={s.id} className="records-table-row" style={{ height: rowTableHeight }}>
                         {/* Frozen: checkbox */}
                         <td className="sticky z-10 bg-white border-r text-center"
                           style={{ left: sl.chk, width: cw.chk, minWidth: cw.chk }}>
@@ -1366,21 +1410,25 @@ export function useRecordsPage() {
                             <input type="checkbox" className="h-4 w-4 rounded border-gray-300"
                               checked={selectedStudentIds.has(s.id)} onChange={() => toggleStudentSelection(s.id)} />
                           </div>
+                          {renderCellResizeHandles(s.id, '_chk', FROZEN_DEFAULT_WIDTHS.chk)}
                         </td>
                         {/* Frozen: 반 */}
                         <td className="sticky z-10 bg-white border-r text-center text-gray-500 font-mono px-1 py-2"
                           style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
                           {classNum}
+                          {renderCellResizeHandles(s.id, '_cls', FROZEN_DEFAULT_WIDTHS.cls)}
                         </td>
                         {/* Frozen: 번호 */}
                         <td className="sticky z-10 bg-white border-r text-center text-gray-500 font-mono px-1 py-2"
                           style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
                           {stuNum}
+                          {renderCellResizeHandles(s.id, '_num', FROZEN_DEFAULT_WIDTHS.num)}
                         </td>
                         {/* Frozen: 이름 */}
                         <td className="sticky z-10 bg-white border-r font-medium text-gray-800 text-center px-1 py-2"
                           style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
                           {s.name}
+                          {renderCellResizeHandles(s.id, '_name', FROZEN_DEFAULT_WIDTHS.name)}
                         </td>
 
                         {/* Domain cells */}
@@ -1396,11 +1444,12 @@ export function useRecordsPage() {
 
                             if (c.type === 'artifact') {
                               return (
-                                <td key={`${d.name}_artifact`} className="border-r align-middle text-center p-1"
+                                <td key={`${d.name}_artifact`} className="relative border-r align-middle text-center p-1"
                                   style={{ width: w, minWidth: w }}>
                                   <Suspense fallback={<Loader2 size={12} className="mx-auto animate-spin text-gray-400" />}>
                                     <ArtifactViewer key={`${s.id}_${d.name}_${artifactRefreshKey}`} studentId={s.id} domain={d.name} />
                                   </Suspense>
+                                  {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );
                             }
@@ -1412,7 +1461,7 @@ export function useRecordsPage() {
                               const dirty = isContentFieldDirty(contentKey, c.id) || isScoringReasonDirty(contentKey, c.id);
                               const reason = (scoreData as ScoringContent).__reasons?.[c.id] || '';
                               return (
-                                <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
+                                <td key={`${d.name}_${c.id}`} className="relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
                                   <div className="group relative">
                                     <input type="text" className={`input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`}
@@ -1430,6 +1479,7 @@ export function useRecordsPage() {
                                       </div>
                                     )}
                                   </div>
+                                  {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );
                             }
@@ -1439,7 +1489,7 @@ export function useRecordsPage() {
                               const llmError = (scoreData as ScoringContent).__llmError || '';
                               const llmErrorResult = (scoreData as ScoringContent).__llmErrorResult || '';
                               return (
-                                <td key={`${d.name}_total`} className={`border-r text-center font-bold text-blue-600 align-middle p-2 ${dirty ? 'bg-amber-50' : 'bg-blue-50/30'}`}
+                                <td key={`${d.name}_total`} className={`relative border-r text-center font-bold text-blue-600 align-middle p-2 ${dirty ? 'bg-amber-50' : 'bg-blue-50/30'}`}
                                   style={{ width: w, minWidth: w }}>
                                   <div className="group relative">
                                     <span>{scoreData.total || 0}</span>
@@ -1451,6 +1501,7 @@ export function useRecordsPage() {
                                       </div>
                                     )}
                                   </div>
+                                  {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );
                             }
@@ -1459,7 +1510,7 @@ export function useRecordsPage() {
                               const locked = !!d.file_id;
                               const dirty = normalizeStoredValue(writtenScores[key]) !== normalizeStoredValue(savedWrittenScores[key]);
                               return (
-                                <td key={`${d.name}_written`} className="border-r align-middle p-1"
+                                <td key={`${d.name}_written`} className="relative border-r align-middle p-1"
                                   style={{ width: w, minWidth: w }}>
                                   <input
                                     type="text"
@@ -1472,6 +1523,7 @@ export function useRecordsPage() {
                                     onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
                                     title={locked ? '지필 파일에서 가져온 점수라 파일 삭제 전까지 수정할 수 없습니다.' : undefined}
                                   />
+                                  {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );
                             }
@@ -1482,9 +1534,9 @@ export function useRecordsPage() {
                               const contentKey = `${s.id}_comments_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, 'text');
                               return (
-                                <td key={`${d.name}_comments`} className="border-r align-top p-1"
+                                <td key={`${d.name}_comments`} className="relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <textarea className={`textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: 80 }}
+                                  <textarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                     value={commentsData.text || ''}
                                     onChange={ev => updateContent(s.id, 'comments', 'text', ev.target.value, d.name)}
                                     disabled={locked}
@@ -1492,6 +1544,7 @@ export function useRecordsPage() {
                                     onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
                                     title={locked ? 'AI 기록 생성 진행 중이라 수정할 수 없습니다.' : undefined}
                                   />
+                                  {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );
                             }
@@ -1505,9 +1558,9 @@ export function useRecordsPage() {
                               const contentKey = `${s.id}_comments_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, c.itemTitle!);
                               return (
-                                <td key={`${d.name}_${c.id}`} className="border-r align-top p-1"
+                                <td key={`${d.name}_${c.id}`} className="relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <textarea className={`textarea w-full text-sm resize-y disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: 80 }}
+                                  <textarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                     value={itemValue}
                                     onChange={ev => updateContent(s.id, 'comments', c.itemTitle!, ev.target.value, d.name)}
                                     disabled={locked}
@@ -1515,6 +1568,7 @@ export function useRecordsPage() {
                                     onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
                                     title={locked ? 'AI 기록 생성 진행 중이라 수정할 수 없습니다.' : undefined}
                                   />
+                                  {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );
                             }
@@ -1533,9 +1587,10 @@ export function useRecordsPage() {
                             .reduce((sum, exam) => sum + weightedScore(writtenScores[`${s.id}_${exam.domain_name}`], exam.max_score, exam.ratio), 0);
                           const grandTotal = performanceTotal + writtenTotal;
                           return (
-                            <td className="border-r text-center font-bold text-green-700 align-middle p-2 bg-green-50/30"
+                            <td className="relative border-r text-center font-bold text-green-700 align-middle p-2 bg-green-50/30"
                               style={{ width: grandTotalWidth, minWidth: grandTotalWidth }}>
                               {formatScore(grandTotal)}
+                              {renderCellResizeHandles(s.id, '_grand_total', 70)}
                             </td>
                           );
                         })()}
@@ -1543,9 +1598,9 @@ export function useRecordsPage() {
                         {/* Comp comments */}
                         {showComprehensive && (
                           <>
-                            <td className="align-top p-1 border-r"
+                            <td className="relative align-top p-1 border-r"
                               style={{ width: compWidth, minWidth: compWidth }}>
-                              <textarea className={`textarea w-full text-sm resize-y bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(isContentFieldDirty(`${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`, 'text'))}`} style={{ minHeight: 80 }}
+                              <textarea className={`textarea w-full text-sm bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(isContentFieldDirty(`${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`, 'text'))}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                 value={compCommentsText}
                                 onChange={ev => updateContent(s.id, 'comments', 'text', ev.target.value, SUBJECT_COMPREHENSIVE_DOMAIN)}
                                 disabled={selectedClass ? isAiCellLocked(selectedClass.id, s.id, 'comments', SUBJECT_COMPREHENSIVE_DOMAIN) : false}
@@ -1553,8 +1608,9 @@ export function useRecordsPage() {
                                 onKeyDown={e => handleKeyNav(e, rowIdx, tableLayout.compCommentsColIdx)}
                                 title={selectedClass && isAiCellLocked(selectedClass.id, s.id, 'comments', SUBJECT_COMPREHENSIVE_DOMAIN) ? 'AI 세특 생성 진행 중이라 수정할 수 없습니다.' : undefined}
                               />
+                              {renderCellResizeHandles(s.id, '_comp', 320)}
                             </td>
-                            <td className="align-top p-1 border-r text-center"
+                            <td className="relative align-top p-1 border-r text-center"
                               style={{ width: compCountWidth, minWidth: compCountWidth }}>
                               <div className={`whitespace-pre-line text-xs font-semibold ${isCompCommentsOver ? 'text-red-600' : 'text-gray-600'}`}>
                                 {isCompCommentsOver ? '초과' : '적정'}
@@ -1569,8 +1625,9 @@ export function useRecordsPage() {
                               >
                                 &lt;
                               </button>
+                              {renderCellResizeHandles(s.id, '_comp_count', 74)}
                             </td>
-                            <td className="align-top p-2"
+                            <td className="relative align-top p-2"
                               style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
                               {isSpellchecking ? (
                                 <div className="flex items-center gap-1.5 text-xs text-green-700">
@@ -1589,6 +1646,7 @@ export function useRecordsPage() {
                               ) : (
                                 <div className="text-xs text-gray-400">검사 전</div>
                               )}
+                              {renderCellResizeHandles(s.id, '_comp_spell', 320)}
                             </td>
                           </>
                         )}

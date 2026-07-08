@@ -24,6 +24,7 @@ export interface SettingsState {
   }>;
   loggingEnabled: boolean;
   artifactStripIntroBlocks: boolean;
+  artifactStripIntroBlocksDeprecated: boolean;
   pdfRedactionTopCm: number;
   aiEnabled: boolean;
   assignmentTeacherPasswordSet?: boolean;

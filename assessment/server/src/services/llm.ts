@@ -23,6 +23,7 @@ export interface LLMSettings {
   sequentialMode: boolean;
   loggingEnabled: boolean;
   artifactStripIntroBlocks: boolean;
+  artifactStripIntroBlocksDeprecated: boolean;
   pdfRedactionTopCm: number;
   aiEnabled: boolean;
 }
@@ -155,6 +156,7 @@ export async function getLLMSettings(): Promise<LLMSettings> {
     sequentialMode: activeMaxConcurrency <= 1,
     loggingEnabled: map['llm_logging_enabled'] !== 'false',
     artifactStripIntroBlocks: map['artifact_strip_intro_blocks'] !== 'false',
+    artifactStripIntroBlocksDeprecated: map['artifact_strip_intro_blocks_deprecated'] === 'true',
     pdfRedactionTopCm: Math.max(0, Math.min(30, parseFloat(map['pdf_redaction_top_cm'] || '0') || 0)),
     aiEnabled: map['ai_enabled'] === 'true',
   };

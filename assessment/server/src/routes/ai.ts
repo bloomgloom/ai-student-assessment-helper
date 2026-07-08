@@ -438,7 +438,7 @@ function stripLeadingCodeIntroBlock(code: string, ext: string): string {
 async function appendArtifactContents(
   parts: string[],
   artifacts: ArtifactRow[],
-  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'pdfRedactionTopCm'>,
+  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>,
   attachments: LLMImageAttachment[] = [],
 ): Promise<boolean> {
   let hasContent = false;
@@ -457,11 +457,11 @@ async function appendArtifactContents(
       try {
         const text = privacyMapper.sanitizeText(
           await extractHwpxText(fs.readFileSync(filepath), {
-            skipFirstTableRow: settings.artifactStripIntroBlocks,
+            skipFirstTableRow: settings.artifactStripIntroBlocksDeprecated,
           })
         );
         if (text) {
-          const note = settings.artifactStripIntroBlocks
+          const note = settings.artifactStripIntroBlocksDeprecated
             ? 'HWPX XML 텍스트 추출: 첫 표 행 제외'
             : 'HWPX XML 텍스트 추출';
           parts.push(`[${promptLabel}]\n[${note}]\n${text}\n---`);
@@ -472,11 +472,11 @@ async function appendArtifactContents(
       try {
         const text = privacyMapper.sanitizeText(
           extractIpynbInputText(fs.readFileSync(filepath), {
-            skipFirstMarkdownCell: settings.artifactStripIntroBlocks,
+            skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated,
           })
         );
         if (text) {
-          const note = settings.artifactStripIntroBlocks
+          const note = settings.artifactStripIntroBlocksDeprecated
             ? 'Jupyter Notebook 입력 추출: 첫 마크다운 셀 및 실행 결과 제외'
             : 'Jupyter Notebook 입력 추출: 실행 결과 제외';
           parts.push(`[${promptLabel}]\n[${note}]\n${text}\n---`);
@@ -488,7 +488,7 @@ async function appendArtifactContents(
           resolvedArtifact,
           artifacts.map((item) => ({ ...item, filepath: resolveStoredPath(item.filepath) })),
           privacyMapper.artifactName(artifact),
-          { skipFirstMarkdownCell: settings.artifactStripIntroBlocks },
+          { skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated },
         );
         const text = privacyMapper.sanitizeText(evidence.text);
         if (text) {

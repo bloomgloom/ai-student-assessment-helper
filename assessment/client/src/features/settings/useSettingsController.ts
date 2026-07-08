@@ -41,6 +41,7 @@ export function useSettingsController() {
     providerSettings: {},
     loggingEnabled: true,
     artifactStripIntroBlocks: true,
+    artifactStripIntroBlocksDeprecated: false,
     pdfRedactionTopCm: 0,
     aiEnabled: false,
     assignmentTeacherPasswordSet: false,
@@ -70,6 +71,7 @@ export function useSettingsController() {
         temperatureEnabled: data.temperatureEnabled === true,
         temperatures: normalizeTemperatures(provider, data.temperatures),
         artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
+        artifactStripIntroBlocksDeprecated: data.artifactStripIntroBlocksDeprecated === true,
         pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
         aiEnabled: data.aiEnabled === true,
         assignmentTeacherPasswordSet: data.assignmentTeacherPasswordSet === true,
@@ -203,7 +205,7 @@ export function useSettingsController() {
   };
 
   const handleInputOptionChange = async (
-    key: 'loggingEnabled' | 'artifactStripIntroBlocks' | 'aiEnabled' | 'pdfRedactionTopCm',
+    key: 'loggingEnabled' | 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'aiEnabled' | 'pdfRedactionTopCm',
     value: boolean | number,
   ) => {
     const previousValue = settings[key];
