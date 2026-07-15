@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Save, TestTube, CheckCircle, XCircle, Loader2, RefreshCw, Trash2, AlertTriangle, Eye, EyeOff, Download, Upload } from 'lucide-react';
-import { DEFAULT_MODELS, DEFAULT_URLS, PROVIDERS, TEMPERATURE_TASKS } from './constants';
+import { ANTHROPIC_EFFORT_OPTIONS, DEFAULT_MODELS, DEFAULT_URLS, PROVIDERS, TEMPERATURE_TASKS } from './constants';
 import { useSettingsController } from './useSettingsController';
-import { SettingsTab } from './types';
+import { AnthropicEffort, SettingsTab } from './types';
 import { hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
 
 interface SettingsContentProps extends ReturnType<typeof useSettingsController> {
@@ -41,10 +41,15 @@ export function SettingsContent({
   isOpenAICompatible,
   needsKey,
   needsUrl,
+  isAnthropic,
   temperatureMax,
   temperatureSupported,
   handleTemperatureChange,
   handleTemperatureEnabledChange,
+  handleAnthropicOptionsEnabledChange,
+  handleAnthropicEffortChange,
+  handleAnthropicThinkingEnabledChange,
+  handleAnthropicMaxTokensChange,
 }: SettingsContentProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [teacherPassword, setTeacherPassword] = useState('');
@@ -53,6 +58,7 @@ export function SettingsContent({
   const aiDisabled = !settings.aiEnabled;
   const disabledPanelClass = aiDisabled ? 'opacity-45 grayscale select-none' : '';
   const temperatureControlsDisabled = aiDisabled || !settings.temperatureEnabled || !temperatureSupported;
+  const anthropicControlsDisabled = aiDisabled || !settings.anthropicOptionsEnabled;
 
   return (
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable">
@@ -315,41 +321,115 @@ export function SettingsContent({
           </p>
         </div>
 
-        {/* Temperature */}
-        <div className="space-y-3">
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <label className="label mb-0">Temperature</label>
-              <label className={`flex items-center gap-2 text-xs ${aiDisabled || !temperatureSupported ? 'text-gray-400' : 'text-gray-700 cursor-pointer'}`}>
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 rounded"
-                  checked={settings.temperatureEnabled && temperatureSupported}
-                  disabled={aiDisabled || !temperatureSupported}
-                  onChange={(e) => handleTemperatureEnabledChange(e.target.checked)}
-                />
-                사용
-              </label>
+        {isAnthropic ? (
+          <div className="space-y-3">
+            <div>
+              <label className="label">Max tokens</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                className="input"
+                value={settings.anthropicMaxTokens}
+                disabled={aiDisabled}
+                onChange={(e) => handleAnthropicMaxTokensChange(e.target.value === '' ? '' : Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+              />
             </div>
-            <p className="text-xs text-gray-400">
-              낮을수록 일관성이 높고, 높을수록 표현이 다양해집니다. Claude는 0~1.0, 나머지는 0~2.0 범위입니다.
-            </p>
-            {!temperatureSupported && (
-              <p className="text-xs text-amber-600 mt-1">
-                선택한 모델은 temperature 설정을 지원하지 않는 것으로 처리되어 요청에 temperature를 보내지 않습니다.
-              </p>
-            )}
-          </div>
-          <div className="space-y-4">
-            {TEMPERATURE_TASKS.map((task) => (
-              <div key={task.key} className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <label className="text-xs font-medium text-gray-600" htmlFor={`temperature-${task.key}`}>
-                    {task.label}
-                  </label>
+            <div>
+              <div className="flex items-center justify-between gap-3">
+                <label className="label mb-0">Claude 출력 옵션</label>
+                <label className={`flex items-center gap-2 text-xs ${aiDisabled ? 'text-gray-400' : 'text-gray-700 cursor-pointer'}`}>
                   <input
-                    type="number"
-                    className="input h-8 w-20 text-right text-xs"
+                    type="checkbox"
+                    className="w-4 h-4 rounded"
+                    checked={settings.anthropicOptionsEnabled}
+                    disabled={aiDisabled}
+                    onChange={(e) => handleAnthropicOptionsEnabledChange(e.target.checked)}
+                  />
+                  사용
+                </label>
+              </div>
+              <p className="text-xs text-gray-400">
+                끄면 Claude 요청에 effort와 thinking 파라미터를 보내지 않습니다.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Effort</label>
+                <select
+                  className="select"
+                  value={settings.anthropicOptionsEnabled ? settings.anthropicEffort : ''}
+                  disabled={anthropicControlsDisabled}
+                  onChange={(e) => handleAnthropicEffortChange(e.target.value as AnthropicEffort)}
+                >
+                  <option value="">선택 안 함</option>
+                  {ANTHROPIC_EFFORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-end pb-2">
+                <label className={`flex items-center gap-2 text-sm ${anthropicControlsDisabled ? 'text-gray-400' : 'text-gray-700 cursor-pointer'}`}>
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded"
+                    checked={settings.anthropicOptionsEnabled && settings.anthropicThinkingEnabled}
+                    disabled={anthropicControlsDisabled}
+                    onChange={(e) => handleAnthropicThinkingEnabledChange(e.target.checked)}
+                  />
+                  Thinking 사용
+                </label>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <div className="flex items-center justify-between gap-3">
+                <label className="label mb-0">Temperature</label>
+                <label className={`flex items-center gap-2 text-xs ${aiDisabled || !temperatureSupported ? 'text-gray-400' : 'text-gray-700 cursor-pointer'}`}>
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded"
+                    checked={settings.temperatureEnabled && temperatureSupported}
+                    disabled={aiDisabled || !temperatureSupported}
+                    onChange={(e) => handleTemperatureEnabledChange(e.target.checked)}
+                  />
+                  사용
+                </label>
+              </div>
+              <p className="text-xs text-gray-400">
+                낮을수록 일관성이 높고, 높을수록 표현이 다양해집니다. Anthropic 이외 공급자는 0~2.0 범위입니다.
+              </p>
+              {!temperatureSupported && (
+                <p className="text-xs text-amber-600 mt-1">
+                  선택한 모델은 temperature 설정을 지원하지 않는 것으로 처리되어 요청에 temperature를 보내지 않습니다.
+                </p>
+              )}
+            </div>
+            <div className="space-y-4">
+              {TEMPERATURE_TASKS.map((task) => (
+                <div key={task.key} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-xs font-medium text-gray-600" htmlFor={`temperature-${task.key}`}>
+                      {task.label}
+                    </label>
+                    <input
+                      type="number"
+                      className="input h-8 w-20 text-right text-xs"
+                      min={0}
+                      max={temperatureMax}
+                      step={0.1}
+                      value={settings.temperatures[task.key]}
+                      disabled={temperatureControlsDisabled}
+                      onChange={(e) => handleTemperatureChange(task.key, Number(e.target.value))}
+                    />
+                  </div>
+                  <input
+                    id={`temperature-${task.key}`}
+                    type="range"
+                    className="w-full accent-gray-800"
                     min={0}
                     max={temperatureMax}
                     step={0.1}
@@ -358,21 +438,10 @@ export function SettingsContent({
                     onChange={(e) => handleTemperatureChange(task.key, Number(e.target.value))}
                   />
                 </div>
-                <input
-                  id={`temperature-${task.key}`}
-                  type="range"
-                  className="w-full accent-gray-800"
-                  min={0}
-                  max={temperatureMax}
-                  step={0.1}
-                  value={settings.temperatures[task.key]}
-                  disabled={temperatureControlsDisabled}
-                  onChange={(e) => handleTemperatureChange(task.key, Number(e.target.value))}
-                />
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* 저장 / 테스트 */}
         <div className="flex items-center gap-3 pt-2">
@@ -420,7 +489,7 @@ export function SettingsContent({
           <ul className="text-xs text-gray-600 space-y-1.5">
             <li><span className="font-medium">Google Gemini:</span> Google AI Studio에서 API 키 발급 → gemini-2.5-flash 권장</li>
             <li><span className="font-medium">OpenAI:</span> OpenAI 플랫폼에서 API 키 발급 → gpt-4o-mini 권장</li>
-            <li><span className="font-medium">Anthropic:</span> Anthropic Console에서 API 키 발급 → claude-sonnet-4-6 권장</li>
+            <li><span className="font-medium">Anthropic:</span> Anthropic Console에서 API 키 발급 → Claude 최신 모델명을 직접 입력하거나 모델 가져오기를 사용하세요.</li>
             <li><span className="font-medium">Ollama:</span> 로컬 Ollama 서버 실행 후 사용</li>
             <li><span className="font-medium">OpenAI 호환:</span> 기본 서버는 <code className="bg-gray-100 px-1 rounded">http://localhost:8000/v1</code>이며, 모델 가져오기로 목록을 불러올 수 있습니다.</li>
           </ul>

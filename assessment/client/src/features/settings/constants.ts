@@ -9,7 +9,7 @@ export const PROVIDERS = [
 export const DEFAULT_MODELS: Record<string, string> = {
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
-  anthropic: 'claude-sonnet-4-6',
+  anthropic: 'claude-sonnet-5',
   ollama: 'llama3',
   'openai-compatible': '',
 };
@@ -38,10 +38,18 @@ export const DEFAULT_TEMPERATURES = {
   },
 };
 
+export const ANTHROPIC_EFFORT_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'XHigh' },
+  { value: 'max', label: 'Max' },
+] as const;
+
 export function supportsTemperature(provider: string, model: string) {
+  if (provider === 'anthropic') return false;
   const normalized = model.trim().toLowerCase();
   if (!normalized) return true;
-  if (provider === 'anthropic') return !normalized.includes('opus');
   if (provider === 'openai' || provider === 'openai-compatible') {
     return !(
       normalized.startsWith('o1') ||

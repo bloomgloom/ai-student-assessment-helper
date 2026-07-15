@@ -17,11 +17,13 @@ import {
   fetchOpenAICompatibleModels,
   fetchOpenAIModels,
 } from '../services/llm';
+import type { AnthropicEffort } from '../services/llm';
 
 const UPLOADS_ROOT = UPLOADS_DIR;
 const router = Router();
 const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024 * 1024 } });
 const TEMPERATURE_KEYS = ['domainManagement', 'recordsScoring', 'recordsComments'] as const;
+const ANTHROPIC_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
 function providerTemperatureMax(provider: string) {
   return provider === 'anthropic' ? 1 : 2;
@@ -31,6 +33,10 @@ function sanitizeTemperature(provider: string, value: unknown) {
   const numeric = parseFloat(String(value));
   if (!Number.isFinite(numeric)) return undefined;
   return Math.max(0, Math.min(providerTemperatureMax(provider), numeric));
+}
+
+function sanitizeAnthropicEffort(value: unknown): AnthropicEffort {
+  return ANTHROPIC_EFFORTS.has(String(value)) ? String(value) as AnthropicEffort : 'high';
 }
 
 function makeBackupFilename() {
@@ -91,6 +97,10 @@ router.put('/', async (req: Request, res: Response) => {
     maxConcurrency,
     temperatureEnabled,
     temperatures,
+    anthropicOptionsEnabled,
+    anthropicEffort,
+    anthropicThinkingEnabled,
+    anthropicMaxTokens,
     loggingEnabled,
     artifactStripIntroBlocks,
     artifactStripIntroBlocksDeprecated,
@@ -118,6 +128,14 @@ router.put('/', async (req: Request, res: Response) => {
     if (baseUrl !== undefined) pairs.push([`llm_base_url_${provider}`, String(baseUrl)]);
     if (concurrency != null) pairs.push([`llm_max_concurrency_${provider}`, String(concurrency)]);
     if (temperatureEnabled !== undefined) pairs.push([`llm_temperature_enabled_${provider}`, String(temperatureEnabled)]);
+    if (anthropicOptionsEnabled !== undefined) pairs.push([`llm_anthropic_options_enabled_${provider}`, String(anthropicOptionsEnabled)]);
+    if (anthropicEffort !== undefined) pairs.push([`llm_anthropic_effort_${provider}`, sanitizeAnthropicEffort(anthropicEffort)]);
+    if (anthropicThinkingEnabled !== undefined) pairs.push([`llm_anthropic_thinking_enabled_${provider}`, String(anthropicThinkingEnabled)]);
+    if (anthropicMaxTokens !== undefined) {
+      const maxTokens = parseInt(String(anthropicMaxTokens), 10);
+      if (!Number.isFinite(maxTokens) || maxTokens <= 0) return res.status(400).json({ error: 'Claude max token을 입력해주세요.' });
+      pairs.push([`llm_anthropic_max_tokens_${provider}`, String(maxTokens)]);
+    }
     if (temperatures && typeof temperatures === 'object') {
       for (const key of TEMPERATURE_KEYS) {
         const value = sanitizeTemperature(provider, temperatures[key]);
@@ -135,6 +153,10 @@ router.put('/', async (req: Request, res: Response) => {
         maxConcurrency?: unknown;
         temperatureEnabled?: unknown;
         temperatures?: Record<string, unknown>;
+        anthropicOptionsEnabled?: unknown;
+        anthropicEffort?: unknown;
+        anthropicThinkingEnabled?: unknown;
+        anthropicMaxTokens?: unknown;
       };
       if (item.model !== undefined) pairs.push([`llm_model_${p}`, String(item.model)]);
       if (item.baseUrl !== undefined) pairs.push([`llm_base_url_${p}`, String(item.baseUrl)]);
@@ -144,6 +166,20 @@ router.put('/', async (req: Request, res: Response) => {
       }
       if (item.temperatureEnabled !== undefined) {
         pairs.push([`llm_temperature_enabled_${p}`, String(item.temperatureEnabled)]);
+      }
+      if (item.anthropicOptionsEnabled !== undefined) {
+        pairs.push([`llm_anthropic_options_enabled_${p}`, String(item.anthropicOptionsEnabled)]);
+      }
+      if (item.anthropicEffort !== undefined) {
+        pairs.push([`llm_anthropic_effort_${p}`, sanitizeAnthropicEffort(item.anthropicEffort)]);
+      }
+      if (item.anthropicThinkingEnabled !== undefined) {
+        pairs.push([`llm_anthropic_thinking_enabled_${p}`, String(item.anthropicThinkingEnabled)]);
+      }
+      if (item.anthropicMaxTokens !== undefined) {
+        const maxTokens = parseInt(String(item.anthropicMaxTokens), 10);
+        if (!Number.isFinite(maxTokens) || maxTokens <= 0) return res.status(400).json({ error: 'Claude max token을 입력해주세요.' });
+        pairs.push([`llm_anthropic_max_tokens_${p}`, String(maxTokens)]);
       }
       if (item.temperatures && typeof item.temperatures === 'object') {
         for (const key of TEMPERATURE_KEYS) {
@@ -327,6 +363,12 @@ router.post('/test', async (req: Request, res: Response) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : undefined;
     const hasTestSettings = body && typeof body.provider === 'string';
+    if (hasTestSettings && body.provider === 'anthropic') {
+      const maxTokens = parseInt(String(body.anthropicMaxTokens), 10);
+      if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+        return res.status(400).json({ error: 'Claude max token을 입력해주세요.' });
+      }
+    }
     const result = await callLLM(
       '안녕하세요! 테스트 메시지입니다. 한 문장으로 응답해주세요.',
       hasTestSettings ? {
@@ -338,6 +380,10 @@ router.post('/test', async (req: Request, res: Response) => {
         maxConcurrency: Math.max(1, parseInt(String(body.maxConcurrency), 10) || 1),
         temperatureEnabled: body.temperatureEnabled === true,
         temperatures: body.temperatures || {},
+        anthropicOptionsEnabled: body.anthropicOptionsEnabled === true,
+        anthropicEffort: sanitizeAnthropicEffort(body.anthropicEffort),
+        anthropicThinkingEnabled: body.anthropicThinkingEnabled === true,
+        anthropicMaxTokens: parseInt(String(body.anthropicMaxTokens), 10),
         providerSettings: body.providerSettings || {},
         sequentialMode: (parseInt(String(body.maxConcurrency), 10) || 1) <= 1,
         loggingEnabled: body.loggingEnabled !== false,

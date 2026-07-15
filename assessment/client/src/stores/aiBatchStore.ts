@@ -1,12 +1,13 @@
 import { create } from 'zustand';
+import { aiApi } from '../lib/api';
 import { startDisplaySleepPrevention, stopDisplaySleepPrevention } from '../lib/displaySleepPrevention';
 
-export type BatchContentType = 'scoring' | 'comments';
+export type BatchContentType = 'scoring' | 'comments' | 'combined';
 export type BatchStatus = 'running' | 'stopping' | 'completed' | 'error' | 'stopped';
 
 export interface GeneratedContentUpdate {
   studentId: number;
-  contentType: BatchContentType;
+  contentType: 'scoring' | 'comments';
   domain: string;
   content?: string;
   error?: string;
@@ -26,6 +27,9 @@ export interface BatchJob {
   message: string;
   status: BatchStatus;
   startedAt: number;
+  mode?: 'stream' | 'claude-batch';
+  providerBatchIds?: string[];
+  lockedCells?: Array<{ contentType: BatchContentType; domain: string; studentIds: number[] }>;
 }
 
 interface StartBatchArgs {
@@ -38,11 +42,16 @@ interface StartBatchArgs {
 
 interface AiBatchState {
   currentJob: BatchJob | null;
+  claudeBatchJobs: BatchJob[];
   updates: GeneratedContentUpdate[];
   startBatch: (args: StartBatchArgs) => Promise<boolean>;
+  loadClaudeBatchJobs: (classId: number) => Promise<void>;
+  startClaudeBatch: (args: StartBatchArgs) => Promise<boolean>;
+  checkClaudeBatchResults: (jobId: string) => Promise<boolean>;
   stopBatch: () => void;
   clearFinished: () => void;
   isCellLocked: (classId: number, studentId: number, contentType: BatchContentType, domain: string) => boolean;
+  hasLockedCells: (classId: number, studentIds: number[], contentType: BatchContentType, domains: string[]) => boolean;
 }
 
 let activeController: AbortController | null = null;
@@ -62,9 +71,43 @@ function isGeneratedContentUpdate(value: unknown): value is GeneratedContentUpda
   return Boolean(event.studentId && event.contentType && event.domain && (event.content || event.error || event.llmResult));
 }
 
+function contentTypesOverlap(a: BatchContentType, b: BatchContentType) {
+  return a === b || a === 'combined' || b === 'combined';
+}
+
+function jobLocksCell(job: BatchJob | null | undefined, classId: number, studentId: number, contentType: BatchContentType, domain: string) {
+  if (!job) return false;
+  if (job.classId !== classId) return false;
+  if (job.status !== 'running' && job.status !== 'stopping') return false;
+  return (contentTypesOverlap(job.contentType, contentType) && job.domains.includes(domain) && job.studentIds.includes(studentId))
+    || !!job.lockedCells?.some((cell) =>
+      contentTypesOverlap(cell.contentType, contentType) &&
+      cell.domain === domain &&
+      cell.studentIds.includes(studentId)
+    );
+}
+
 export const useAiBatchStore = create<AiBatchState>((set, get) => ({
   currentJob: null,
+  claudeBatchJobs: [],
   updates: [],
+
+  loadClaudeBatchJobs: async (classId) => {
+    try {
+      const res = await aiApi.listClaudeBatchJobs(classId);
+      const jobs = (Array.isArray(res.data.jobs) ? res.data.jobs : []) as BatchJob[];
+      set((state) => {
+        return {
+          claudeBatchJobs: [
+            ...state.claudeBatchJobs.filter((job) => job.classId !== classId),
+            ...jobs,
+          ],
+        };
+      });
+    } catch {
+      // 목록 복원 실패는 화면 사용을 막지 않습니다.
+    }
+  },
 
   startBatch: async ({ classId, classLabel, domains, contentType, studentIds }) => {
     const existing = get().currentJob;
@@ -248,6 +291,92 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
     }
   },
 
+  startClaudeBatch: async ({ classId, classLabel, domains, contentType, studentIds }) => {
+    if (get().hasLockedCells(classId, studentIds, contentType, domains)) return false;
+    if (clearTimer) {
+      window.clearTimeout(clearTimer);
+      clearTimer = null;
+    }
+
+    let submitted = 0;
+    try {
+      for (const domain of domains) {
+        const res = await aiApi.generateClaudeBatch({ classId, domain, contentType, studentIds });
+        const batchId = String(res.data.batchId || '');
+        if (!batchId) continue;
+        const immediate = Array.isArray(res.data.immediateUpdates) ? res.data.immediateUpdates : [];
+        const errors = immediate.filter((item: GeneratedContentUpdate) => item.error).length;
+        const job: BatchJob = {
+          id: newJobId(),
+          classId,
+          classLabel,
+          domains: [domain],
+          contentType,
+          studentIds,
+          completed: immediate.length,
+          total: studentIds.length,
+          errorCount: errors,
+          message: `[${displayDomainName(domain)}] Claude 배치 제출 완료`,
+          status: 'running',
+          startedAt: Date.now(),
+          mode: 'claude-batch',
+          providerBatchIds: [batchId],
+          lockedCells: [{ contentType, domain, studentIds }],
+        };
+        submitted++;
+        set((state) => ({
+          updates: immediate.length ? [...state.updates, ...immediate] : state.updates,
+          claudeBatchJobs: [...state.claudeBatchJobs, job],
+        }));
+      }
+      return submitted > 0;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  checkClaudeBatchResults: async (jobId) => {
+    const job = get().claudeBatchJobs.find((item) => item.id === jobId);
+    if (!job || job.mode !== 'claude-batch' || !job.providerBatchIds?.length) return false;
+    set((state) => ({
+      claudeBatchJobs: state.claudeBatchJobs.map((item) => item.id === job.id
+        ? { ...item, message: 'Claude 배치 결과 확인 중...' }
+        : item
+      ),
+    }));
+    try {
+      const res = await aiApi.checkClaudeBatchResults(job.providerBatchIds);
+      const updates = (Array.isArray(res.data.updates) ? res.data.updates : []) as GeneratedContentUpdate[];
+      const errors = updates.filter((item) => item.error).length;
+      if (res.data.inProgress) {
+        set((state) => ({
+          updates: updates.length ? [...state.updates, ...updates] : state.updates,
+          claudeBatchJobs: state.claudeBatchJobs.map((item) => item.id === job.id ? {
+            ...item,
+            completed: Math.max(item.completed, updates.length),
+            errorCount: item.errorCount + errors,
+            message: 'Claude 배치가 아직 진행 중입니다.',
+          } : item),
+        }));
+        return false;
+      }
+
+      set((state) => ({
+        updates: updates.length ? [...state.updates, ...updates] : state.updates,
+        claudeBatchJobs: state.claudeBatchJobs.filter((item) => item.id !== job.id),
+      }));
+      return true;
+    } catch (e) {
+      set((state) => ({
+        claudeBatchJobs: state.claudeBatchJobs.map((item) => item.id === job.id
+          ? { ...item, message: `결과 확인 오류: ${e instanceof Error ? e.message : String(e)}` }
+          : item
+        ),
+      }));
+      return false;
+    }
+  },
+
   stopBatch: () => {
     activeController?.abort();
     set((state) => state.currentJob ? {
@@ -267,11 +396,14 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
 
   isCellLocked: (classId, studentId, contentType, domain) => {
     const job = get().currentJob;
-    if (!job || job.classId !== classId) return false;
-    if (job.status !== 'running' && job.status !== 'stopping') return false;
-    return job.contentType === contentType
-      && job.domains.includes(domain)
-      && job.studentIds.includes(studentId);
+    if (jobLocksCell(job, classId, studentId, contentType, domain)) return true;
+    return get().claudeBatchJobs.some((item) => jobLocksCell(item, classId, studentId, contentType, domain));
+  },
+
+  hasLockedCells: (classId, studentIds, contentType, domains) => {
+    return studentIds.some((studentId) =>
+      domains.some((domain) => get().isCellLocked(classId, studentId, contentType, domain))
+    );
   },
 }));
 

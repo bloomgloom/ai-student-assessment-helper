@@ -239,6 +239,19 @@ export async function initDb(): Promise<void> {
       updated_at     TEXT    DEFAULT (datetime('now')),
       UNIQUE(class_id, student_id, domain_name)
     );
+
+    CREATE TABLE IF NOT EXISTS ai_batch_jobs (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider_batch_id   TEXT    NOT NULL UNIQUE,
+      class_id            INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      domain              TEXT    NOT NULL,
+      content_type        TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'combined')),
+      status              TEXT    NOT NULL DEFAULT 'in_progress',
+      request_count       INTEGER NOT NULL DEFAULT 0,
+      metadata            TEXT    NOT NULL DEFAULT '{}',
+      created_at          TEXT    DEFAULT (datetime('now')),
+      updated_at          TEXT    DEFAULT (datetime('now'))
+    );
   `);
 
   await ensureColumn('classes', 'scoring_filename', "TEXT NOT NULL DEFAULT ''");
@@ -248,6 +261,7 @@ export async function initDb(): Promise<void> {
   await ensureColumn('subject_domains', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('achievement_standards', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('class_students', 'personal_num', "TEXT NOT NULL DEFAULT ''");
+  await migrateAiBatchJobsCombinedContentType();
 
   // domain_eval.excel_col → score 마이그레이션
   await ensureRenameColumn('domain_eval', 'excel_col', 'score');
@@ -342,6 +356,35 @@ async function ensureRenameColumn(table: string, oldName: string, newName: strin
   if (hasOld) {
     await getClient().execute(`ALTER TABLE ${table} RENAME COLUMN ${oldName} TO ${newName}`);
   }
+}
+
+async function migrateAiBatchJobsCombinedContentType(): Promise<void> {
+  const row = await queryOne<{ sql: string }>(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_batch_jobs'"
+  );
+  if (!row?.sql || row.sql.includes("'combined'")) return;
+  const db = getClient();
+  await db.execute('ALTER TABLE ai_batch_jobs RENAME TO ai_batch_jobs_old');
+  await db.execute(`
+    CREATE TABLE ai_batch_jobs (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider_batch_id   TEXT    NOT NULL UNIQUE,
+      class_id            INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      domain              TEXT    NOT NULL,
+      content_type        TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'combined')),
+      status              TEXT    NOT NULL DEFAULT 'in_progress',
+      request_count       INTEGER NOT NULL DEFAULT 0,
+      metadata            TEXT    NOT NULL DEFAULT '{}',
+      created_at          TEXT    DEFAULT (datetime('now')),
+      updated_at          TEXT    DEFAULT (datetime('now'))
+    )
+  `);
+  await db.execute(`
+    INSERT INTO ai_batch_jobs(id, provider_batch_id, class_id, domain, content_type, status, request_count, metadata, created_at, updated_at)
+    SELECT id, provider_batch_id, class_id, domain, content_type, status, request_count, metadata, created_at, updated_at
+    FROM ai_batch_jobs_old
+  `);
+  await db.execute('DROP TABLE ai_batch_jobs_old');
 }
 
 // 편의 함수: SELECT one

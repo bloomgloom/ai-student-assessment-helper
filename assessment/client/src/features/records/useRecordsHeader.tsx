@@ -1,7 +1,6 @@
 import { RefObject } from 'react';
 import { Download, Save, Trash2, Upload } from 'lucide-react';
 import { PageHeaderAction } from '../../components/common/PageHeaderActions';
-import { SUBJECT_COMPREHENSIVE_DOMAIN } from './constants';
 import { ClassItem } from './types';
 
 interface UseRecordsHeaderOptions {
@@ -11,6 +10,7 @@ interface UseRecordsHeaderOptions {
   showScoring: boolean;
   showComments: boolean;
   showComprehensive: boolean;
+  claudeBatchJobCount: number;
   canShowScoring: boolean;
   canShowComments: boolean;
   setShowScoring: (value: boolean) => void;
@@ -21,7 +21,9 @@ interface UseRecordsHeaderOptions {
   uploadingZip: boolean;
   fileInputRef: RefObject<HTMLInputElement>;
   handleBulkZipUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  handleBatchGenerate: (type: 'scoring' | 'comments', explicitDomain?: string) => void;
+  handleGenerateSelected: () => void;
+  handleStartClaudeBatch: () => void;
+  handleOpenClaudeBatchResults: () => void;
   batchGenerating: boolean;
   handleBatchSpellcheck: () => void;
   spellcheckProgress: { completed: number; total: number } | null;
@@ -46,6 +48,7 @@ export function useRecordsHeader({
   showScoring,
   showComments,
   showComprehensive,
+  claudeBatchJobCount,
   canShowScoring,
   canShowComments,
   setShowScoring,
@@ -56,7 +59,9 @@ export function useRecordsHeader({
   uploadingZip,
   fileInputRef,
   handleBulkZipUpload,
-  handleBatchGenerate,
+  handleGenerateSelected,
+  handleStartClaudeBatch,
+  handleOpenClaudeBatchResults,
   batchGenerating,
   handleBatchSpellcheck,
   spellcheckProgress,
@@ -74,6 +79,9 @@ export function useRecordsHeader({
   aiEnabled,
 }: UseRecordsHeaderOptions) {
   const showDomainControls = showScoring || showComments;
+  const invalidComprehensiveMix = showComprehensive && (showScoring || showComments);
+  const showGenerationActions = (showScoring || showComments || showComprehensive) && !invalidComprehensiveMix;
+  const showSpellcheckAction = showComprehensive && !showScoring && !showComments;
   const toggleButtonClassName = (active: boolean, enabled = true) =>
     `px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!enabled ? 'opacity-40 cursor-not-allowed text-gray-400' :
       active ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
@@ -162,28 +170,41 @@ export function useRecordsHeader({
       onChange: handleBulkZipUpload,
       disabled: uploadingZip,
     }] : []),
-    ...(showScoring ? [{
-      key: 'generate-scoring',
+    ...(showGenerationActions ? [{
+      key: 'generate-selected',
       variant: 'rainbow' as const,
-      label: '채점',
-      onClick: () => handleBatchGenerate('scoring'),
+      label: '생성',
+      onClick: handleGenerateSelected,
       disabled: batchGenerating || !aiEnabled,
+      title: '선택된 채점/기록/세특 실시간 생성',
+    }, {
+      key: 'claude-batch-actions',
+      type: 'custom' as const,
+      render: () => (
+        <div className="inline-flex h-9 items-stretch">
+          <button
+            type="button"
+            className={`btn-rainbow px-4 text-sm ${claudeBatchJobCount > 0 ? 'rounded-r-none' : ''}`}
+            onClick={handleStartClaudeBatch}
+            disabled={batchGenerating || !aiEnabled}
+            title="선택된 채점/기록/세특 Claude 배치 요청"
+          >
+            배치
+          </button>
+          {claudeBatchJobCount > 0 && (
+            <button
+              type="button"
+              className="btn-secondary -ml-px rounded-l-none px-3 text-sm"
+              onClick={handleOpenClaudeBatchResults}
+              title="Claude 배치 결과 확인"
+            >
+              결과 {claudeBatchJobCount}
+            </button>
+          )}
+        </div>
+      ),
     }] : []),
-    ...(showComments ? [{
-      key: 'generate-record',
-      variant: 'rainbow' as const,
-      label: '기록',
-      onClick: () => handleBatchGenerate('comments'),
-      disabled: batchGenerating || !aiEnabled,
-    }] : []),
-    ...(showComprehensive ? [{
-      key: 'generate-comments',
-      variant: 'rainbow' as const,
-      label: '세특',
-      onClick: () => handleBatchGenerate('comments', SUBJECT_COMPREHENSIVE_DOMAIN),
-      disabled: batchGenerating || !aiEnabled,
-    }] : []),
-    ...(showComprehensive ? [{
+    ...(showSpellcheckAction ? [{
       key: 'spellcheck',
       variant: 'rainbow' as const,
       label: '교정',

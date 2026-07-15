@@ -12,12 +12,20 @@ export interface LLMSettings {
   maxConcurrency: number;
   temperatureEnabled: boolean;
   temperatures: AiTemperatures;
+  anthropicOptionsEnabled: boolean;
+  anthropicEffort: AnthropicEffort;
+  anthropicThinkingEnabled: boolean;
+  anthropicMaxTokens: number;
   providerSettings: Record<string, {
     model: string;
     baseUrl: string;
     maxConcurrency: number;
     temperatureEnabled?: boolean;
     temperatures?: AiTemperatures;
+    anthropicOptionsEnabled?: boolean;
+    anthropicEffort?: AnthropicEffort;
+    anthropicThinkingEnabled?: boolean;
+    anthropicMaxTokens?: number;
   }>;
   // 호환용 필드: maxConcurrency <= 1이면 true
   sequentialMode: boolean;
@@ -35,6 +43,10 @@ export interface AiTemperatures {
   recordsScoring: number;
   recordsComments: number;
 }
+
+export type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+const ANTHROPIC_EFFORTS = new Set<AnthropicEffort>(['low', 'medium', 'high', 'xhigh', 'max']);
 
 function providerTemperatureMax(provider: string) {
   return provider === 'anthropic' ? 1 : 2;
@@ -70,9 +82,9 @@ function clampTemperatureForProvider(provider: string, value: number | undefined
 }
 
 export function supportsTemperature(provider: string, model: string) {
+  if (provider === 'anthropic') return false;
   const normalized = model.trim().toLowerCase();
   if (!normalized) return true;
-  if (provider === 'anthropic') return !normalized.includes('opus');
   if (provider === 'openai' || provider === 'openai-compatible') {
     return !(
       normalized.startsWith('o1') ||
@@ -82,6 +94,16 @@ export function supportsTemperature(provider: string, model: string) {
     );
   }
   return true;
+}
+
+function sanitizeAnthropicEffort(value: unknown): AnthropicEffort {
+  return ANTHROPIC_EFFORTS.has(value as AnthropicEffort) ? value as AnthropicEffort : 'high';
+}
+
+function sanitizeAnthropicMaxTokens(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 8192;
+  return Math.floor(numeric);
 }
 
 function providerSettingKey(provider: string) {
@@ -104,6 +126,41 @@ export interface LLMImageAttachment {
   filename: string;
   mimeType: string;
   data: string;
+}
+
+interface LLMCallResult {
+  text: string;
+  requestJson: unknown;
+  responseJson: unknown;
+}
+
+export interface AnthropicBatchRequest {
+  custom_id: string;
+  params: Record<string, unknown>;
+}
+
+export type AnthropicJsonSchema = Record<string, unknown>;
+
+export interface AnthropicBatchInfo {
+  id: string;
+  processing_status: string;
+  request_counts?: {
+    processing?: number;
+    succeeded?: number;
+    errored?: number;
+    canceled?: number;
+    expired?: number;
+  };
+  results_url?: string | null;
+}
+
+export interface AnthropicBatchResultLine {
+  custom_id: string;
+  result: {
+    type: string;
+    message?: { content?: { type?: string; text?: string }[] };
+    error?: unknown;
+  };
 }
 
 export async function getLLMSettings(): Promise<LLMSettings> {
@@ -136,6 +193,10 @@ export async function getLLMSettings(): Promise<LLMSettings> {
         : (p === provider ? maxConcurrency : p === 'openai-compatible' ? 1 : 5),
       temperatureEnabled: map[`llm_temperature_enabled_${p}`] === 'true',
       temperatures: getProviderTemperatures(map, p),
+      anthropicOptionsEnabled: map[`llm_anthropic_options_enabled_${p}`] === 'true',
+      anthropicEffort: sanitizeAnthropicEffort(map[`llm_anthropic_effort_${p}`]),
+      anthropicThinkingEnabled: map[`llm_anthropic_thinking_enabled_${p}`] === 'true',
+      anthropicMaxTokens: sanitizeAnthropicMaxTokens(map[`llm_anthropic_max_tokens_${p}`]),
     }];
   }));
   const activeProviderSettings = providerSettings[provider] || { model: '', baseUrl: '', maxConcurrency };
@@ -152,6 +213,10 @@ export async function getLLMSettings(): Promise<LLMSettings> {
     maxConcurrency: activeMaxConcurrency,
     temperatureEnabled: activeProviderSettings.temperatureEnabled === true,
     temperatures: activeProviderSettings.temperatures || getProviderTemperatures(map, provider),
+    anthropicOptionsEnabled: activeProviderSettings.anthropicOptionsEnabled === true,
+    anthropicEffort: sanitizeAnthropicEffort(activeProviderSettings.anthropicEffort),
+    anthropicThinkingEnabled: activeProviderSettings.anthropicThinkingEnabled === true,
+    anthropicMaxTokens: sanitizeAnthropicMaxTokens(activeProviderSettings.anthropicMaxTokens),
     providerSettings,
     sequentialMode: activeMaxConcurrency <= 1,
     loggingEnabled: map['llm_logging_enabled'] !== 'false',
@@ -264,13 +329,28 @@ async function appendToLogSession(session: LLMLogSession, content: string): Prom
   await next;
 }
 
+function formatLogJson(value: unknown): string {
+  if (value === undefined) return '(없음)';
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 async function writeLLMLog(params: {
   startedAt: Date;
   finishedAt: Date;
   settings: LLMSettings;
   temperature?: number;
+  anthropicEffort?: AnthropicEffort;
+  anthropicThinkingEnabled?: boolean;
+  anthropicPromptCachingEnabled?: boolean;
+  anthropicCachePrefixChars?: number;
   prompt: string;
   attachments?: LLMImageAttachment[];
+  requestJson?: unknown;
+  responseJson?: unknown;
   output?: string;
   error?: unknown;
   log?: LLMLogOptions;
@@ -293,6 +373,13 @@ async function writeLLMLog(params: {
       `model: ${params.settings.model || '(default)'}`,
       `base_url: ${params.settings.baseUrl || '(default)'}`,
       `temperature: ${params.temperature ?? '(default)'}`,
+      `anthropic_effort: ${params.anthropicEffort ?? '(default)'}`,
+      `anthropic_thinking: ${params.anthropicThinkingEnabled === undefined ? '(default)' : String(params.anthropicThinkingEnabled)}`,
+      `anthropic_prompt_caching: ${params.anthropicPromptCachingEnabled === undefined ? '(default)' : String(params.anthropicPromptCachingEnabled)}`,
+      `anthropic_cache_prefix_chars: ${params.anthropicCachePrefixChars ?? 0}`,
+      '',
+      '===== LLM REQUEST JSON =====',
+      formatLogJson(params.requestJson),
       '',
       '===== LLM INPUT =====',
       params.prompt,
@@ -303,6 +390,9 @@ async function writeLLMLog(params: {
           `${index + 1}. ${item.filename} (${item.mimeType}, base64 ${item.data.length} chars)`
         ),
       ] : []),
+      '',
+      '===== LLM RESPONSE JSON =====',
+      formatLogJson(params.responseJson),
       '',
       params.error === undefined ? '===== LLM OUTPUT =====' : '===== LLM ERROR =====',
       params.error === undefined ? (params.output || '') : errorText,
@@ -320,6 +410,49 @@ async function writeLLMLog(params: {
     }
   } catch (logError) {
     console.error('LLM log write failed:', logError);
+  }
+}
+
+async function writeLLMJsonLog(params: {
+  label: string;
+  settings: LLMSettings;
+  startedAt: Date;
+  finishedAt: Date;
+  requestJson?: unknown;
+  responseJson?: unknown;
+  error?: unknown;
+}): Promise<void> {
+  if (!params.settings.loggingEnabled) return;
+  try {
+    const errorText = params.error instanceof Error
+      ? `${params.error.name}: ${params.error.message}`
+      : params.error === undefined
+        ? ''
+        : String(params.error);
+    const sequence = (logSequence = (logSequence + 1) % 10000);
+    const filename = `${getLogTimestamp(params.startedAt)}_${String(sequence).padStart(4, '0')}.log`;
+    const content = [
+      `===== ${params.label} =====`,
+      `request_started_at: ${params.startedAt.toISOString()}`,
+      `request_finished_at: ${params.finishedAt.toISOString()}`,
+      `provider: ${params.settings.provider}`,
+      `model: ${params.settings.model || '(default)'}`,
+      '',
+      '===== LLM REQUEST JSON =====',
+      formatLogJson(params.requestJson),
+      '',
+      '===== LLM RESPONSE JSON =====',
+      formatLogJson(params.responseJson),
+      '',
+      params.error === undefined ? '' : '===== LLM ERROR =====',
+      params.error === undefined ? '' : errorText,
+      '',
+    ].filter((line, index, lines) => line !== '' || lines[index - 1] !== '').join('\n');
+    const logDir = getLogDir();
+    await fs.mkdir(logDir, { recursive: true });
+    await fs.writeFile(path.join(logDir, filename), content, 'utf8');
+  } catch (logError) {
+    console.error('LLM JSON log write failed:', logError);
   }
 }
 
@@ -341,6 +474,8 @@ export async function callLLM(
   log?: LLMLogOptions,
   attachments: LLMImageAttachment[] = [],
   temperature?: number,
+  cachePrefix?: string,
+  outputSchema?: AnthropicJsonSchema,
 ): Promise<string> {
   const cfg = settings || (await getLLMSettings());
   if (!cfg.aiEnabled) {
@@ -350,22 +485,29 @@ export async function callLLM(
   const requestTemperature = cfg.temperatureEnabled && supportsTemperature(cfg.provider, cfg.model)
     ? clampTemperatureForProvider(cfg.provider, temperature)
     : undefined;
+  const anthropicEffort = cfg.provider === 'anthropic' && cfg.anthropicOptionsEnabled
+    ? cfg.anthropicEffort
+    : undefined;
+  const anthropicThinkingEnabled = cfg.provider === 'anthropic' && cfg.anthropicOptionsEnabled
+    ? cfg.anthropicThinkingEnabled
+    : undefined;
+  const anthropicPromptCachingEnabled = cfg.provider === 'anthropic' ? true : undefined;
 
   try {
-    let output: string;
-    if (cfg.provider === 'openai-compatible') output = await callOpenAICompatible(prompt, cfg, signal, attachments, requestTemperature);
-    else if (cfg.provider === 'ollama') output = await callOllama(prompt, cfg, signal, attachments, requestTemperature);
-    else if (cfg.provider === 'anthropic') output = await callAnthropic(prompt, cfg, signal, attachments, requestTemperature);
-    else if (cfg.provider === 'gemini') output = await callGemini(prompt, cfg, signal, attachments, requestTemperature);
-    else output = await callOpenAI(prompt, cfg, signal, attachments, requestTemperature);
+    let result: LLMCallResult;
+    if (cfg.provider === 'openai-compatible') result = await callOpenAICompatible(prompt, cfg, signal, attachments, requestTemperature);
+    else if (cfg.provider === 'ollama') result = await callOllama(prompt, cfg, signal, attachments, requestTemperature);
+    else if (cfg.provider === 'anthropic') result = await callAnthropic(prompt, cfg, signal, attachments, requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, cachePrefix, outputSchema);
+    else if (cfg.provider === 'gemini') result = await callGemini(prompt, cfg, signal, attachments, requestTemperature);
+    else result = await callOpenAI(prompt, cfg, signal, attachments, requestTemperature);
 
     if (cfg.loggingEnabled) {
-      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, attachments, output, log, temperature: requestTemperature });
+      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, attachments, requestJson: result.requestJson, responseJson: result.responseJson, output: result.text, log, temperature: requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
     }
-    return output;
+    return result.text;
   } catch (error) {
     if (cfg.loggingEnabled) {
-      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, attachments, error, log, temperature: requestTemperature });
+      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, attachments, error, log, temperature: requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
     }
     throw error;
   }
@@ -382,40 +524,131 @@ function buildOpenAIContent(prompt: string, attachments: LLMImageAttachment[]) {
   ];
 }
 
-async function callOpenAI(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<string> {
+function splitPromptForCache(prompt: string, cachePrefix?: string) {
+  const prefix = cachePrefix?.trim();
+  if (!prefix || !prompt.startsWith(prefix)) return { prefix: '', dynamic: prompt };
+  return {
+    prefix,
+    dynamic: prompt.slice(prefix.length).trimStart(),
+  };
+}
+
+async function callOpenAI(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<LLMCallResult> {
   const baseUrl = cfg.baseUrl || 'https://api.openai.com/v1';
   const model = cfg.model || 'gpt-4o-mini';
+  const requestJson = {
+    model,
+    messages: [{ role: 'user', content: buildOpenAIContent(prompt, attachments) }],
+    ...(temperature !== undefined ? { temperature } : {}),
+  };
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: buildOpenAIContent(prompt, attachments) }],
-      ...(temperature !== undefined ? { temperature } : {}),
-    }),
+    body: JSON.stringify(requestJson),
     signal,
   });
   if (!res.ok) throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
   const data = (await res.json()) as { choices: { message: { content: string } }[] };
-  return data.choices[0]?.message?.content || '';
+  return { text: data.choices[0]?.message?.content || '', requestJson, responseJson: data };
 }
 
-async function callAnthropic(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<string> {
-  const model = cfg.model || 'claude-sonnet-4-6';
-  const content = attachments.length
-    ? [
-        { type: 'text', text: prompt },
-        ...attachments.map((item) => ({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: item.mimeType,
-            data: item.data,
-          },
-        })),
-      ]
-    : prompt;
+function buildAnthropicContent(prompt: string, attachments: LLMImageAttachment[], promptCachingEnabled?: boolean, cachePrefix?: string) {
+  const cached = promptCachingEnabled === true ? splitPromptForCache(prompt, cachePrefix) : { prefix: '', dynamic: prompt };
+  const attachmentBlocks = attachments.map((item) => ({
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: item.mimeType,
+      data: item.data,
+    },
+  }));
+
+  if (cached.prefix) {
+    return {
+      system: [
+        { type: 'text', text: cached.prefix, cache_control: { type: 'ephemeral' } },
+      ],
+      content: [
+        ...(cached.dynamic ? [{ type: 'text', text: cached.dynamic }] : [{ type: 'text', text: '응답을 생성하세요.' }]),
+        ...attachmentBlocks,
+      ],
+      usedBlockCache: true,
+    };
+  }
+
+  if (promptCachingEnabled === true) {
+    return {
+      system: [
+        { type: 'text', text: prompt, cache_control: { type: 'ephemeral' } },
+      ],
+      content: [
+        { type: 'text', text: '응답을 생성하세요.' },
+        ...attachmentBlocks,
+      ],
+      usedBlockCache: true,
+    };
+  }
+
+  return {
+    system: undefined,
+    content: attachments.length
+      ? [{ type: 'text', text: prompt }, ...attachmentBlocks]
+      : prompt,
+    usedBlockCache: false,
+  };
+}
+
+export function buildAnthropicMessageParams(
+  prompt: string,
+  cfg: LLMSettings,
+  attachments: LLMImageAttachment[] = [],
+  temperature?: number,
+  cachePrefix?: string,
+  outputSchema?: AnthropicJsonSchema,
+): Record<string, unknown> {
+  const model = cfg.model || 'claude-sonnet-5';
+  const requestTemperature = cfg.temperatureEnabled && supportsTemperature(cfg.provider, cfg.model)
+    ? clampTemperatureForProvider(cfg.provider, temperature)
+    : undefined;
+  const effort = cfg.anthropicOptionsEnabled ? cfg.anthropicEffort : undefined;
+  const thinkingEnabled = cfg.anthropicOptionsEnabled ? cfg.anthropicThinkingEnabled : undefined;
+  const { system, content } = buildAnthropicContent(prompt, attachments, true, cachePrefix);
+  const outputConfig = {
+    ...(effort !== undefined ? { effort } : {}),
+    ...(outputSchema ? { format: { type: 'json_schema', schema: outputSchema } } : {}),
+  };
+  return {
+    model,
+    max_tokens: sanitizeAnthropicMaxTokens(cfg.anthropicMaxTokens),
+    ...(requestTemperature !== undefined ? { temperature: requestTemperature } : {}),
+    ...(Object.keys(outputConfig).length ? { output_config: outputConfig } : {}),
+    ...(thinkingEnabled !== undefined ? { thinking: { type: thinkingEnabled === true ? 'adaptive' : 'disabled' } } : {}),
+    ...(system ? { system } : {}),
+    messages: [{ role: 'user', content }],
+  };
+}
+
+async function callAnthropic(
+  prompt: string,
+  cfg: LLMSettings,
+  signal?: AbortSignal,
+  attachments: LLMImageAttachment[] = [],
+  temperature?: number,
+  effort?: AnthropicEffort,
+  thinkingEnabled?: boolean,
+  promptCachingEnabled?: boolean,
+  cachePrefix?: string,
+  outputSchema?: AnthropicJsonSchema,
+): Promise<LLMCallResult> {
+  const params = buildAnthropicMessageParams(prompt, {
+    ...cfg,
+    temperatureEnabled: temperature !== undefined,
+    anthropicOptionsEnabled: effort !== undefined || thinkingEnabled !== undefined,
+    anthropicEffort: effort || cfg.anthropicEffort,
+    anthropicThinkingEnabled: thinkingEnabled === true,
+    anthropicMaxTokens: cfg.anthropicMaxTokens,
+  }, attachments, temperature, promptCachingEnabled === true ? cachePrefix : undefined, outputSchema);
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -423,40 +656,115 @@ async function callAnthropic(prompt: string, cfg: LLMSettings, signal?: AbortSig
       'x-api-key': cfg.apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: 4096,
-      ...(temperature !== undefined ? { temperature } : {}),
-      messages: [{ role: 'user', content }],
-    }),
+    body: JSON.stringify(params),
     signal,
   });
   if (!res.ok) throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { content: { text: string }[] };
-  return data.content[0]?.text || '';
+  const data = (await res.json()) as { content: { type?: string; text?: string }[] };
+  const text = (data.content || [])
+    .filter((block) => block.type === 'text' || block.text !== undefined)
+    .map((block) => block.text || '')
+    .join('\n')
+    .trim();
+  return { text, requestJson: params, responseJson: data };
 }
 
-async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<string> {
+export function extractAnthropicText(message: { content?: { type?: string; text?: string }[] } | undefined): string {
+  return (message?.content || [])
+    .filter((block) => block.type === 'text' || block.text !== undefined)
+    .map((block) => block.text || '')
+    .join('\n')
+    .trim();
+}
+
+export async function createAnthropicMessageBatch(cfg: LLMSettings, requests: AnthropicBatchRequest[]): Promise<AnthropicBatchInfo> {
+  const startedAt = new Date();
+  const requestJson = { requests };
+  const res = await fetch('https://api.anthropic.com/v1/messages/batches', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': cfg.apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(requestJson),
+  });
+  const responseJson = await res.json().catch(async () => ({ raw: await res.text().catch(() => '') }));
+  if (!res.ok) {
+    const error = new Error(`Anthropic Batch API error ${res.status}: ${formatLogJson(responseJson)}`);
+    await writeLLMJsonLog({ label: 'ANTHROPIC BATCH CREATE', settings: cfg, startedAt, finishedAt: new Date(), requestJson, responseJson, error });
+    throw error;
+  }
+  await writeLLMJsonLog({ label: 'ANTHROPIC BATCH CREATE', settings: cfg, startedAt, finishedAt: new Date(), requestJson, responseJson });
+  return responseJson as AnthropicBatchInfo;
+}
+
+export async function retrieveAnthropicMessageBatch(cfg: LLMSettings, batchId: string): Promise<AnthropicBatchInfo> {
+  const startedAt = new Date();
+  const requestJson = { batch_id: batchId };
+  const res = await fetch(`https://api.anthropic.com/v1/messages/batches/${encodeURIComponent(batchId)}`, {
+    headers: {
+      'x-api-key': cfg.apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+  });
+  const responseJson = await res.json().catch(async () => ({ raw: await res.text().catch(() => '') }));
+  if (!res.ok) {
+    const error = new Error(`Anthropic Batch 조회 오류 ${res.status}: ${formatLogJson(responseJson)}`);
+    await writeLLMJsonLog({ label: 'ANTHROPIC BATCH RETRIEVE', settings: cfg, startedAt, finishedAt: new Date(), requestJson, responseJson, error });
+    throw error;
+  }
+  await writeLLMJsonLog({ label: 'ANTHROPIC BATCH RETRIEVE', settings: cfg, startedAt, finishedAt: new Date(), requestJson, responseJson });
+  return responseJson as AnthropicBatchInfo;
+}
+
+export async function retrieveAnthropicMessageBatchResults(cfg: LLMSettings, batchId: string): Promise<AnthropicBatchResultLine[]> {
+  const startedAt = new Date();
+  const requestJson = { batch_id: batchId, results: true };
+  const res = await fetch(`https://api.anthropic.com/v1/messages/batches/${encodeURIComponent(batchId)}/results`, {
+    headers: {
+      'x-api-key': cfg.apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    const responseJson = { raw: text };
+    const error = new Error(`Anthropic Batch 결과 조회 오류 ${res.status}: ${text}`);
+    await writeLLMJsonLog({ label: 'ANTHROPIC BATCH RESULTS', settings: cfg, startedAt, finishedAt: new Date(), requestJson, responseJson, error });
+    throw error;
+  }
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as AnthropicBatchResultLine);
+  await writeLLMJsonLog({ label: 'ANTHROPIC BATCH RESULTS', settings: cfg, startedAt, finishedAt: new Date(), requestJson, responseJson: lines });
+  return lines;
+}
+
+async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<LLMCallResult> {
   const model = cfg.model || 'gemini-2.5-flash';
+  const requestJson = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        ...attachments.map((item) => ({
+          inline_data: {
+            mime_type: item.mimeType,
+            data: item.data,
+          },
+        })),
+      ],
+    }],
+    ...(temperature !== undefined ? { generationConfig: { temperature } } : {}),
+  };
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: prompt },
-            ...attachments.map((item) => ({
-              inline_data: {
-                mime_type: item.mimeType,
-                data: item.data,
-              },
-            })),
-          ],
-        }],
-        ...(temperature !== undefined ? { generationConfig: { temperature } } : {}),
-      }),
+      body: JSON.stringify(requestJson),
       signal,
     }
   );
@@ -464,36 +772,37 @@ async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal
   const data = (await res.json()) as {
     candidates: { content: { parts: { text: string }[] } }[];
   };
-  return data.candidates[0]?.content?.parts[0]?.text || '';
+  return { text: data.candidates[0]?.content?.parts[0]?.text || '', requestJson, responseJson: data };
 }
 
-async function callOpenAICompatible(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<string> {
+async function callOpenAICompatible(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<LLMCallResult> {
   const baseUrl = cfg.baseUrl || 'http://localhost:8000/v1';
   const model = cfg.model;
   if (!model) throw new Error('OpenAI 호환: 모델명을 설정해주세요. 모델 가져오기를 사용하거나 직접 입력하세요.');
 
-  const doRequest = async (): Promise<string> => {
+  const doRequest = async (): Promise<LLMCallResult> => {
+    const requestJson = {
+      model,
+      messages: [
+        { role: 'system', content: '당신은 유능하고 친절한 AI 어시스턴트입니다.' },
+        { role: 'user', content: buildOpenAIContent(prompt, attachments) },
+      ],
+      ...(temperature !== undefined ? { temperature } : {}),
+      max_tokens: 8192,
+    };
     const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${cfg.apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: '당신은 유능하고 친절한 AI 어시스턴트입니다.' },
-          { role: 'user', content: buildOpenAIContent(prompt, attachments) },
-        ],
-        ...(temperature !== undefined ? { temperature } : {}),
-        max_tokens: 4096,
-      }),
+      body: JSON.stringify(requestJson),
       // 로컬 LLM은 응답이 느릴 수 있으므로 5분 타임아웃
       signal: mergeSignals(signal, AbortSignal.timeout(300_000)),
     });
     if (!res.ok) throw new Error(`OpenAI 호환 API error ${res.status}: ${await res.text()}`);
     const data = (await res.json()) as { choices: { message: { content: string } }[] };
-    return data.choices[0]?.message?.content || '';
+    return { text: data.choices[0]?.message?.content || '', requestJson, responseJson: data };
   };
 
   if (cfg.maxConcurrency <= 1) {
@@ -512,22 +821,23 @@ async function callOpenAICompatible(prompt: string, cfg: LLMSettings, signal?: A
   return doRequest();
 }
 
-async function callOllama(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<string> {
+async function callOllama(prompt: string, cfg: LLMSettings, signal?: AbortSignal, attachments: LLMImageAttachment[] = [], temperature?: number): Promise<LLMCallResult> {
   const baseUrl = cfg.baseUrl || 'http://localhost:11434';
   const model = cfg.model || 'llama3';
+  const requestJson = {
+    model,
+    prompt,
+    stream: false,
+    ...(temperature !== undefined ? { options: { temperature } } : {}),
+    ...(attachments.length ? { images: attachments.map((item) => item.data) } : {}),
+  };
   const res = await fetch(`${baseUrl}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      prompt,
-      stream: false,
-      ...(temperature !== undefined ? { options: { temperature } } : {}),
-      ...(attachments.length ? { images: attachments.map((item) => item.data) } : {}),
-    }),
+    body: JSON.stringify(requestJson),
     signal,
   });
   if (!res.ok) throw new Error(`Ollama API error ${res.status}: ${await res.text()}`);
   const data = (await res.json()) as { response: string };
-  return data.response || '';
+  return { text: data.response || '', requestJson, responseJson: data };
 }

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { recordsApi, criteriaApi, classesApi, aiApi } from '../../lib/api';
+import { recordsApi, criteriaApi, classesApi, aiApi, settingsApi } from '../../lib/api';
 import { useAiBatchStore } from '../../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
 import { Loader2, PanelLeftClose, PanelLeftOpen, Trash2 } from 'lucide-react';
@@ -103,6 +103,7 @@ function writeRecordsViewPrefs(classItem: ClassItem, prefs: RecordsViewPrefs) {
 
 export function useRecordsPage() {
   const aiEnabled = useAiEnabled();
+  const [llmProvider, setLlmProvider] = useState('');
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [subjects, setSubjects] = useState<any[]>([]);
   const [selectedClass, setSelectedClass] = useState<ClassItem | null>(null);
@@ -133,6 +134,7 @@ export function useRecordsPage() {
   const [domainFilter, setDomainFilter] = useState<string>('all');
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [showClaudeBatchDialog, setShowClaudeBatchDialog] = useState(false);
 
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem(RECORDS_GUIDE_KEY) !== '1');
   const recordsTree = useRecordsTree(classes);
@@ -145,9 +147,14 @@ export function useRecordsPage() {
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
   const [rowTextareaHeights, setRowTextareaHeights] = useState<Record<number, number>>({});
   const aiBatchJob = useAiBatchStore(state => state.currentJob);
+  const claudeBatchJobs = useAiBatchStore(state => state.claudeBatchJobs);
   const aiBatchUpdates = useAiBatchStore(state => state.updates);
   const startAiBatch = useAiBatchStore(state => state.startBatch);
+  const loadClaudeBatchJobs = useAiBatchStore(state => state.loadClaudeBatchJobs);
+  const startClaudeBatch = useAiBatchStore(state => state.startClaudeBatch);
+  const checkClaudeBatchResults = useAiBatchStore(state => state.checkClaudeBatchResults);
   const isAiCellLocked = useAiBatchStore(state => state.isCellLocked);
+  const hasLockedAiCells = useAiBatchStore(state => state.hasLockedCells);
   const setHasUnsavedRecords = useRecordsUnsavedStore(state => state.setHasUnsavedChanges);
   const appliedUpdateCountRef = useRef(0);
   const restoringViewPrefsRef = useRef(false);
@@ -157,6 +164,30 @@ export function useRecordsPage() {
       || stableContentStringify(writtenScores) !== stableContentStringify(savedWrittenScores),
     [contents, savedContents, writtenScores, savedWrittenScores]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    settingsApi.get()
+      .then((res) => {
+        if (!cancelled) setLlmProvider(String(res.data?.provider || ''));
+      })
+      .catch(() => {
+        if (!cancelled) setLlmProvider('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const classClaudeBatchJobs = useMemo(
+    () => selectedClass ? claudeBatchJobs.filter((job) => job.classId === selectedClass.id) : [],
+    [claudeBatchJobs, selectedClass]
+  );
+
+  useEffect(() => {
+    if (!selectedClass) return;
+    void loadClaudeBatchJobs(selectedClass.id);
+  }, [loadClaudeBatchJobs, selectedClass]);
 
   useEffect(() => {
     setHasUnsavedRecords(isDirty);
@@ -576,6 +607,31 @@ export function useRecordsPage() {
   const dirtyControlClass = (dirty: boolean) =>
     dirty ? 'bg-amber-50 border-amber-300 focus:border-amber-500 focus:ring-amber-400' : '';
 
+  const llmErrorTooltip = (scoreData?: Record<string, any>, commentsData?: Record<string, any>) => {
+    const parts: string[] = [];
+    const scoringError = String(scoreData?.__llmError || '').trim();
+    const scoringResult = String(scoreData?.__llmErrorResult || '').trim();
+    const commentsError = String(commentsData?.__llmError || '').trim();
+    const commentsResult = String(commentsData?.__llmErrorResult || '').trim();
+    if (scoringError || scoringResult) {
+      parts.push(['[채점 오류]', scoringError, scoringResult].filter(Boolean).join('\n'));
+    }
+    if (commentsError || commentsResult) {
+      parts.push(['[기록/세특 오류]', commentsError, commentsResult].filter(Boolean).join('\n'));
+    }
+    return parts.join('\n\n').trim();
+  };
+
+  const renderLlmErrorTooltip = (message: string) => {
+    if (!message) return null;
+    return (
+      <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden max-h-80 w-96 max-w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 overflow-auto rounded-md border border-rose-200 bg-rose-50 p-3 text-left text-xs font-normal leading-relaxed text-rose-950 shadow-lg ring-1 ring-rose-100 group-hover:block group-focus-within:block">
+        <div className="mb-1 text-[11px] font-semibold text-rose-700">LLM 오류</div>
+        <div className="whitespace-pre-wrap">{message}</div>
+      </div>
+    );
+  };
+
   useEffect(() => {
     if (aiBatchUpdates.length < appliedUpdateCountRef.current) {
       appliedUpdateCountRef.current = 0;
@@ -591,8 +647,14 @@ export function useRecordsPage() {
         const key = `${update.studentId}_${update.contentType}_${update.domain}`;
         const nextContent = update.content
           ? parseContent(update.content)
+          : update.contentType === 'scoring'
+          ? {
+              total: 0,
+              __llmError: update.error,
+              __llmErrorResult: update.llmResult,
+            }
           : {
-              ...(next[key] || {}),
+              text: '',
               __llmError: update.error,
               __llmErrorResult: update.llmResult,
             };
@@ -867,6 +929,125 @@ export function useRecordsPage() {
     });
   };
 
+  const getGenerationTargets = (explicitDomain?: string) => {
+    if (!selectedClass) return null;
+
+    const subj = subjects.find(s =>
+      s.year === selectedClass.year && s.semester === selectedClass.semester &&
+      s.grade === selectedClass.grade && s.subject === selectedClass.subject
+    );
+    const domainsToProcess = explicitDomain
+      ? [explicitDomain]
+      : domainFilter === 'all'
+        ? (subj?.fixedDomains || []).map((d: any) => d.name)
+        : [domainFilter];
+    const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
+    if (domainsToProcess.length === 0 || targetStudents.length === 0) return null;
+    return { domainsToProcess, targetStudents };
+  };
+
+  const selectedGenerationTasks = (): Array<{ type: 'scoring' | 'comments' | 'combined'; domain?: string; label: string }> => {
+    return showScoring && showComments
+      ? [{ type: 'combined' as const, label: '채점/기록' }]
+      : [
+          ...(showScoring ? [{ type: 'scoring' as const, label: '채점' }] : []),
+          ...(showComments ? [{ type: 'comments' as const, label: '기록' }] : []),
+          ...(showComprehensive ? [{ type: 'comments' as const, domain: SUBJECT_COMPREHENSIVE_DOMAIN, label: '세특' }] : []),
+        ];
+  };
+
+  const runGenerateRequest = async (type: 'scoring' | 'comments' | 'combined', explicitDomain?: string, useBatch = false) => {
+    if (!selectedClass) return;
+    const targets = getGenerationTargets(explicitDomain);
+    if (!targets) return;
+    const { domainsToProcess, targetStudents } = targets;
+
+    if (hasLockedAiCells(selectedClass.id, targetStudents.map(student => student.id), type, domainsToProcess)) {
+      alert('배치 작업 진행중인 셀이 포함되어 있습니다. 해당 배치 결과를 먼저 확인하세요.');
+      return;
+    }
+
+    const args = {
+      classId: selectedClass.id,
+      classLabel: `${selectedClass.year}학년도 ${selectedClass.semester}학기 ${selectedClass.grade}학년 ${selectedClass.subject} ${selectedClass.room}`,
+      domains: domainsToProcess,
+      contentType: type,
+      studentIds: targetStudents.map(student => student.id),
+    };
+    if (useBatch) await startClaudeBatch(args);
+    else await startAiBatch(args);
+  };
+
+  const handleGenerateSelected = async () => {
+    if (!selectedClass) return;
+
+    if (showComprehensive && (showScoring || showComments)) {
+      alert('세특은 채점/기록과 동시에 생성할 수 없습니다. 세특만 선택한 상태에서 생성하세요.');
+      return;
+    }
+    const tasks = selectedGenerationTasks();
+    if (!tasks.length) return;
+    const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
+    const label = tasks.map(task => task.label).join('/');
+    if (!confirm(`${targetStudents.length}명 대상 ${label} 생성을 실행하시겠습니까?`)) return;
+
+    for (const task of tasks) {
+      await runGenerateRequest(task.type, task.domain, false);
+    }
+  };
+
+  const handleStartClaudeBatch = async () => {
+    if (!selectedClass) return;
+    if (showComprehensive && (showScoring || showComments)) {
+      alert('세특은 채점/기록과 동시에 생성할 수 없습니다. 세특만 선택한 상태에서 생성하세요.');
+      return;
+    }
+    if (llmProvider !== 'anthropic') {
+      alert('Claude 배치는 LLM 공급자가 Anthropic (Claude)일 때만 사용할 수 있습니다.');
+      return;
+    }
+    const tasks = selectedGenerationTasks();
+    if (!tasks.length) return;
+    const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
+    const label = tasks.map(task => task.label).join('/');
+    if (!confirm(`${targetStudents.length}명 대상 ${label} Claude 배치 요청을 실행하시겠습니까?`)) return;
+    for (const task of tasks) {
+      await runGenerateRequest(task.type, task.domain, true);
+    }
+  };
+
+  const handleOpenClaudeBatchResults = () => {
+    if (classClaudeBatchJobs.length) setShowClaudeBatchDialog(true);
+  };
+
+  const handleCheckClaudeBatchResults = async (jobId: string) => {
+    setShowClaudeBatchDialog(false);
+    const done = await checkClaudeBatchResults(jobId);
+    if (!done) alert('Claude 배치가 아직 서버에서 진행 중입니다.');
+  };
+
+  const batchKindLabel = (type: 'scoring' | 'comments' | 'combined', domains: string[]) => {
+    if (domains.includes(SUBJECT_COMPREHENSIVE_DOMAIN)) return '세특';
+    if (type === 'combined') return '채점/기록';
+    return type === 'scoring' ? '채점' : '기록';
+  };
+
+  const batchDomainLabel = (domains: string[]) => {
+    if (domains.length > 1) return '전체';
+    const domain = domains[0] || '';
+    return domain === SUBJECT_COMPREHENSIVE_DOMAIN ? '세특' : domain;
+  };
+
+  const batchStartedAtLabel = (startedAt: number) => {
+    if (!startedAt) return '-';
+    return new Date(startedAt).toLocaleString('ko-KR', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   const handleBulkZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedClass || domainFilter === 'all' || !e.target.files?.length) return;
     const file = e.target.files[0];
@@ -1128,6 +1309,7 @@ export function useRecordsPage() {
     showScoring,
     showComments,
     showComprehensive,
+    claudeBatchJobCount: classClaudeBatchJobs.length,
     canShowScoring,
     canShowComments,
     setShowScoring,
@@ -1138,7 +1320,9 @@ export function useRecordsPage() {
     uploadingZip,
     fileInputRef,
     handleBulkZipUpload,
-    handleBatchGenerate,
+    handleGenerateSelected,
+    handleStartClaudeBatch,
+    handleOpenClaudeBatchResults,
     batchGenerating,
     handleBatchSpellcheck,
     spellcheckProgress,
@@ -1258,6 +1442,63 @@ export function useRecordsPage() {
         },
       children: selectedClass && (
           <>
+          {showClaudeBatchDialog && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setShowClaudeBatchDialog(false)}>
+              <div className="w-full max-w-3xl rounded-lg border border-gray-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">Claude 배치 결과</h3>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {selectedClass.year}학년도 {selectedClass.semester}학기 {selectedClass.grade}학년 {selectedClass.subject} {selectedClass.room}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded px-2 py-1 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                    onClick={() => setShowClaudeBatchDialog(false)}
+                  >
+                    닫기
+                  </button>
+                </div>
+                <div className="max-h-[65vh] overflow-auto p-4">
+                  {classClaudeBatchJobs.length === 0 ? (
+                    <div className="py-10 text-center text-sm text-gray-400">남아있는 배치가 없습니다.</div>
+                  ) : (
+                    <table className="w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b bg-gray-50 text-xs font-semibold text-gray-600">
+                          <th className="px-3 py-2 text-left">종류</th>
+                          <th className="px-3 py-2 text-left">영역</th>
+                          <th className="px-3 py-2 text-right">인원 수</th>
+                          <th className="px-3 py-2 text-left">요청 시각</th>
+                          <th className="px-3 py-2 text-right">결과</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {classClaudeBatchJobs.map((job) => (
+                          <tr key={job.id} className="border-b last:border-b-0">
+                            <td className="px-3 py-2 text-gray-800">{batchKindLabel(job.contentType, job.domains)}</td>
+                            <td className="px-3 py-2 text-gray-600">{batchDomainLabel(job.domains)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-600">{job.studentIds.length || job.total}</td>
+                            <td className="px-3 py-2 text-gray-600">{batchStartedAtLabel(job.startedAt)}</td>
+                            <td className="px-3 py-2 text-right">
+                              <button
+                                type="button"
+                                className="btn-secondary h-8 px-3 text-xs"
+                                onClick={() => handleCheckClaudeBatchResults(job.id)}
+                              >
+                                결과
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           {/* 테이블 뷰 */}
           <div className="flex-1 overflow-auto scrollbar-stable bg-white pb-32">
             {students.length === 0 ? (
@@ -1345,19 +1586,19 @@ export function useRecordsPage() {
                     {/* Comp comments header */}
                     {showComprehensive && (
                       <>
-                        <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 select-none"
+                        <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 text-center select-none"
                           style={{ width: compWidth, minWidth: compWidth }}>
                           과목별세부능력및특기사항
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
                             onMouseDown={e => handleResizeStart(e, '_comp', 320)} />
                         </th>
-                        <th rowSpan={2} className="relative px-2 py-3 font-semibold text-gray-700 border-b border-r bg-blue-50/50 select-none"
+                        <th rowSpan={2} className="relative px-2 py-3 font-semibold text-gray-700 border-b border-r bg-blue-50/50 text-center select-none"
                           style={{ width: compCountWidth, minWidth: compCountWidth }}>
                           글자수
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
                             onMouseDown={e => handleResizeStart(e, '_comp_count', 74)} />
                         </th>
-                        <th rowSpan={2} className="relative px-3 py-3 font-semibold text-gray-700 border-b bg-blue-50/50 select-none"
+                        <th rowSpan={2} className="relative px-3 py-3 font-semibold text-gray-700 border-b bg-blue-50/50 text-center select-none"
                           style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
                           맞춤법 검사 결과
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
@@ -1392,6 +1633,7 @@ export function useRecordsPage() {
                   {students.map((s, rowIdx) => {
                     const compCommentsData = contents[`${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`] || {};
                     const compCommentsText = compCommentsData.text || '';
+                    const compLlmError = llmErrorTooltip(undefined, compCommentsData);
                     const compCommentsBytes = countTextBytes(compCommentsText);
                     const isCompCommentsOver = compCommentsBytes > 1500;
                     const isSpellchecking = spellcheckingIds.has(s.id);
@@ -1436,6 +1678,7 @@ export function useRecordsPage() {
                           const cols = tableLayout.domainCols.get(d.name) || [];
                           const scoreData = contents[`${s.id}_scoring_${d.name}`] || {};
                           const commentsData = contents[`${s.id}_comments_${d.name}`] || {};
+                          const domainLlmError = llmErrorTooltip(scoreData, commentsData);
 
                           return cols.map((c: any) => {
                             const wk = `${d.name}||${c.id}`;
@@ -1444,8 +1687,9 @@ export function useRecordsPage() {
 
                             if (c.type === 'artifact') {
                               return (
-                                <td key={`${d.name}_artifact`} className="relative border-r align-middle text-center p-1"
+                                <td key={`${d.name}_artifact`} className="group relative border-r align-middle text-center p-1"
                                   style={{ width: w, minWidth: w }}>
+                                  {renderLlmErrorTooltip(domainLlmError)}
                                   <Suspense fallback={<Loader2 size={12} className="mx-auto animate-spin text-gray-400" />}>
                                     <ArtifactViewer key={`${s.id}_${d.name}_${artifactRefreshKey}`} studentId={s.id} domain={d.name} />
                                   </Suspense>
@@ -1461,9 +1705,10 @@ export function useRecordsPage() {
                               const dirty = isContentFieldDirty(contentKey, c.id) || isScoringReasonDirty(contentKey, c.id);
                               const reason = (scoreData as ScoringContent).__reasons?.[c.id] || '';
                               return (
-                                <td key={`${d.name}_${c.id}`} className="relative border-r align-top p-1"
+                                <td key={`${d.name}_${c.id}`} className="group relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
-                                  <div className="group relative">
+                                  {renderLlmErrorTooltip(domainLlmError)}
+                                  <div className="group/reason relative">
                                     <input type="text" className={`input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`}
                                       value={scoreData[c.id] ?? ''}
                                       onChange={ev => updateContent(s.id, 'scoring', c.id, ev.target.value, d.name)}
@@ -1473,7 +1718,7 @@ export function useRecordsPage() {
                                       title={locked ? 'AI 채점 진행 중이라 수정할 수 없습니다.' : undefined}
                                     />
                                     {reason && !locked && (
-                                      <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-72 -translate-x-1/2 rounded-md border border-amber-200 bg-amber-50 p-3 text-left text-xs leading-relaxed text-amber-950 shadow-lg ring-1 ring-amber-100 group-hover:block group-focus-within:block">
+                                      <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-72 -translate-x-1/2 rounded-md border border-amber-200 bg-amber-50 p-3 text-left text-xs leading-relaxed text-amber-950 shadow-lg ring-1 ring-amber-100 group-hover/reason:block group-focus-within/reason:block">
                                         <div className="mb-1 text-[11px] font-semibold text-amber-700">AI 판단 이유</div>
                                         <div className="whitespace-pre-wrap">{reason}</div>
                                       </div>
@@ -1486,21 +1731,11 @@ export function useRecordsPage() {
                             if (c.type === 'total') {
                               const contentKey = `${s.id}_scoring_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, 'total');
-                              const llmError = (scoreData as ScoringContent).__llmError || '';
-                              const llmErrorResult = (scoreData as ScoringContent).__llmErrorResult || '';
                               return (
-                                <td key={`${d.name}_total`} className={`relative border-r text-center font-bold text-blue-600 align-middle p-2 ${dirty ? 'bg-amber-50' : 'bg-blue-50/30'}`}
+                                <td key={`${d.name}_total`} className={`group relative border-r text-center font-bold text-blue-600 align-middle p-2 ${dirty ? 'bg-amber-50' : 'bg-blue-50/30'}`}
                                   style={{ width: w, minWidth: w }}>
-                                  <div className="group relative">
-                                    <span>{scoreData.total || 0}</span>
-                                    {(llmError || llmErrorResult) && (
-                                      <div className="absolute left-1/2 top-full z-50 mt-2 hidden max-h-80 w-96 max-w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 overflow-auto rounded-md border border-rose-200 bg-rose-50 p-3 text-left text-xs font-normal leading-relaxed text-rose-950 shadow-lg ring-1 ring-rose-100 group-hover:block">
-                                        <div className="mb-1 text-[11px] font-semibold text-rose-700">LLM 오류</div>
-                                        {llmError && <div className="mb-2 whitespace-pre-wrap text-rose-800">{llmError}</div>}
-                                        {llmErrorResult && <div className="whitespace-pre-wrap">{llmErrorResult}</div>}
-                                      </div>
-                                    )}
-                                  </div>
+                                  {renderLlmErrorTooltip(domainLlmError)}
+                                  <span>{scoreData.total || 0}</span>
                                   {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );
@@ -1510,8 +1745,9 @@ export function useRecordsPage() {
                               const locked = !!d.file_id;
                               const dirty = normalizeStoredValue(writtenScores[key]) !== normalizeStoredValue(savedWrittenScores[key]);
                               return (
-                                <td key={`${d.name}_written`} className="relative border-r align-middle p-1"
+                                <td key={`${d.name}_written`} className="group relative border-r align-middle p-1"
                                   style={{ width: w, minWidth: w }}>
+                                  {renderLlmErrorTooltip(domainLlmError)}
                                   <input
                                     type="text"
                                     className={`input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`}
@@ -1534,8 +1770,9 @@ export function useRecordsPage() {
                               const contentKey = `${s.id}_comments_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, 'text');
                               return (
-                                <td key={`${d.name}_comments`} className="relative border-r align-top p-1"
+                                <td key={`${d.name}_comments`} className="group relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
+                                  {renderLlmErrorTooltip(domainLlmError)}
                                   <textarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                     value={commentsData.text || ''}
                                     onChange={ev => updateContent(s.id, 'comments', 'text', ev.target.value, d.name)}
@@ -1558,8 +1795,9 @@ export function useRecordsPage() {
                               const contentKey = `${s.id}_comments_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, c.itemTitle!);
                               return (
-                                <td key={`${d.name}_${c.id}`} className="relative border-r align-top p-1"
+                                <td key={`${d.name}_${c.id}`} className="group relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
+                                  {renderLlmErrorTooltip(domainLlmError)}
                                   <textarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                     value={itemValue}
                                     onChange={ev => updateContent(s.id, 'comments', c.itemTitle!, ev.target.value, d.name)}
@@ -1598,8 +1836,9 @@ export function useRecordsPage() {
                         {/* Comp comments */}
                         {showComprehensive && (
                           <>
-                            <td className="relative align-top p-1 border-r"
+                            <td className="group relative align-top p-1 border-r"
                               style={{ width: compWidth, minWidth: compWidth }}>
+                              {renderLlmErrorTooltip(compLlmError)}
                               <textarea className={`textarea w-full text-sm bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(isContentFieldDirty(`${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`, 'text'))}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                 value={compCommentsText}
                                 onChange={ev => updateContent(s.id, 'comments', 'text', ev.target.value, SUBJECT_COMPREHENSIVE_DOMAIN)}
@@ -1610,8 +1849,9 @@ export function useRecordsPage() {
                               />
                               {renderCellResizeHandles(s.id, '_comp', 320)}
                             </td>
-                            <td className="relative align-top p-1 border-r text-center"
+                            <td className="group relative align-top p-1 border-r text-center"
                               style={{ width: compCountWidth, minWidth: compCountWidth }}>
+                              {renderLlmErrorTooltip(compLlmError)}
                               <div className={`whitespace-pre-line text-xs font-semibold ${isCompCommentsOver ? 'text-red-600' : 'text-gray-600'}`}>
                                 {isCompCommentsOver ? '초과' : '적정'}
                                 {'\n'}({compCommentsBytes} byte)
@@ -1627,8 +1867,9 @@ export function useRecordsPage() {
                               </button>
                               {renderCellResizeHandles(s.id, '_comp_count', 74)}
                             </td>
-                            <td className="relative align-top p-2"
+                            <td className="group relative align-top p-2"
                               style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
+                              {renderLlmErrorTooltip(compLlmError)}
                               {isSpellchecking ? (
                                 <div className="flex items-center gap-1.5 text-xs text-green-700">
                                   <Loader2 size={12} className="animate-spin" />

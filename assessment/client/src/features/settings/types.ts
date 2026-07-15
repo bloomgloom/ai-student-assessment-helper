@@ -6,6 +6,8 @@ export interface AiTemperatures {
   recordsComments: number;
 }
 
+export type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface SettingsState {
   provider: string;
   apiKey: string;
@@ -15,12 +17,20 @@ export interface SettingsState {
   maxConcurrency: number;
   temperatureEnabled: boolean;
   temperatures: AiTemperatures;
+  anthropicOptionsEnabled: boolean;
+  anthropicEffort: AnthropicEffort;
+  anthropicThinkingEnabled: boolean;
+  anthropicMaxTokens: number | '';
   providerSettings: Record<string, {
     model: string;
     baseUrl: string;
     maxConcurrency: number;
     temperatureEnabled?: boolean;
     temperatures?: AiTemperatures;
+    anthropicOptionsEnabled?: boolean;
+    anthropicEffort?: AnthropicEffort;
+    anthropicThinkingEnabled?: boolean;
+    anthropicMaxTokens?: number | '';
   }>;
   loggingEnabled: boolean;
   artifactStripIntroBlocks: boolean;

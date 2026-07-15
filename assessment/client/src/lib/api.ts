@@ -284,4 +284,12 @@ export const aiApi = {
   spellcheck: (data: { text: string }, signal?: AbortSignal) => api.post('/ai/spellcheck', data, { signal }),
   generatePrompt: (data: { prompt: string; systemPrompt?: string }, signal?: AbortSignal) =>
     api.post('/ai/generate-prompt', data, { signal }),
+  generateClaudeBatch: (data: {
+    classId: number;
+    domain: string;
+    contentType: 'scoring' | 'comments' | 'combined';
+    studentIds: number[];
+  }) => api.post('/ai/generate-claude-batch', data),
+  listClaudeBatchJobs: (classId: number) => api.get('/ai/claude-batch-jobs', { params: { classId } }),
+  checkClaudeBatchResults: (batchIds: string[]) => api.post('/ai/claude-batch-results', { batchIds }),
 };

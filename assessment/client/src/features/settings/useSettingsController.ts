@@ -2,7 +2,7 @@ import { SetStateAction, useEffect, useState } from 'react';
 import { settingsApi } from '../../lib/api';
 import { saveBlob } from '../../lib/desktopFiles';
 import { DEFAULT_MODELS, DEFAULT_TEMPERATURES, DEFAULT_URLS, supportsTemperature } from './constants';
-import { AiTemperatures, SettingsState } from './types';
+import { AiTemperatures, AnthropicEffort, SettingsState } from './types';
 
 function providerTemperatureMax(provider: string) {
   return provider === 'anthropic' ? 1 : 2;
@@ -28,6 +28,33 @@ function normalizeTemperatures(provider: string, value?: Partial<AiTemperatures>
   };
 }
 
+function normalizeAnthropicEffort(value: unknown): AnthropicEffort {
+  return ['low', 'medium', 'high', 'xhigh', 'max'].includes(String(value))
+    ? String(value) as AnthropicEffort
+    : 'high';
+}
+
+function normalizeAnthropicMaxTokens(value: unknown): number | '' {
+  if (value === '') return '';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 8192;
+  return Math.floor(numeric);
+}
+
+function snapshotProviderSettings(s: SettingsState) {
+  return {
+    model: s.model,
+    baseUrl: s.baseUrl,
+    maxConcurrency: s.maxConcurrency,
+    temperatureEnabled: s.temperatureEnabled,
+    temperatures: normalizeTemperatures(s.provider, s.temperatures),
+    anthropicOptionsEnabled: s.anthropicOptionsEnabled,
+    anthropicEffort: normalizeAnthropicEffort(s.anthropicEffort),
+    anthropicThinkingEnabled: s.anthropicThinkingEnabled,
+    anthropicMaxTokens: normalizeAnthropicMaxTokens(s.anthropicMaxTokens),
+  };
+}
+
 export function useSettingsController() {
   const [settings, setSettings] = useState<SettingsState>({
     provider: 'gemini',
@@ -38,6 +65,10 @@ export function useSettingsController() {
     maxConcurrency: 5,
     temperatureEnabled: false,
     temperatures: defaultTemperatures('gemini'),
+    anthropicOptionsEnabled: false,
+    anthropicEffort: 'high',
+    anthropicThinkingEnabled: false,
+    anthropicMaxTokens: 8192,
     providerSettings: {},
     loggingEnabled: true,
     artifactStripIntroBlocks: true,
@@ -70,6 +101,10 @@ export function useSettingsController() {
         providerSettings: data.providerSettings || {},
         temperatureEnabled: data.temperatureEnabled === true,
         temperatures: normalizeTemperatures(provider, data.temperatures),
+        anthropicOptionsEnabled: data.anthropicOptionsEnabled === true,
+        anthropicEffort: normalizeAnthropicEffort(data.anthropicEffort),
+        anthropicThinkingEnabled: data.anthropicThinkingEnabled === true,
+        anthropicMaxTokens: normalizeAnthropicMaxTokens(data.anthropicMaxTokens),
         artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
         artifactStripIntroBlocksDeprecated: data.artifactStripIntroBlocksDeprecated === true,
         pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
@@ -93,11 +128,8 @@ export function useSettingsController() {
           providerSettings: {
             ...s.providerSettings,
             [s.provider]: {
+              ...snapshotProviderSettings(s),
               model: models[0],
-              baseUrl: s.baseUrl,
-              maxConcurrency: s.maxConcurrency,
-              temperatureEnabled: s.temperatureEnabled,
-              temperatures: normalizeTemperatures(s.provider, s.temperatures),
             },
           },
         }));
@@ -126,19 +158,17 @@ export function useSettingsController() {
       apiKey: s.apiKeys?.[provider] || '',
       providerSettings: {
         ...s.providerSettings,
-        [s.provider]: {
-          model: s.model,
-          baseUrl: s.baseUrl,
-          maxConcurrency: s.maxConcurrency,
-          temperatureEnabled: s.temperatureEnabled,
-          temperatures: normalizeTemperatures(s.provider, s.temperatures),
-        },
+        [s.provider]: snapshotProviderSettings(s),
       },
       model: (nextModel = s.providerSettings?.[provider]?.model ?? DEFAULT_MODELS[provider] ?? ''),
       baseUrl: (nextBaseUrl = s.providerSettings?.[provider]?.baseUrl ?? DEFAULT_URLS[provider] ?? ''),
       maxConcurrency: s.providerSettings?.[provider]?.maxConcurrency ?? (provider === 'openai-compatible' ? 1 : 5),
       temperatureEnabled: s.providerSettings?.[provider]?.temperatureEnabled === true,
       temperatures: normalizeTemperatures(provider, s.providerSettings?.[provider]?.temperatures),
+      anthropicOptionsEnabled: s.providerSettings?.[provider]?.anthropicOptionsEnabled === true,
+      anthropicEffort: normalizeAnthropicEffort(s.providerSettings?.[provider]?.anthropicEffort),
+      anthropicThinkingEnabled: s.providerSettings?.[provider]?.anthropicThinkingEnabled === true,
+      anthropicMaxTokens: normalizeAnthropicMaxTokens(s.providerSettings?.[provider]?.anthropicMaxTokens),
     }));
     nextApiKey = settings.apiKeys?.[provider] || '';
     setCompatibleModels([]);
@@ -150,13 +180,7 @@ export function useSettingsController() {
     ...value,
     providerSettings: {
       ...value.providerSettings,
-      [value.provider]: {
-        model: value.model,
-        baseUrl: value.baseUrl,
-        maxConcurrency: value.maxConcurrency,
-        temperatureEnabled: value.temperatureEnabled,
-        temperatures: normalizeTemperatures(value.provider, value.temperatures),
-      },
+      [value.provider]: snapshotProviderSettings(value),
     },
   });
 
@@ -168,6 +192,10 @@ export function useSettingsController() {
     maxConcurrency: value.maxConcurrency,
     temperatureEnabled: value.temperatureEnabled,
     temperatures: normalizeTemperatures(value.provider, value.temperatures),
+    anthropicOptionsEnabled: value.anthropicOptionsEnabled,
+    anthropicEffort: normalizeAnthropicEffort(value.anthropicEffort),
+    anthropicThinkingEnabled: value.anthropicThinkingEnabled,
+    anthropicMaxTokens: normalizeAnthropicMaxTokens(value.anthropicMaxTokens),
     providerSettings: value.providerSettings?.[value.provider],
   });
 
@@ -190,6 +218,10 @@ export function useSettingsController() {
     setSaved(false);
     try {
       const payload = withCurrentProviderSettings(settings);
+      if (payload.provider === 'anthropic' && payload.anthropicMaxTokens === '') {
+        alert('Claude max token을 입력해주세요.');
+        return;
+      }
       if (payload.aiEnabled && testedSignature !== getConnectionSignature(payload)) {
         alert('AI 기능 사용 상태에서는 연결 테스트 성공 후 저장할 수 있습니다.');
         return;
@@ -242,10 +274,7 @@ export function useSettingsController() {
         providerSettings: {
           ...s.providerSettings,
           [s.provider]: {
-              model: s.model,
-              baseUrl: s.baseUrl,
-              maxConcurrency: s.maxConcurrency,
-              temperatureEnabled: s.temperatureEnabled,
+              ...snapshotProviderSettings(s),
               temperatures,
           },
         },
@@ -262,17 +291,83 @@ export function useSettingsController() {
       providerSettings: {
         ...s.providerSettings,
         [s.provider]: {
-          model: s.model,
-          baseUrl: s.baseUrl,
-          maxConcurrency: s.maxConcurrency,
+          ...snapshotProviderSettings(s),
           temperatureEnabled: value,
-          temperatures: normalizeTemperatures(s.provider, s.temperatures),
+        },
+      },
+    }));
+  };
+
+  const handleAnthropicOptionsEnabledChange = (value: boolean) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => ({
+      ...s,
+      anthropicOptionsEnabled: value,
+      providerSettings: {
+        ...s.providerSettings,
+        [s.provider]: {
+          ...snapshotProviderSettings(s),
+          anthropicOptionsEnabled: value,
+        },
+      },
+    }));
+  };
+
+  const handleAnthropicEffortChange = (value: AnthropicEffort) => {
+    setTestResult(null);
+    setTestedSignature('');
+    const effort = normalizeAnthropicEffort(value);
+    setSettings((s) => ({
+      ...s,
+      anthropicEffort: effort,
+      providerSettings: {
+        ...s.providerSettings,
+        [s.provider]: {
+          ...snapshotProviderSettings(s),
+          anthropicEffort: effort,
+        },
+      },
+    }));
+  };
+
+  const handleAnthropicThinkingEnabledChange = (value: boolean) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => ({
+      ...s,
+      anthropicThinkingEnabled: value,
+      providerSettings: {
+        ...s.providerSettings,
+        [s.provider]: {
+          ...snapshotProviderSettings(s),
+          anthropicThinkingEnabled: value,
+        },
+      },
+    }));
+  };
+
+  const handleAnthropicMaxTokensChange = (value: number | '') => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => ({
+      ...s,
+      anthropicMaxTokens: value,
+      providerSettings: {
+        ...s.providerSettings,
+        [s.provider]: {
+          ...snapshotProviderSettings(s),
+          anthropicMaxTokens: value,
         },
       },
     }));
   };
 
   const handleTest = async () => {
+    if (settings.provider === 'anthropic' && settings.anthropicMaxTokens === '') {
+      setTestResult({ ok: false, message: 'Claude max token을 입력해주세요.' });
+      return;
+    }
     setTesting(true);
     setTestResult(null);
     try {
@@ -405,9 +500,14 @@ export function useSettingsController() {
     isOpenAICompatible,
     needsKey,
     needsUrl,
+    isAnthropic: settings.provider === 'anthropic',
     temperatureMax: providerTemperatureMax(settings.provider),
     temperatureSupported: supportsTemperature(settings.provider, settings.model),
     handleTemperatureChange,
     handleTemperatureEnabledChange,
+    handleAnthropicOptionsEnabledChange,
+    handleAnthropicEffortChange,
+    handleAnthropicThinkingEnabledChange,
+    handleAnthropicMaxTokensChange,
   };
 }

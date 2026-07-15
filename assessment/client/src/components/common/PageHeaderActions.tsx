@@ -30,7 +30,12 @@ export interface PageHeaderFileAction extends PageHeaderActionBase {
   onChange: (event: ChangeEvent<HTMLInputElement>) => void;
 }
 
-export type PageHeaderAction = PageHeaderButtonAction | PageHeaderFileAction;
+export interface PageHeaderCustomAction extends PageHeaderActionBase {
+  type: 'custom';
+  render: () => ReactNode;
+}
+
+export type PageHeaderAction = PageHeaderButtonAction | PageHeaderFileAction | PageHeaderCustomAction;
 
 function variantClassName(variant: PageHeaderActionVariant = 'secondary') {
   switch (variant) {
@@ -77,6 +82,10 @@ export function PageHeaderActions({ actions }: { actions: PageHeaderAction[] }) 
   return (
     <div className="flex gap-2">
       {actions.map(action => {
+        if (action.type === 'custom') {
+          return <div key={action.key}>{action.render()}</div>;
+        }
+
         if (action.type === 'file') {
           if (useDesktopDialogs) {
             return (
