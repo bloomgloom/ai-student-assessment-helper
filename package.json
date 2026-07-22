@@ -43,6 +43,7 @@
   "build": {
     "appId": "io.github.bloomgloom.ai-assessment-assistant",
     "productName": "AI Assessment Assistant",
+    "afterPack": "scripts/after-pack-sign-mac.cjs",
     "asar": true,
     "asarUnpack": [
       "node_modules/**/*.node",

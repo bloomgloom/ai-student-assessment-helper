@@ -239,10 +239,29 @@ export function useRecordsPage() {
     document.addEventListener('mouseup', onUp);
   };
 
+  const handleRowAutoFit = (e: React.MouseEvent, studentId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const cell = e.currentTarget.closest('td');
+    const textarea = cell?.querySelector<HTMLTextAreaElement>('textarea');
+    if (!textarea) return;
+
+    const previousHeight = textarea.style.height;
+    textarea.style.height = 'auto';
+    const borderHeight = textarea.offsetHeight - textarea.clientHeight;
+    const fittedHeight = Math.max(RECORD_TEXTAREA_MIN_HEIGHT, textarea.scrollHeight + borderHeight);
+    textarea.style.height = previousHeight;
+
+    setRowTextareaHeights(p => ({ ...p, [studentId]: fittedHeight }));
+  };
+
   const renderRowResizeHandle = (studentId: number) => (
     <div
       className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-row-resize bg-transparent hover:bg-blue-400"
       onMouseDown={e => handleRowResizeStart(e, studentId)}
+      onDoubleClick={e => handleRowAutoFit(e, studentId)}
+      title="드래그하여 행 높이 조절 · 더블클릭하여 이 셀 내용에 맞춤"
     />
   );
 
@@ -903,7 +922,10 @@ export function useRecordsPage() {
     if (explicitDomain) {
       domainsToProcess = [explicitDomain];
     } else if (domainFilter === 'all') {
-      domainsToProcess = (subj?.fixedDomains || []).map((d: any) => d.name);
+      domainsToProcess = [
+        ...(subj?.fixedDomains || []),
+        ...(type === 'comments' ? (subj?.customDomains || []) : []),
+      ].map((d: any) => d.name);
     } else {
       domainsToProcess = [domainFilter];
     }
@@ -929,7 +951,7 @@ export function useRecordsPage() {
     });
   };
 
-  const getGenerationTargets = (explicitDomain?: string) => {
+  const getGenerationTargets = (type: 'scoring' | 'comments' | 'combined', explicitDomain?: string) => {
     if (!selectedClass) return null;
 
     const subj = subjects.find(s =>
@@ -939,7 +961,10 @@ export function useRecordsPage() {
     const domainsToProcess = explicitDomain
       ? [explicitDomain]
       : domainFilter === 'all'
-        ? (subj?.fixedDomains || []).map((d: any) => d.name)
+        ? [
+            ...(subj?.fixedDomains || []),
+            ...(type === 'comments' ? (subj?.customDomains || []) : []),
+          ].map((d: any) => d.name)
         : [domainFilter];
     const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
     if (domainsToProcess.length === 0 || targetStudents.length === 0) return null;
@@ -958,7 +983,7 @@ export function useRecordsPage() {
 
   const runGenerateRequest = async (type: 'scoring' | 'comments' | 'combined', explicitDomain?: string, useBatch = false) => {
     if (!selectedClass) return;
-    const targets = getGenerationTargets(explicitDomain);
+    const targets = getGenerationTargets(type, explicitDomain);
     if (!targets) return;
     const { domainsToProcess, targetStudents } = targets;
 
@@ -1475,23 +1500,27 @@ export function useRecordsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {classClaudeBatchJobs.map((job) => (
-                          <tr key={job.id} className="border-b last:border-b-0">
-                            <td className="px-3 py-2 text-gray-800">{batchKindLabel(job.contentType, job.domains)}</td>
-                            <td className="px-3 py-2 text-gray-600">{batchDomainLabel(job.domains)}</td>
-                            <td className="px-3 py-2 text-right tabular-nums text-gray-600">{job.studentIds.length || job.total}</td>
-                            <td className="px-3 py-2 text-gray-600">{batchStartedAtLabel(job.startedAt)}</td>
-                            <td className="px-3 py-2 text-right">
-                              <button
-                                type="button"
-                                className="btn-secondary h-8 px-3 text-xs"
-                                onClick={() => handleCheckClaudeBatchResults(job.id)}
-                              >
-                                결과
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
+                        {classClaudeBatchJobs.map((job) => {
+                          const requestPending = !job.providerBatchIds?.length;
+                          return (
+                            <tr key={job.id} className="border-b last:border-b-0">
+                              <td className="px-3 py-2 text-gray-800">{batchKindLabel(job.contentType, job.domains)}</td>
+                              <td className="px-3 py-2 text-gray-600">{batchDomainLabel(job.domains)}</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-600">{job.studentIds.length || job.total}</td>
+                              <td className="px-3 py-2 text-gray-600">{batchStartedAtLabel(job.startedAt)}</td>
+                              <td className="px-3 py-2 text-right">
+                                <button
+                                  type="button"
+                                  className="btn-secondary h-8 px-3 text-xs"
+                                  onClick={() => handleCheckClaudeBatchResults(job.id)}
+                                  disabled={requestPending}
+                                >
+                                  {requestPending ? '요청 중' : '결과'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}

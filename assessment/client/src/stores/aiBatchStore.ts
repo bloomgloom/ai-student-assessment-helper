@@ -87,6 +87,10 @@ function jobLocksCell(job: BatchJob | null | undefined, classId: number, student
     );
 }
 
+function isPendingClaudeBatchRequest(job: BatchJob) {
+  return job.mode === 'claude-batch' && !job.providerBatchIds?.length;
+}
+
 export const useAiBatchStore = create<AiBatchState>((set, get) => ({
   currentJob: null,
   claudeBatchJobs: [],
@@ -97,9 +101,11 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
       const res = await aiApi.listClaudeBatchJobs(classId);
       const jobs = (Array.isArray(res.data.jobs) ? res.data.jobs : []) as BatchJob[];
       set((state) => {
+        const pendingJobs = state.claudeBatchJobs.filter((job) => job.classId === classId && isPendingClaudeBatchRequest(job));
         return {
           claudeBatchJobs: [
             ...state.claudeBatchJobs.filter((job) => job.classId !== classId),
+            ...pendingJobs,
             ...jobs,
           ],
         };
@@ -301,33 +307,58 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
     let submitted = 0;
     try {
       for (const domain of domains) {
-        const res = await aiApi.generateClaudeBatch({ classId, domain, contentType, studentIds });
-        const batchId = String(res.data.batchId || '');
-        if (!batchId) continue;
-        const immediate = Array.isArray(res.data.immediateUpdates) ? res.data.immediateUpdates : [];
-        const errors = immediate.filter((item: GeneratedContentUpdate) => item.error).length;
-        const job: BatchJob = {
-          id: newJobId(),
+        const pendingJobId = newJobId();
+        const pendingJob: BatchJob = {
+          id: pendingJobId,
           classId,
           classLabel,
           domains: [domain],
           contentType,
           studentIds,
-          completed: immediate.length,
+          completed: 0,
           total: studentIds.length,
-          errorCount: errors,
-          message: `[${displayDomainName(domain)}] Claude 배치 제출 완료`,
+          errorCount: 0,
+          message: `[${displayDomainName(domain)}] Claude 배치 요청 중...`,
           status: 'running',
           startedAt: Date.now(),
           mode: 'claude-batch',
-          providerBatchIds: [batchId],
+          providerBatchIds: [],
           lockedCells: [{ contentType, domain, studentIds }],
         };
-        submitted++;
         set((state) => ({
-          updates: immediate.length ? [...state.updates, ...immediate] : state.updates,
-          claudeBatchJobs: [...state.claudeBatchJobs, job],
+          claudeBatchJobs: [...state.claudeBatchJobs, pendingJob],
         }));
+
+        try {
+          const res = await aiApi.generateClaudeBatch({ classId, domain, contentType, studentIds });
+          const batchId = String(res.data.batchId || '');
+          if (!batchId) {
+            set((state) => ({
+              claudeBatchJobs: state.claudeBatchJobs.filter((job) => job.id !== pendingJobId),
+            }));
+            continue;
+          }
+          const immediate = Array.isArray(res.data.immediateUpdates) ? res.data.immediateUpdates : [];
+          const errors = immediate.filter((item: GeneratedContentUpdate) => item.error).length;
+          const job: BatchJob = {
+            ...pendingJob,
+            completed: immediate.length,
+            errorCount: errors,
+            message: `[${displayDomainName(domain)}] Claude 배치 제출 완료`,
+            providerBatchIds: [batchId],
+          };
+          submitted++;
+          set((state) => ({
+            // 배치 제출만으로 편집 내용을 바꾸지 않습니다. 즉시 처리된 결과도
+            // checkClaudeBatchResults에서 나머지 배치 결과와 함께 반영합니다.
+            claudeBatchJobs: state.claudeBatchJobs.map((item) => item.id === pendingJobId ? job : item),
+          }));
+        } catch (e) {
+          set((state) => ({
+            claudeBatchJobs: state.claudeBatchJobs.filter((job) => job.id !== pendingJobId),
+          }));
+          throw e;
+        }
       }
       return submitted > 0;
     } catch (e) {

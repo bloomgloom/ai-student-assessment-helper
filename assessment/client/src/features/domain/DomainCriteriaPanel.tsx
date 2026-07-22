@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { KeyboardEvent, PointerEvent, ReactNode, useRef, useState } from 'react';
 import { Loader2, Send, Trash2 } from 'lucide-react';
 import { CriteriaItemSection } from '../../components/common/CriteriaItemSection';
 import { AiChatMessage } from './types';
@@ -33,6 +33,104 @@ interface DomainCriteriaPanelProps {
   top?: ReactNode;
   prompt: ReactNode | DomainCriteriaPromptConfig;
   items: DomainCriteriaItemsConfig;
+}
+
+interface DomainCriteriaSplitProps {
+  left: ReactNode;
+  right: ReactNode;
+}
+
+const SPLITTER_WIDTH = 16;
+const MIN_PANE_WIDTH = 240;
+const DEFAULT_LEFT_RATIO = 40;
+
+export function DomainCriteriaSplit({ left, right }: DomainCriteriaSplitProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [leftRatio, setLeftRatio] = useState(DEFAULT_LEFT_RATIO);
+  const [dragging, setDragging] = useState(false);
+
+  const clampRatio = (ratio: number) => {
+    const contentWidth = (containerRef.current?.clientWidth || 0) - SPLITTER_WIDTH;
+    if (contentWidth <= 0) return Math.min(80, Math.max(20, ratio));
+    const minimumRatio = Math.min(50, (MIN_PANE_WIDTH / contentWidth) * 100);
+    return Math.min(100 - minimumRatio, Math.max(minimumRatio, ratio));
+  };
+
+  const resizeFromPointer = (clientX: number) => {
+    const bounds = containerRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const contentWidth = bounds.width - SPLITTER_WIDTH;
+    if (contentWidth <= 0) return;
+    const leftWidth = clientX - bounds.left - SPLITTER_WIDTH / 2;
+    setLeftRatio(clampRatio((leftWidth / contentWidth) * 100));
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragging(true);
+    resizeFromPointer(event.clientX);
+  };
+
+  const stopDragging = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setDragging(false);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home') return;
+    event.preventDefault();
+    if (event.key === 'Home') setLeftRatio(DEFAULT_LEFT_RATIO);
+    else setLeftRatio(current => clampRatio(current + (event.key === 'ArrowLeft' ? -2 : 2)));
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className={`flex h-full min-h-0 min-w-0 ${dragging ? 'select-none' : ''}`}
+    >
+      <div
+        className="min-h-0 min-w-0"
+        style={{ flexBasis: 0, flexGrow: leftRatio }}
+      >
+        {left}
+      </div>
+      <div
+        className="group relative flex w-4 shrink-0 cursor-col-resize touch-none items-center justify-center focus:outline-none"
+        role="separator"
+        aria-label="채팅 창과 프롬프트 창 너비 조절"
+        aria-orientation="vertical"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(leftRatio)}
+        tabIndex={0}
+        title="드래그하여 너비 조절 · 더블클릭하여 40:60 복원"
+        onPointerDown={handlePointerDown}
+        onPointerMove={event => {
+          if (dragging) resizeFromPointer(event.clientX);
+        }}
+        onPointerUp={stopDragging}
+        onPointerCancel={stopDragging}
+        onLostPointerCapture={() => setDragging(false)}
+        onDoubleClick={() => setLeftRatio(DEFAULT_LEFT_RATIO)}
+        onKeyDown={handleKeyDown}
+      >
+        <div
+          className={`h-12 w-1 rounded-full transition-colors ${
+            dragging ? 'bg-blue-500' : 'bg-gray-300 group-hover:bg-blue-400 group-focus:bg-blue-500'
+          }`}
+        />
+      </div>
+      <div
+        className="min-h-0 min-w-0"
+        style={{ flexBasis: 0, flexGrow: 100 - leftRatio }}
+      >
+        {right}
+      </div>
+    </div>
+  );
 }
 
 function isPromptConfig(prompt: ReactNode | DomainCriteriaPromptConfig): prompt is DomainCriteriaPromptConfig {
@@ -129,14 +227,14 @@ export function DomainCriteriaItemsView({ items }: { items: DomainCriteriaItemsC
 
 export function DomainCriteriaPanel({ top, prompt, items }: DomainCriteriaPanelProps) {
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(280px,0.9fr)_minmax(0,1.4fr)] gap-4">
-      <div className="min-h-0 min-w-0">
-        <DomainCriteriaPromptView prompt={prompt} />
-      </div>
-      <div className="min-h-0 min-w-0 space-y-4 overflow-auto pb-4 pr-1 scrollbar-stable">
-      {top}
-      <DomainCriteriaItemsView items={items} />
-      </div>
-    </div>
+    <DomainCriteriaSplit
+      left={<DomainCriteriaPromptView prompt={prompt} />}
+      right={(
+        <div className="h-full min-h-0 min-w-0 space-y-4 overflow-auto pb-4 pr-1 scrollbar-stable">
+          {top}
+          <DomainCriteriaItemsView items={items} />
+        </div>
+      )}
+    />
   );
 }

@@ -13,6 +13,9 @@ import { useRecordsUnsavedStore } from './stores/recordsUnsavedStore';
 const ArtifactStandalonePage = lazy(() =>
   import('./components/ArtifactViewer').then((module) => ({ default: module.ArtifactStandalonePage }))
 );
+const ArtifactPreviewStandalonePage = lazy(() =>
+  import('./components/ArtifactPreviewModal').then((module) => ({ default: module.ArtifactPreviewStandalonePage }))
+);
 
 const SAVEABLE_PATHS = ['/criteria', '/domains', '/records', '/settings'];
 
@@ -115,6 +118,11 @@ export default function App() {
           <Route path="/artifacts/:id/view" element={
             <Suspense fallback={<div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-gray-400" /></div>}>
               <ArtifactStandalonePage />
+            </Suspense>
+          } />
+          <Route path="/file-preview/:source/:id" element={
+            <Suspense fallback={<div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-gray-400" /></div>}>
+              <ArtifactPreviewStandalonePage />
             </Suspense>
           } />
           <Route path="*" element={

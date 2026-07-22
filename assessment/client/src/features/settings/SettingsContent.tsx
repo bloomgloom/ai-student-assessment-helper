@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Save, TestTube, CheckCircle, XCircle, Loader2, RefreshCw, Trash2, AlertTriangle, Eye, EyeOff, Download, Upload } from 'lucide-react';
-import { ANTHROPIC_EFFORT_OPTIONS, DEFAULT_MODELS, DEFAULT_URLS, PROVIDERS, TEMPERATURE_TASKS } from './constants';
+import { ANTHROPIC_EFFORT_OPTIONS, ANTHROPIC_OUTPUT_TASKS, DEFAULT_MODELS, DEFAULT_URLS, GEMINI_THINKING_LEVEL_OPTIONS, OPENAI_REASONING_EFFORT_OPTIONS, PROVIDERS, TEMPERATURE_TASKS } from './constants';
 import { useSettingsController } from './useSettingsController';
-import { AnthropicEffort, SettingsTab } from './types';
+import { AnthropicEffort, GeminiThinkingLevel, OpenAIReasoningEffort, SettingsTab } from './types';
 import { hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
 
 interface SettingsContentProps extends ReturnType<typeof useSettingsController> {
@@ -46,10 +46,13 @@ export function SettingsContent({
   temperatureSupported,
   handleTemperatureChange,
   handleTemperatureEnabledChange,
-  handleAnthropicOptionsEnabledChange,
-  handleAnthropicEffortChange,
-  handleAnthropicThinkingEnabledChange,
   handleAnthropicMaxTokensChange,
+  handleOutputOptionsEnabledChange,
+  handleAnthropicTaskEffortChange,
+  handleAnthropicTaskThinkingEnabledChange,
+  handleAnthropicTaskMaxTokensChange,
+  handleGeminiTaskThinkingLevelChange,
+  handleOpenAITaskReasoningEffortChange,
 }: SettingsContentProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [teacherPassword, setTeacherPassword] = useState('');
@@ -58,7 +61,8 @@ export function SettingsContent({
   const aiDisabled = !settings.aiEnabled;
   const disabledPanelClass = aiDisabled ? 'opacity-45 grayscale select-none' : '';
   const temperatureControlsDisabled = aiDisabled || !settings.temperatureEnabled || !temperatureSupported;
-  const anthropicControlsDisabled = aiDisabled || !settings.anthropicOptionsEnabled;
+  const outputOptionsAvailable = settings.provider === 'anthropic' || settings.provider === 'gemini' || settings.provider === 'openai';
+  const outputOptionsDisabled = aiDisabled || !settings.outputOptionsEnabled;
 
   return (
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable">
@@ -321,69 +325,124 @@ export function SettingsContent({
           </p>
         </div>
 
-        {isAnthropic ? (
+        {outputOptionsAvailable && (
           <div className="space-y-3">
             <div>
-              <label className="label">Max tokens</label>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                className="input"
-                value={settings.anthropicMaxTokens}
-                disabled={aiDisabled}
-                onChange={(e) => handleAnthropicMaxTokensChange(e.target.value === '' ? '' : Math.max(1, Math.floor(Number(e.target.value) || 1)))}
-              />
-            </div>
-            <div>
               <div className="flex items-center justify-between gap-3">
-                <label className="label mb-0">Claude 출력 옵션</label>
+                <label className="label mb-0">
+                  {settings.provider === 'anthropic' ? 'Claude 출력 옵션' : settings.provider === 'gemini' ? 'Gemini 출력 옵션' : 'ChatGPT 출력 옵션'}
+                </label>
                 <label className={`flex items-center gap-2 text-xs ${aiDisabled ? 'text-gray-400' : 'text-gray-700 cursor-pointer'}`}>
                   <input
                     type="checkbox"
-                    className="w-4 h-4 rounded"
-                    checked={settings.anthropicOptionsEnabled}
+                    className="h-4 w-4 rounded"
+                    checked={settings.outputOptionsEnabled}
                     disabled={aiDisabled}
-                    onChange={(e) => handleAnthropicOptionsEnabledChange(e.target.checked)}
+                    onChange={(e) => handleOutputOptionsEnabledChange(e.target.checked)}
                   />
                   사용
                 </label>
               </div>
               <p className="text-xs text-gray-400">
-                끄면 Claude 요청에 effort와 thinking 파라미터를 보내지 않습니다.
+                끄면 max tokens 8192만 보내고 reasoning/thinking/effort 설정은 보내지 않습니다. 켜면 아래 기능별 값을 모두 수동 적용합니다.
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Effort</label>
-                <select
-                  className="select"
-                  value={settings.anthropicOptionsEnabled ? settings.anthropicEffort : ''}
-                  disabled={anthropicControlsDisabled}
-                  onChange={(e) => handleAnthropicEffortChange(e.target.value as AnthropicEffort)}
-                >
-                  <option value="">선택 안 함</option>
-                  {ANTHROPIC_EFFORT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-end pb-2">
-                <label className={`flex items-center gap-2 text-sm ${anthropicControlsDisabled ? 'text-gray-400' : 'text-gray-700 cursor-pointer'}`}>
-                  <input
-                    type="checkbox"
-                    className="w-4 h-4 rounded"
-                    checked={settings.anthropicOptionsEnabled && settings.anthropicThinkingEnabled}
-                    disabled={anthropicControlsDisabled}
-                    onChange={(e) => handleAnthropicThinkingEnabledChange(e.target.checked)}
-                  />
-                  Thinking 사용
-                </label>
-              </div>
+            <div className="overflow-hidden rounded border border-gray-200">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b bg-gray-50 text-xs font-semibold text-gray-600">
+                    <th className="px-3 py-2 text-left">기능</th>
+                    {settings.provider === 'anthropic' && <th className="px-3 py-2 text-left">Effort</th>}
+                    {settings.provider === 'anthropic' && <th className="px-3 py-2 text-center">Thinking</th>}
+                    {settings.provider === 'gemini' && <th className="px-3 py-2 text-center">Thinking level</th>}
+                    {settings.provider === 'openai' && <th className="px-3 py-2 text-center">Reasoning effort</th>}
+                    <th className="px-3 py-2 text-right">Max tokens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ANTHROPIC_OUTPUT_TASKS.map((task) => {
+                    const option = settings.anthropicOutputOptions[task.key];
+                    const disabled = outputOptionsDisabled;
+                    return (
+                      <tr key={task.key} className="border-b last:border-b-0">
+                        <td className="px-3 py-2 text-gray-700">{task.label}</td>
+                        {settings.provider === 'anthropic' && (
+                          <td className="px-3 py-2 text-center">
+                            <select
+                              className="select h-8 w-28 text-center text-xs"
+                              value={option.effort}
+                              disabled={disabled}
+                              onChange={(e) => handleAnthropicTaskEffortChange(task.key, e.target.value as AnthropicEffort)}
+                            >
+                              {ANTHROPIC_EFFORT_OPTIONS.map((effort) => (
+                                <option key={effort.value} value={effort.value}>{effort.label}</option>
+                              ))}
+                            </select>
+                          </td>
+                        )}
+                        {settings.provider === 'anthropic' && (
+                          <td className="px-3 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded"
+                              checked={option.thinkingEnabled}
+                              disabled={disabled}
+                              onChange={(e) => handleAnthropicTaskThinkingEnabledChange(task.key, e.target.checked)}
+                              aria-label={`${task.label} Thinking 사용`}
+                            />
+                          </td>
+                        )}
+                        {settings.provider === 'gemini' && (
+                          <td className="px-3 py-2 text-center">
+                            <select
+                              className="select h-8 w-28 text-center text-xs"
+                              value={option.thinkingLevel}
+                              disabled={disabled}
+                              onChange={(e) => handleGeminiTaskThinkingLevelChange(task.key, e.target.value as GeminiThinkingLevel)}
+                            >
+                              {GEMINI_THINKING_LEVEL_OPTIONS.map((level) => (
+                                <option key={level.value} value={level.value}>{level.label}</option>
+                              ))}
+                            </select>
+                          </td>
+                        )}
+                        {settings.provider === 'openai' && (
+                          <td className="px-3 py-2 text-center">
+                            <select
+                              className="select h-8 w-28 text-center text-xs"
+                              value={option.reasoningEffort}
+                              disabled={disabled}
+                              onChange={(e) => handleOpenAITaskReasoningEffortChange(task.key, e.target.value as OpenAIReasoningEffort)}
+                            >
+                              {OPENAI_REASONING_EFFORT_OPTIONS.map((effort) => (
+                                <option key={effort.value} value={effort.value}>{effort.label}</option>
+                              ))}
+                            </select>
+                          </td>
+                        )}
+                        <td className="px-3 py-2 text-left">
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            className="input h-8 w-24 text-left text-xs"
+                            value={option.maxTokens}
+                            disabled={disabled}
+                            onChange={(e) => handleAnthropicTaskMaxTokensChange(task.key, e.target.value === '' ? '' : Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                            aria-label={`${task.label} Max tokens`}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
-        ) : (
+        )}
+
+        {!isAnthropic && (
           <div className="space-y-3">
             <div>
               <div className="flex items-center justify-between gap-3">

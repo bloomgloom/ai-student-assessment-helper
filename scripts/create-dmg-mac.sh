@@ -17,6 +17,8 @@ if [ ! -d "$APP_PATH" ]; then
   exit 1
 fi
 
+bash scripts/ensure-mac-app-signature.sh "$APP_PATH"
+
 rm -f "$DMG_PATH"
 
 echo "Creating DMG: $DMG_PATH"

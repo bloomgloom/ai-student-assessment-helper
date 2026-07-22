@@ -10,14 +10,15 @@ const HwpxArtifactPreview = lazy(() => import('./preview/HwpxArtifactPreview'));
 const CsvArtifactPreview = lazy(() => import('./preview/CsvArtifactPreview'));
 const IpynbArtifactPreview = lazy(() => import('./preview/IpynbArtifactPreview'));
 
-interface Artifact {
+export interface PreviewArtifact {
   id: number;
   filename: string;
+  filepath?: string;
   source?: 'artifact' | 'assignment' | 'resource';
 }
 
 interface ArtifactPreviewContentProps {
-  artifact: Artifact;
+  artifact: PreviewArtifact;
   codeContent: string;
   loadingCode: boolean;
   pdfPages: number;
@@ -44,7 +45,7 @@ function PreviewFallback() {
   );
 }
 
-function artifactFileUrl(artifact: Artifact) {
+export function artifactFileUrl(artifact: PreviewArtifact) {
   if (artifact.source === 'assignment') return assignmentConfigsApi.submissionFileUrl(artifact.id);
   if (artifact.source === 'resource') return assignmentConfigsApi.resourceFileUrl(artifact.id);
   return artifactsApi.fileUrl(artifact.id);

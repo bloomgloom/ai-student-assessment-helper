@@ -25,6 +25,13 @@ export const TEMPERATURE_TASKS = [
   { key: 'recordsComments', label: '채점 기록 관리 - 기록(세특)' },
 ] as const;
 
+export const ANTHROPIC_OUTPUT_TASKS = [
+  { key: 'domainManagement', label: '평가 영역 관리' },
+  { key: 'recordsScoring', label: '채점' },
+  { key: 'recordsComments', label: '기록' },
+  { key: 'subjectComprehensive', label: '세특' },
+] as const;
+
 export const DEFAULT_TEMPERATURES = {
   anthropic: {
     domainManagement: 0.4,
@@ -44,6 +51,18 @@ export const ANTHROPIC_EFFORT_OPTIONS = [
   { value: 'high', label: 'High' },
   { value: 'xhigh', label: 'XHigh' },
   { value: 'max', label: 'Max' },
+] as const;
+
+export const GEMINI_THINKING_LEVEL_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+] as const;
+
+export const OPENAI_REASONING_EFFORT_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
 ] as const;
 
 export function supportsTemperature(provider: string, model: string) {

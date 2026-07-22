@@ -5,15 +5,10 @@ import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { assignmentConfigsApi } from '../../lib/api';
 import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
-import { DomainCriteriaPanel, DomainCriteriaPromptView } from './DomainCriteriaPanel';
+import { DomainCriteriaPanel, DomainCriteriaPromptView, DomainCriteriaSplit } from './DomainCriteriaPanel';
 import { AiChatMessage, AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
 
-const ArtifactPreviewContent = lazy(() => import('../../components/ArtifactPreviewContent'));
-
-const CODE_EXTS = new Set(['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','md','txt']);
-function isCodeFile(filename: string) {
-  return CODE_EXTS.has(filename.split('.').pop()?.toLowerCase() || '');
-}
+const ArtifactPreviewModal = lazy(() => import('../../components/ArtifactPreviewModal'));
 
 type DomainTab = 'standards' | 'scoring' | 'records' | 'assignment' | 'ratio' | 'comments';
 
@@ -301,9 +296,6 @@ export function DomainContent({
   const [guideOriginal, setGuideOriginal] = useState('');
   const [extensionDraft, setExtensionDraft] = useState('');
   const [viewingResource, setViewingResource] = useState<AssignmentResource | null>(null);
-  const [resourceCodeContent, setResourceCodeContent] = useState('');
-  const [resourceCodeLoading, setResourceCodeLoading] = useState(false);
-  const [resourcePdfPages, setResourcePdfPages] = useState(0);
   const [draggedItem, setDraggedItem] = useState<{ kind: 'scoring' | 'records'; index: number } | null>(null);
   const [dragOverItem, setDragOverItem] = useState<{ kind: 'scoring' | 'records'; index: number } | null>(null);
 
@@ -327,25 +319,6 @@ export function DomainContent({
     finishItemDrag();
   };
 
-  useEffect(() => {
-    if (!viewingResource) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setViewingResource(null); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [viewingResource]);
-
-  const handleViewResource = async (resource: AssignmentResource) => {
-    setViewingResource(resource);
-    setResourceCodeContent('');
-    if (isCodeFile(resource.filename)) {
-      setResourceCodeLoading(true);
-      try {
-        setResourceCodeContent(await (await fetch(assignmentConfigsApi.resourceFileUrl(resource.id))).text());
-      } finally {
-        setResourceCodeLoading(false);
-      }
-    }
-  };
   const assignmentExtensionRules = parseExtensionRules(
     assignmentConfig?.allowed_extensions || '',
     assignmentConfig?.max_file_size_mb || 50,
@@ -796,8 +769,8 @@ export function DomainContent({
 
       {selectedDomain && activeTab === 'comments' && (
         <Section className="h-full min-h-0">
-          <div className="grid h-full min-h-0 grid-cols-[minmax(280px,0.9fr)_minmax(0,1.4fr)] gap-4">
-            <div className="min-h-0 min-w-0">
+          <DomainCriteriaSplit
+            left={(
               <DomainCriteriaPromptView
                 prompt={{
                   label: '세특 기준 생성',
@@ -814,19 +787,21 @@ export function DomainContent({
                   disabled: !aiEnabled,
                 }}
               />
-            </div>
-            <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-purple-200 bg-purple-50 p-4 shadow-sm">
-              <div className="mb-3 flex h-9 shrink-0 items-center gap-3">
-                <div className="w-24 text-sm font-semibold text-purple-800">공통</div>
+            )}
+            right={(
+              <div className="flex h-full min-h-0 min-w-0 flex-col rounded-lg border border-purple-200 bg-purple-50 p-4 shadow-sm">
+                <div className="mb-3 flex h-9 shrink-0 items-center gap-3">
+                  <div className="w-24 text-sm font-semibold text-purple-800">공통</div>
+                </div>
+                <textarea
+                  className="textarea min-h-0 flex-1 resize-none bg-white text-sm leading-relaxed"
+                  placeholder="생성된 세특 기준이 여기에 표시됩니다. 직접 수정할 수도 있습니다."
+                  value={subjectCommentsPrompt}
+                  onChange={e => updateSubjectCommentsPrompt(e.target.value)}
+                />
               </div>
-              <textarea
-                className="textarea min-h-0 flex-1 resize-none bg-white text-sm leading-relaxed"
-                placeholder="생성된 세특 기준이 여기에 표시됩니다. 직접 수정할 수도 있습니다."
-                value={subjectCommentsPrompt}
-                onChange={e => updateSubjectCommentsPrompt(e.target.value)}
-              />
-            </div>
-          </div>
+            )}
+          />
         </Section>
       )}
 
@@ -924,7 +899,7 @@ export function DomainContent({
                         <div className="flex gap-1">
                           <button
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                            onClick={() => handleViewResource(resource)}
+                            onClick={() => setViewingResource(resource)}
                             title="미리보기"
                           >
                             <Eye size={13} />
@@ -959,40 +934,14 @@ export function DomainContent({
                 </div>
               </div>
 
-              {/* 배부 자료 미리보기 모달 */}
-              {viewingResource && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-                  <div className="bg-white rounded-lg shadow-xl w-[85vw] h-[85vh] flex flex-col">
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
-                      <div className="font-medium text-sm text-gray-800 truncate max-w-[60%]">{viewingResource.filename}</div>
-                      <div className="flex gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => downloadUrl(
-                            assignmentConfigsApi.resourceFileUrl(viewingResource.id),
-                            viewingResource.filename,
-                          ).catch((error) => alert(error.message))}
-                          className="btn-secondary text-xs py-1 inline-flex items-center gap-1"
-                        >
-                          <Download size={13} /> 다운로드
-                        </button>
-                        <button className="btn-secondary text-xs py-1 inline-flex items-center gap-1" onClick={() => setViewingResource(null)}>
-                          <X size={13} /> 닫기
-                        </button>
-                      </div>
-                    </div>
-                    <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 size={24} className="animate-spin text-gray-400" /></div>}>
-                      <ArtifactPreviewContent
-                        artifact={{ id: viewingResource.id, filename: viewingResource.filename, source: 'resource' }}
-                        codeContent={resourceCodeContent}
-                        loadingCode={resourceCodeLoading}
-                        pdfPages={resourcePdfPages}
-                        setPdfPages={setResourcePdfPages}
-                      />
-                    </Suspense>
-                  </div>
-                </div>
-              )}
+              <Suspense fallback={null}>
+                <ArtifactPreviewModal
+                  artifact={viewingResource
+                    ? { id: viewingResource.id, filename: viewingResource.filename, source: 'resource' }
+                    : null}
+                  onClose={() => setViewingResource(null)}
+                />
+              </Suspense>
 
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <h3 className="mb-3 text-sm font-semibold text-gray-800">제출 파일 설정</h3>

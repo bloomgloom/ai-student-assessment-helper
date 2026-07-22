@@ -9,6 +9,7 @@ npm install --prefix assessment
 npm install --prefix assignment
 npm run python:setup
 npm run build:mac:app
+bash scripts/ensure-mac-app-signature.sh
 
 echo
 echo "macOS app build complete."

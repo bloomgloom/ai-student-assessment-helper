@@ -1,8 +1,8 @@
 import { SetStateAction, useEffect, useState } from 'react';
 import { settingsApi } from '../../lib/api';
 import { saveBlob } from '../../lib/desktopFiles';
-import { DEFAULT_MODELS, DEFAULT_TEMPERATURES, DEFAULT_URLS, supportsTemperature } from './constants';
-import { AiTemperatures, AnthropicEffort, SettingsState } from './types';
+import { ANTHROPIC_OUTPUT_TASKS, DEFAULT_MODELS, DEFAULT_TEMPERATURES, DEFAULT_URLS, supportsTemperature } from './constants';
+import { AiTemperatures, AnthropicEffort, AnthropicOutputOptions, AnthropicOutputTask, GeminiThinkingLevel, OpenAIReasoningEffort, SettingsState } from './types';
 
 function providerTemperatureMax(provider: string) {
   return provider === 'anthropic' ? 1 : 2;
@@ -34,11 +34,60 @@ function normalizeAnthropicEffort(value: unknown): AnthropicEffort {
     : 'high';
 }
 
+function normalizeGeminiThinkingLevel(value: unknown): GeminiThinkingLevel {
+  return ['low', 'medium', 'high'].includes(String(value))
+    ? String(value) as GeminiThinkingLevel
+    : 'medium';
+}
+
+function normalizeOpenAIReasoningEffort(value: unknown): OpenAIReasoningEffort {
+  return ['low', 'medium', 'high'].includes(String(value))
+    ? String(value) as OpenAIReasoningEffort
+    : 'medium';
+}
+
 function normalizeAnthropicMaxTokens(value: unknown): number | '' {
   if (value === '') return '';
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return 8192;
   return Math.floor(numeric);
+}
+
+function defaultAnthropicEffortForModel(model: string): AnthropicEffort {
+  const normalized = model.toLowerCase();
+  if (normalized.includes('fable')) return 'medium';
+  return 'high';
+}
+
+function defaultAnthropicThinkingForModel(model: string): boolean {
+  return model.toLowerCase().includes('opus');
+}
+
+function defaultAnthropicOutputOptions(provider = 'anthropic', model = ''): AnthropicOutputOptions {
+  return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => [task.key, {
+    effort: defaultAnthropicEffortForModel(model),
+    thinkingEnabled: defaultAnthropicThinkingForModel(model),
+    maxTokens: 8192,
+    thinkingLevel: 'medium' as GeminiThinkingLevel,
+    reasoningEffort: 'medium' as OpenAIReasoningEffort,
+  }])) as AnthropicOutputOptions;
+}
+
+function normalizeAnthropicOutputOptions(value: unknown, legacy?: Partial<SettingsState>, provider = legacy?.provider || 'anthropic', model = legacy?.model || ''): AnthropicOutputOptions {
+  const source = value && typeof value === 'object'
+    ? value as Partial<Record<AnthropicOutputTask, Partial<AnthropicOutputOptions[AnthropicOutputTask]>>>
+    : {};
+  const defaults = defaultAnthropicOutputOptions(provider, model);
+  return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => {
+    const item = source[task.key] || {};
+    return [task.key, {
+      effort: normalizeAnthropicEffort(item.effort ?? legacy?.anthropicEffort ?? defaults[task.key].effort),
+      thinkingEnabled: item.thinkingEnabled ?? legacy?.anthropicThinkingEnabled ?? defaults[task.key].thinkingEnabled,
+      maxTokens: normalizeAnthropicMaxTokens(item.maxTokens ?? legacy?.anthropicMaxTokens),
+      thinkingLevel: normalizeGeminiThinkingLevel(item.thinkingLevel ?? defaults[task.key].thinkingLevel),
+      reasoningEffort: normalizeOpenAIReasoningEffort(item.reasoningEffort ?? defaults[task.key].reasoningEffort),
+    }];
+  })) as AnthropicOutputOptions;
 }
 
 function snapshotProviderSettings(s: SettingsState) {
@@ -49,26 +98,30 @@ function snapshotProviderSettings(s: SettingsState) {
     temperatureEnabled: s.temperatureEnabled,
     temperatures: normalizeTemperatures(s.provider, s.temperatures),
     anthropicOptionsEnabled: s.anthropicOptionsEnabled,
+    outputOptionsEnabled: s.outputOptionsEnabled,
     anthropicEffort: normalizeAnthropicEffort(s.anthropicEffort),
     anthropicThinkingEnabled: s.anthropicThinkingEnabled,
     anthropicMaxTokens: normalizeAnthropicMaxTokens(s.anthropicMaxTokens),
+    anthropicOutputOptions: normalizeAnthropicOutputOptions(s.anthropicOutputOptions, s),
   };
 }
 
 export function useSettingsController() {
   const [settings, setSettings] = useState<SettingsState>({
-    provider: 'gemini',
+    provider: 'anthropic',
     apiKey: '',
     apiKeys: {},
     model: '',
     baseUrl: '',
     maxConcurrency: 5,
     temperatureEnabled: false,
-    temperatures: defaultTemperatures('gemini'),
+    temperatures: defaultTemperatures('anthropic'),
     anthropicOptionsEnabled: false,
+    outputOptionsEnabled: false,
     anthropicEffort: 'high',
     anthropicThinkingEnabled: false,
     anthropicMaxTokens: 8192,
+    anthropicOutputOptions: defaultAnthropicOutputOptions('anthropic'),
     providerSettings: {},
     loggingEnabled: true,
     artifactStripIntroBlocks: true,
@@ -95,16 +148,18 @@ export function useSettingsController() {
   useEffect(() => {
     settingsApi.get().then((r) => {
       const data = r.data as SettingsState;
-      const provider = data.provider || 'gemini';
+      const provider = data.provider || 'anthropic';
       setSettings({
         ...data,
         providerSettings: data.providerSettings || {},
         temperatureEnabled: data.temperatureEnabled === true,
         temperatures: normalizeTemperatures(provider, data.temperatures),
         anthropicOptionsEnabled: data.anthropicOptionsEnabled === true,
+        outputOptionsEnabled: data.outputOptionsEnabled === true,
         anthropicEffort: normalizeAnthropicEffort(data.anthropicEffort),
         anthropicThinkingEnabled: data.anthropicThinkingEnabled === true,
         anthropicMaxTokens: normalizeAnthropicMaxTokens(data.anthropicMaxTokens),
+        anthropicOutputOptions: normalizeAnthropicOutputOptions(data.anthropicOutputOptions, data, provider, data.model || ''),
         artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
         artifactStripIntroBlocksDeprecated: data.artifactStripIntroBlocksDeprecated === true,
         pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
@@ -166,9 +221,11 @@ export function useSettingsController() {
       temperatureEnabled: s.providerSettings?.[provider]?.temperatureEnabled === true,
       temperatures: normalizeTemperatures(provider, s.providerSettings?.[provider]?.temperatures),
       anthropicOptionsEnabled: s.providerSettings?.[provider]?.anthropicOptionsEnabled === true,
+      outputOptionsEnabled: s.providerSettings?.[provider]?.outputOptionsEnabled === true,
       anthropicEffort: normalizeAnthropicEffort(s.providerSettings?.[provider]?.anthropicEffort),
       anthropicThinkingEnabled: s.providerSettings?.[provider]?.anthropicThinkingEnabled === true,
       anthropicMaxTokens: normalizeAnthropicMaxTokens(s.providerSettings?.[provider]?.anthropicMaxTokens),
+      anthropicOutputOptions: normalizeAnthropicOutputOptions(s.providerSettings?.[provider]?.anthropicOutputOptions, s.providerSettings?.[provider], provider, nextModel),
     }));
     nextApiKey = settings.apiKeys?.[provider] || '';
     setCompatibleModels([]);
@@ -193,9 +250,11 @@ export function useSettingsController() {
     temperatureEnabled: value.temperatureEnabled,
     temperatures: normalizeTemperatures(value.provider, value.temperatures),
     anthropicOptionsEnabled: value.anthropicOptionsEnabled,
+    outputOptionsEnabled: value.outputOptionsEnabled,
     anthropicEffort: normalizeAnthropicEffort(value.anthropicEffort),
     anthropicThinkingEnabled: value.anthropicThinkingEnabled,
     anthropicMaxTokens: normalizeAnthropicMaxTokens(value.anthropicMaxTokens),
+    anthropicOutputOptions: normalizeAnthropicOutputOptions(value.anthropicOutputOptions, value, value.provider, value.model),
     providerSettings: value.providerSettings?.[value.provider],
   });
 
@@ -218,7 +277,10 @@ export function useSettingsController() {
     setSaved(false);
     try {
       const payload = withCurrentProviderSettings(settings);
-      if (payload.provider === 'anthropic' && payload.anthropicMaxTokens === '') {
+      const invalidAnthropicMaxTokens = ['anthropic', 'gemini', 'openai'].includes(payload.provider)
+        && payload.outputOptionsEnabled
+        && Object.values(payload.anthropicOutputOptions).some((option) => option.maxTokens === '');
+      if (invalidAnthropicMaxTokens) {
         alert('Claude max token을 입력해주세요.');
         return;
       }
@@ -363,8 +425,141 @@ export function useSettingsController() {
     }));
   };
 
+  const handleOutputOptionsEnabledChange = (value: boolean) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => {
+      const anthropicOutputOptions = value
+        ? normalizeAnthropicOutputOptions(s.anthropicOutputOptions, s, s.provider, s.model)
+        : s.anthropicOutputOptions;
+      return {
+        ...s,
+        outputOptionsEnabled: value,
+        anthropicOutputOptions,
+        providerSettings: {
+          ...s.providerSettings,
+          [s.provider]: {
+            ...snapshotProviderSettings(s),
+            outputOptionsEnabled: value,
+            anthropicOutputOptions,
+          },
+        },
+      };
+    });
+  };
+
+  const handleAnthropicTaskEffortChange = (key: AnthropicOutputTask, value: AnthropicEffort) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => {
+      const anthropicOutputOptions = normalizeAnthropicOutputOptions({
+        ...s.anthropicOutputOptions,
+        [key]: { ...s.anthropicOutputOptions[key], effort: normalizeAnthropicEffort(value) },
+      }, s, s.provider, s.model);
+      return {
+        ...s,
+        anthropicOutputOptions,
+        providerSettings: {
+          ...s.providerSettings,
+          [s.provider]: {
+            ...snapshotProviderSettings(s),
+            anthropicOutputOptions,
+          },
+        },
+      };
+    });
+  };
+
+  const handleAnthropicTaskThinkingEnabledChange = (key: AnthropicOutputTask, value: boolean) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => {
+      const anthropicOutputOptions = normalizeAnthropicOutputOptions({
+        ...s.anthropicOutputOptions,
+        [key]: { ...s.anthropicOutputOptions[key], thinkingEnabled: value },
+      }, s, s.provider, s.model);
+      return {
+        ...s,
+        anthropicOutputOptions,
+        providerSettings: {
+          ...s.providerSettings,
+          [s.provider]: {
+            ...snapshotProviderSettings(s),
+            anthropicOutputOptions,
+          },
+        },
+      };
+    });
+  };
+
+  const handleAnthropicTaskMaxTokensChange = (key: AnthropicOutputTask, value: number | '') => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => {
+      const anthropicOutputOptions = normalizeAnthropicOutputOptions({
+        ...s.anthropicOutputOptions,
+        [key]: { ...s.anthropicOutputOptions[key], maxTokens: value },
+      }, s, s.provider, s.model);
+      return {
+        ...s,
+        anthropicOutputOptions,
+        providerSettings: {
+          ...s.providerSettings,
+          [s.provider]: {
+            ...snapshotProviderSettings(s),
+            anthropicOutputOptions,
+          },
+        },
+      };
+    });
+  };
+
+  const handleGeminiTaskThinkingLevelChange = (key: AnthropicOutputTask, value: GeminiThinkingLevel) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => {
+      const anthropicOutputOptions = normalizeAnthropicOutputOptions({
+        ...s.anthropicOutputOptions,
+        [key]: { ...s.anthropicOutputOptions[key], thinkingLevel: normalizeGeminiThinkingLevel(value) },
+      }, s, s.provider, s.model);
+      return {
+        ...s,
+        anthropicOutputOptions,
+        providerSettings: {
+          ...s.providerSettings,
+          [s.provider]: {
+            ...snapshotProviderSettings(s),
+            anthropicOutputOptions,
+          },
+        },
+      };
+    });
+  };
+
+  const handleOpenAITaskReasoningEffortChange = (key: AnthropicOutputTask, value: OpenAIReasoningEffort) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => {
+      const anthropicOutputOptions = normalizeAnthropicOutputOptions({
+        ...s.anthropicOutputOptions,
+        [key]: { ...s.anthropicOutputOptions[key], reasoningEffort: normalizeOpenAIReasoningEffort(value) },
+      }, s, s.provider, s.model);
+      return {
+        ...s,
+        anthropicOutputOptions,
+        providerSettings: {
+          ...s.providerSettings,
+          [s.provider]: {
+            ...snapshotProviderSettings(s),
+            anthropicOutputOptions,
+          },
+        },
+      };
+    });
+  };
+
   const handleTest = async () => {
-    if (settings.provider === 'anthropic' && settings.anthropicMaxTokens === '') {
+    if ((settings.provider === 'anthropic' || settings.provider === 'gemini' || settings.provider === 'openai') && settings.outputOptionsEnabled && Object.values(settings.anthropicOutputOptions).some((option) => option.maxTokens === '')) {
       setTestResult({ ok: false, message: 'Claude max token을 입력해주세요.' });
       return;
     }
@@ -509,5 +704,11 @@ export function useSettingsController() {
     handleAnthropicEffortChange,
     handleAnthropicThinkingEnabledChange,
     handleAnthropicMaxTokensChange,
+    handleOutputOptionsEnabledChange,
+    handleAnthropicTaskEffortChange,
+    handleAnthropicTaskThinkingEnabledChange,
+    handleAnthropicTaskMaxTokensChange,
+    handleGeminiTaskThinkingLevelChange,
+    handleOpenAITaskReasoningEffortChange,
   };
 }

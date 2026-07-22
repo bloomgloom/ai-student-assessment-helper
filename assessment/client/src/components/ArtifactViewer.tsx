@@ -1,10 +1,10 @@
 import { lazy, Suspense, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { artifactsApi } from '../lib/api';
-import { assignmentConfigsApi } from '../lib/api';
 import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../lib/desktopFiles';
-import { Upload, X, Loader2, Eye, File, Download } from 'lucide-react';
+import { Upload, X, Loader2, Download } from 'lucide-react';
 
+const ArtifactPreviewModal = lazy(() => import('./ArtifactPreviewModal'));
 const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
 
 interface Artifact {
@@ -55,18 +55,6 @@ function sortArtifacts(a: Artifact, b: Artifact) {
   return a.filename.localeCompare(b.filename, 'ko', { numeric: true });
 }
 
-function artifactFileUrl(artifact: Artifact) {
-  return artifact.source === 'assignment'
-    ? assignmentConfigsApi.submissionFileUrl(artifact.id)
-    : artifactsApi.fileUrl(artifact.id);
-}
-
-function artifactViewerUrl(artifact: Artifact) {
-  return artifact.source === 'assignment'
-    ? assignmentConfigsApi.submissionFileUrl(artifact.id)
-    : artifactsApi.viewerUrl(artifact.id);
-}
-
 interface ArtifactViewerProps {
   studentId: number;
   domain: string;
@@ -75,10 +63,7 @@ interface ArtifactViewerProps {
 export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [viewing, setViewing] = useState<Artifact | null>(null);
-  const [codeContent, setCodeContent] = useState('');
-  const [pdfPages, setPdfPages] = useState(0);
   const [uploading, setUploading] = useState(false);
-  const [loadingCode, setLoadingCode] = useState(false);
 
   const loadArtifacts = async () => {
     const r = await artifactsApi.getByDomain(studentId, domain);
@@ -86,17 +71,6 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
   };
 
   useEffect(() => { loadArtifacts(); }, [studentId, domain]);
-
-  useEffect(() => {
-    if (!viewing) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setViewing(null);
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [viewing]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
@@ -119,27 +93,6 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
     await loadArtifacts();
   };
 
-  const handleView = async (artifact: Artifact) => {
-    setViewing(artifact);
-    setCodeContent('');
-    if (isCodeFile(artifact.filename)) {
-      setLoadingCode(true);
-      try {
-        setCodeContent(await (await fetch(artifactFileUrl(artifact))).text());
-      } finally {
-        setLoadingCode(false);
-      }
-    }
-  };
-
-  const handleDownload = async (artifact: Artifact) => {
-    try {
-      await downloadUrl(artifactFileUrl(artifact), artifact.filename);
-    } catch (error: any) {
-      alert(error?.message || '파일 다운로드에 실패했습니다.');
-    }
-  };
-
   return (
     <div className="flex flex-wrap gap-1.5 items-center justify-center">
       {/* 파일 배지 */}
@@ -147,7 +100,7 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
         <div key={a.id} className="relative group">
           <button
             className={`px-2 py-0.5 text-[11px] font-bold rounded border cursor-pointer whitespace-nowrap ${extBadgeClass(a.filename)}`}
-            onClick={() => handleView(a)}
+            onClick={() => setViewing(a)}
             title={a.filepath ? `${a.filename}\n저장 위치: ${a.filepath}` : a.filename}
           >
             {getExtLabel(a.filename)}
@@ -187,44 +140,9 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
       </label>
       )}
 
-      {/* 뷰어 모달 */}
-      {viewing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-white rounded-lg shadow-xl w-[85vw] h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
-              <div className="min-w-0 max-w-[60%]">
-                <div className="font-medium text-sm text-gray-800 truncate">{viewing.filename}</div>
-                {viewing.filepath && (
-                  <div className="text-[11px] text-gray-500 truncate" title={viewing.filepath}>
-                    저장 위치: {viewing.filepath}
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <a href={artifactViewerUrl(viewing)} target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs py-1">
-                  <Eye size={13} /> 새 탭
-                </a>
-                <button type="button" onClick={() => handleDownload(viewing)} className="btn-secondary text-xs py-1">
-                  <Download size={13} /> 다운로드
-                </button>
-                <button className="btn-secondary text-xs py-1" onClick={() => setViewing(null)}>
-                  <X size={13} /> 닫기
-                </button>
-              </div>
-            </div>
-
-            <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 size={24} className="animate-spin text-gray-400" /></div>}>
-              <ArtifactPreviewContent
-                artifact={viewing}
-                codeContent={codeContent}
-                loadingCode={loadingCode}
-                pdfPages={pdfPages}
-                setPdfPages={setPdfPages}
-              />
-            </Suspense>
-          </div>
-        </div>
-      )}
+      <Suspense fallback={null}>
+        <ArtifactPreviewModal artifact={viewing} onClose={() => setViewing(null)} />
+      </Suspense>
     </div>
   );
 }

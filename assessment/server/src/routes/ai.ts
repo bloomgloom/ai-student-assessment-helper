@@ -12,6 +12,7 @@ import {
   retrieveAnthropicMessageBatchResults,
   type AnthropicBatchRequest,
   type AnthropicJsonSchema,
+  type AnthropicOutputTask,
   type LLMImageAttachment,
   type LLMLogSession,
   type LLMSettings,
@@ -24,6 +25,7 @@ import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
 import { parseFirstJson } from '../services/json';
 
 const router = Router();
+const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
 
 interface ArtifactRow {
   id: number;
@@ -216,7 +218,7 @@ router.post('/generate-prompt', async (req: Request, res: Response) => {
   try {
     const settings = await getLLMSettings();
     const fullPrompt = systemPrompt ? `[System]\n${systemPrompt}\n\n[User]\n${prompt}` : prompt;
-    const result = await callLLM(fullPrompt, settings, signal, undefined, [], settings.temperatures.domainManagement);
+    const result = await callLLM(fullPrompt, settings, signal, undefined, [], settings.temperatures.domainManagement, undefined, undefined, 'domainManagement');
     res.json({ result });
   } catch (e) {
     if (signal.aborted) return;
@@ -261,6 +263,39 @@ async function getDomainCommentsCriteria(classContext: ClassContext | null, doma
      ORDER BY sort_order, id`,
     [classContext.year, classContext.semester, classContext.grade, classContext.subject, domain]
   );
+}
+
+async function getDomainEvaluationType(classContext: ClassContext | null, domain: string): Promise<string> {
+  if (!classContext || domain === SUBJECT_COMPREHENSIVE_DOMAIN) return '수행';
+  const row = await queryOne<{ eval_type: string }>(
+    `SELECT eval_type
+     FROM subject_domains
+     WHERE year=? AND semester=? AND grade=? AND subject=? AND name=?
+     ORDER BY CASE eval_type WHEN '수행' THEN 0 WHEN '지필' THEN 1 ELSE 2 END, id
+     LIMIT 1`,
+    [classContext.year, classContext.semester, classContext.grade, classContext.subject, domain]
+  );
+  return row?.eval_type === '지필' ? '지필' : '수행';
+}
+
+function generationRolePrompt(
+  type: 'scoring' | 'comments' | 'comprehensive',
+  classContext: ClassContext | null,
+  domain: string,
+  evaluationType = '수행',
+) {
+  const year = classContext?.year ?? '미지정';
+  const semester = classContext?.semester ?? '미지정';
+  const grade = classContext?.grade ?? '미지정';
+  const subject = classContext?.subject || '미지정';
+
+  if (type === 'scoring') {
+    return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 ${evaluationType}평가 "${domain}"영역을 채점하는 교사이다. 제시된 채점 기준(성취기준·루브릭·배점)에 따라 학생의 산출물을 일관성 있고 객관적으로 채점한다. 너의 결과물은 확정 점수가 아니라, 교사가 검토·조정하여 최종 점수를 확정하기 위한 제안 점수와 근거이다.`;
+  }
+  if (type === 'comments') {
+    return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 ${evaluationType}평가 "${domain}"영역을 추후 학교생활기록부의 과목별 세부능력 및 특기사항(이하 세특)에 반영하기 위해, 사실에 근거하여 일관성 있고 객관적으로 정리하여 기록하는 교사이다. 너의 결과물은 세특의 완성본이 아니라, 추후 세특을 작성하기 위한 관찰 기록(근거 자료)이다.`;
+  }
+  return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 과목별 세부능력 및 특기사항(이하 세특)을 작성하는 교사이다. 학생의 산출물에 기초하여 학생의 능력을 객관적으로 파악하고 잠재력을 발굴하되, 따뜻하고 통찰력 있는 시선으로 학생의 세부능력과 특기가 구체적으로 드러나도록 세특을 작성한다. 너의 결과물은 확정된 세특이 아니라, 교사가 검토·수정하여 최종본으로 확정하기 위한 초안이다.`;
 }
 
 interface ScoringResultItem {
@@ -549,6 +584,12 @@ function schemaForGeneration(contentType: GenerationContentType, domain: string,
     required.push('comprehensive');
   }
   return { type: 'object', properties, required, additionalProperties: false };
+}
+
+function anthropicTaskForGeneration(contentType: GenerationContentType, domain: string): AnthropicOutputTask {
+  if (domain === SUBJECT_COMPREHENSIVE_DOMAIN) return 'subjectComprehensive';
+  if (contentType === 'scoring') return 'recordsScoring';
+  return 'recordsComments';
 }
 
 function envelopeOutputInstruction(contentType: GenerationContentType, domain: string, evalCriteria: EvalCriterion[], commentsCriteria: CommentsCriterion[]) {
@@ -951,7 +992,13 @@ async function prepareGenerationForStudent(params: {
     : { mode: contentType === 'comments' ? '세특' : '평가' };
   if (!criteriaSet) return { studentId: student.id, prompt: '', attachments: [], evalCriteria, commentsCriteria, error: '기준 없음' };
 
-  const parts: string[] = [];
+  const evaluationType = await getDomainEvaluationType(classContext, domain);
+  const roleType = contentType === 'scoring'
+    ? 'scoring'
+    : domain === SUBJECT_COMPREHENSIVE_DOMAIN
+      ? 'comprehensive'
+      : 'comments';
+  const parts: string[] = [generationRolePrompt(roleType, classContext, domain, evaluationType), '---'];
   const studentSpecificParts: string[] = [];
   let cachePrefix: string | undefined;
 
@@ -1016,7 +1063,12 @@ async function prepareCombinedGenerationForStudent(params: {
   const { student, domain, classContext, settings } = params;
   const evalCriteria = await getDomainEvalCriteria(classContext, domain);
   const commentsCriteria = await getDomainCommentsCriteria(classContext, domain);
-  const parts: string[] = [];
+  const evaluationType = await getDomainEvaluationType(classContext, domain);
+  const parts: string[] = [
+    generationRolePrompt('scoring', classContext, domain, evaluationType),
+    generationRolePrompt('comments', classContext, domain, evaluationType),
+    '---',
+  ];
 
   if (!evalCriteria.length) return { studentId: student.id, prompt: '', attachments: [], evalCriteria, commentsCriteria, error: '채점 기준 없음' };
   const hasRecordCriterion = structuredRecordCriteria(commentsCriteria).hasRecordCriterion;
@@ -1076,7 +1128,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     const temperature = contentType === 'scoring'
       ? settings.temperatures.recordsScoring
       : settings.temperatures.recordsComments;
-    const result = await callLLM(prepared.prompt, settings, undefined, undefined, prepared.attachments, temperature, prepared.cachePrefix, schemaForGeneration(contentType, domain, prepared.evalCriteria, prepared.commentsCriteria));
+    const result = await callLLM(prepared.prompt, settings, undefined, undefined, prepared.attachments, temperature, prepared.cachePrefix, schemaForGeneration(contentType, domain, prepared.evalCriteria, prepared.commentsCriteria), anthropicTaskForGeneration(contentType, domain));
     const envelope = buildEnvelopeContents(result, targetsForContentType(contentType, domain), prepared.evalCriteria, prepared.commentsCriteria);
     const storedContent = contentType === 'scoring'
       ? envelope.scoringContent
@@ -1141,7 +1193,8 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
           prepared.attachments,
           temperature,
           prepared.cachePrefix,
-          schemaForGeneration(contentType, domain, prepared.evalCriteria, prepared.commentsCriteria)
+          schemaForGeneration(contentType, domain, prepared.evalCriteria, prepared.commentsCriteria),
+          anthropicTaskForGeneration(contentType, domain)
         ),
       });
       requestMeta.push({ customId, studentId: student.id, studentName: student.name });
@@ -1363,7 +1416,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
           const resultText = await callLLM(prepared.prompt, settings, abortController.signal, {
             session: logSession || undefined,
             label: `학생 ${index + 1}/${students.length}`,
-          }, prepared.attachments, settings.temperatures.recordsComments, prepared.cachePrefix, schemaForGeneration('combined', domain, prepared.evalCriteria, prepared.commentsCriteria));
+          }, prepared.attachments, settings.temperatures.recordsComments, prepared.cachePrefix, schemaForGeneration('combined', domain, prepared.evalCriteria, prepared.commentsCriteria), anthropicTaskForGeneration('combined', domain));
           const combined = buildEnvelopeContents(resultText, { scoring: true, comments: true }, prepared.evalCriteria, prepared.commentsCriteria);
           completed++;
           sendEvent({ type: 'progress', studentId: student.id, name: student.name, contentType: 'scoring', domain, content: combined.scoringContent, completed, total: students.length });
@@ -1396,7 +1449,7 @@ router.post('/generate-batch', async (req: Request, res: Response) => {
           result = await callLLM(prepared.prompt, settings, abortController.signal, {
             session: logSession || undefined,
             label: `학생 ${index + 1}/${students.length}`,
-          }, prepared.attachments, temperature, prepared.cachePrefix, schemaForGeneration(contentType, domain, evalCriteria, commentsCriteria));
+          }, prepared.attachments, temperature, prepared.cachePrefix, schemaForGeneration(contentType, domain, evalCriteria, commentsCriteria), anthropicTaskForGeneration(contentType, domain));
           if (cancelled) return;
           const envelope = buildEnvelopeContents(result, targetsForContentType(contentType, domain), evalCriteria, commentsCriteria);
           storedContent = contentType === 'scoring'
