@@ -55,7 +55,7 @@ interface ClaudeBatchJobRow {
   provider_batch_id: string;
   class_id: number;
   domain: string;
-  content_type: 'scoring' | 'comments' | 'combined';
+  content_type: 'scoring' | 'comments' | 'combined' | 'spellcheck';
   status: string;
   request_count: number;
   metadata: string;
@@ -168,22 +168,8 @@ function parseSpellcheckResult(textWithTags: string): { correctedText: string; c
   return { correctedText, correctionCount };
 }
 
-function requestAbortSignal(req: Request, res: Response): AbortSignal {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  req.on('aborted', abort);
-  res.on('close', () => {
-    if (!res.writableEnded) abort();
-  });
-  return controller.signal;
-}
-
-router.post('/spellcheck', async (req: Request, res: Response) => {
-  const text = String(req.body?.text || '').trim();
-  if (!text) return res.status(400).json({ error: '검사할 텍스트가 없습니다.' });
-  const signal = requestAbortSignal(req, res);
-
-  const prompt = `
+function spellcheckPrompt(text: string) {
+  return `
 다음 텍스트의 맞춤법, 띄어쓰기, 문맥 오류를 교정해줘.
 원래 문장의 의미나 말투를 최대한 유지하면서, 어색한 부분만 자연스럽게 다듬어줘.
 
@@ -199,9 +185,25 @@ router.post('/spellcheck', async (req: Request, res: Response) => {
 [원본 텍스트]
 ${text}
 `;
+}
+
+function requestAbortSignal(req: Request, res: Response): AbortSignal {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.on('aborted', abort);
+  res.on('close', () => {
+    if (!res.writableEnded) abort();
+  });
+  return controller.signal;
+}
+
+router.post('/spellcheck', async (req: Request, res: Response) => {
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: '검사할 텍스트가 없습니다.' });
+  const signal = requestAbortSignal(req, res);
 
   try {
-    const taggedText = (await callLLM(prompt, undefined, signal, undefined, [], 0)).trim();
+    const taggedText = (await callLLM(spellcheckPrompt(text), undefined, signal, undefined, [], 0)).trim();
     const parsed = parseSpellcheckResult(taggedText);
     res.json({ taggedText, ...parsed });
   } catch (e) {
@@ -1226,6 +1228,75 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/spellcheck-claude-batch', async (req: Request, res: Response) => {
+  const classId = Number(req.body?.classId || 0);
+  const items: Array<{ studentId: number; text: string }> = Array.isArray(req.body?.items)
+    ? req.body.items
+        .map((item: unknown) => {
+          const value = item as { studentId?: unknown; text?: unknown };
+          return { studentId: Number(value.studentId || 0), text: String(value.text || '').trim() };
+        })
+        .filter((item: { studentId: number; text: string }) => item.studentId > 0 && item.text)
+    : [];
+  if (!classId) return res.status(400).json({ error: 'classId가 필요합니다.' });
+  if (!items.length) return res.status(400).json({ error: '교정할 세특 내용이 없습니다.' });
+
+  try {
+    const settings = await getLLMSettings();
+    if (settings.provider !== 'anthropic') return res.status(400).json({ error: 'Claude 공급자에서만 배치 요청을 사용할 수 있습니다.' });
+
+    const itemByStudentId = new Map<number, string>(items.map(item => [item.studentId, item.text]));
+    const studentIds = Array.from(itemByStudentId.keys());
+    const students = await queryAll<{ id: number; name: string }>(
+      `SELECT id, name FROM class_students
+       WHERE id IN (${studentIds.map(() => '?').join(',')}) AND class_id=?
+       ORDER BY student_num`,
+      [...studentIds, classId]
+    );
+    const requests: AnthropicBatchRequest[] = [];
+    const requestMeta: Array<{ customId: string; studentId: number; studentName: string }> = [];
+
+    for (const [index, student] of students.entries()) {
+      const text = itemByStudentId.get(student.id);
+      if (!text) continue;
+      const customId = claudeBatchCustomId(student.id, 'spellcheck', index);
+      requests.push({
+        custom_id: customId,
+        params: buildAnthropicMessageParams(
+          spellcheckPrompt(text),
+          settings,
+          [],
+          settings.temperatures.recordsComments,
+          undefined,
+          undefined,
+          'subjectComprehensive'
+        ),
+      });
+      requestMeta.push({ customId, studentId: student.id, studentName: student.name });
+    }
+    if (!requests.length) return res.status(400).json({ error: '교정할 학생을 찾을 수 없습니다.' });
+
+    const batch = await createAnthropicMessageBatch(settings, requests);
+    const batchId = batch.id;
+    await execute(
+      `INSERT INTO ai_batch_jobs(provider_batch_id, class_id, domain, content_type, status, request_count, metadata, updated_at)
+       VALUES(?, ?, ?, 'spellcheck', ?, ?, ?, datetime('now'))`,
+      [
+        batchId,
+        classId,
+        SUBJECT_COMPREHENSIVE_DOMAIN,
+        batch.processing_status || 'in_progress',
+        requests.length,
+        JSON.stringify({ requests: requestMeta }),
+      ]
+    );
+
+    res.json({ ok: true, batchId, status: batch.processing_status || 'in_progress', requestCount: requests.length });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.get('/claude-batch-jobs', async (req: Request, res: Response) => {
   const classId = Number(req.query.classId || 0);
   if (!classId) return res.status(400).json({ error: 'classId가 필요합니다.' });
@@ -1287,7 +1358,7 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
     const settings = await getLLMSettings();
     if (settings.provider !== 'anthropic') return res.status(400).json({ error: 'Claude 공급자에서만 결과 확인을 사용할 수 있습니다.' });
 
-    const updates: Array<{ studentId: number; contentType: 'scoring' | 'comments'; domain: string; content?: string; error?: string; llmResult?: string }> = [];
+    const updates: Array<{ studentId: number; contentType: 'scoring' | 'comments' | 'spellcheck'; domain: string; content?: string; error?: string; llmResult?: string }> = [];
     let inProgress = false;
     let checked = 0;
 
@@ -1323,6 +1394,16 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
         if (line.result.type === 'succeeded') {
           const resultText = extractAnthropicText(line.result.message);
           try {
+            if (job.content_type === 'spellcheck') {
+              const parsed = parseSpellcheckResult(resultText);
+              updates.push({
+                studentId: meta.studentId,
+                contentType: 'spellcheck',
+                domain: SUBJECT_COMPREHENSIVE_DOMAIN,
+                content: JSON.stringify({ taggedText: resultText, ...parsed }),
+              });
+              continue;
+            }
             const evalCriteria = await getDomainEvalCriteria(classContext, job.domain);
             const commentsCriteria = await getDomainCommentsCriteria(classContext, job.domain);
             const envelope = buildEnvelopeContents(resultText, targetsForContentType(job.content_type, job.domain), evalCriteria, commentsCriteria);

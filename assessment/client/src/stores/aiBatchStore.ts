@@ -2,12 +2,13 @@ import { create } from 'zustand';
 import { aiApi } from '../lib/api';
 import { startDisplaySleepPrevention, stopDisplaySleepPrevention } from '../lib/displaySleepPrevention';
 
-export type BatchContentType = 'scoring' | 'comments' | 'combined';
+export type BatchContentType = 'scoring' | 'comments' | 'combined' | 'spellcheck';
+type GenerationBatchContentType = Exclude<BatchContentType, 'spellcheck'>;
 export type BatchStatus = 'running' | 'stopping' | 'completed' | 'error' | 'stopped';
 
 export interface GeneratedContentUpdate {
   studentId: number;
-  contentType: 'scoring' | 'comments';
+  contentType: 'scoring' | 'comments' | 'spellcheck';
   domain: string;
   content?: string;
   error?: string;
@@ -36,8 +37,14 @@ interface StartBatchArgs {
   classId: number;
   classLabel: string;
   domains: string[];
-  contentType: BatchContentType;
+  contentType: GenerationBatchContentType;
   studentIds: number[];
+}
+
+interface StartSpellcheckBatchArgs {
+  classId: number;
+  classLabel: string;
+  items: Array<{ studentId: number; text: string }>;
 }
 
 interface AiBatchState {
@@ -47,6 +54,7 @@ interface AiBatchState {
   startBatch: (args: StartBatchArgs) => Promise<boolean>;
   loadClaudeBatchJobs: (classId: number) => Promise<void>;
   startClaudeBatch: (args: StartBatchArgs) => Promise<boolean>;
+  startClaudeSpellcheckBatch: (args: StartSpellcheckBatchArgs) => Promise<boolean>;
   checkClaudeBatchResults: (jobId: string) => Promise<boolean>;
   stopBatch: () => void;
   clearFinished: () => void;
@@ -366,6 +374,56 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
     }
   },
 
+  startClaudeSpellcheckBatch: async ({ classId, classLabel, items }) => {
+    const domain = '__SUBJECT_COMPREHENSIVE__';
+    const studentIds = items.map((item) => item.studentId);
+    if (!items.length || get().hasLockedCells(classId, studentIds, 'spellcheck', [domain])) return false;
+
+    const pendingJobId = newJobId();
+    const pendingJob: BatchJob = {
+      id: pendingJobId,
+      classId,
+      classLabel,
+      domains: [domain],
+      contentType: 'spellcheck',
+      studentIds,
+      completed: 0,
+      total: items.length,
+      errorCount: 0,
+      message: '[세특] Claude 교정 배치 요청 중...',
+      status: 'running',
+      startedAt: Date.now(),
+      mode: 'claude-batch',
+      providerBatchIds: [],
+      lockedCells: [{ contentType: 'spellcheck', domain, studentIds }],
+    };
+    set((state) => ({ claudeBatchJobs: [...state.claudeBatchJobs, pendingJob] }));
+
+    try {
+      const res = await aiApi.spellcheckClaudeBatch({ classId, items });
+      const batchId = String(res.data.batchId || '');
+      if (!batchId) {
+        set((state) => ({
+          claudeBatchJobs: state.claudeBatchJobs.filter((job) => job.id !== pendingJobId),
+        }));
+        return false;
+      }
+      set((state) => ({
+        claudeBatchJobs: state.claudeBatchJobs.map((job) => job.id === pendingJobId ? {
+          ...pendingJob,
+          message: '[세특] Claude 교정 배치 제출 완료',
+          providerBatchIds: [batchId],
+        } : job),
+      }));
+      return true;
+    } catch {
+      set((state) => ({
+        claudeBatchJobs: state.claudeBatchJobs.filter((job) => job.id !== pendingJobId),
+      }));
+      return false;
+    }
+  },
+
   checkClaudeBatchResults: async (jobId) => {
     const job = get().claudeBatchJobs.find((item) => item.id === jobId);
     if (!job || job.mode !== 'claude-batch' || !job.providerBatchIds?.length) return false;
@@ -404,7 +462,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
           : item
         ),
       }));
-      return false;
+      throw e;
     }
   },
 

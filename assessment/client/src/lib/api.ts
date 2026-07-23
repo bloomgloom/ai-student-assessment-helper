@@ -290,6 +290,10 @@ export const aiApi = {
     contentType: 'scoring' | 'comments' | 'combined';
     studentIds: number[];
   }) => api.post('/ai/generate-claude-batch', data),
+  spellcheckClaudeBatch: (data: {
+    classId: number;
+    items: Array<{ studentId: number; text: string }>;
+  }) => api.post('/ai/spellcheck-claude-batch', data),
   listClaudeBatchJobs: (classId: number) => api.get('/ai/claude-batch-jobs', { params: { classId } }),
   checkClaudeBatchResults: (batchIds: string[]) => api.post('/ai/claude-batch-results', { batchIds }),
 };

@@ -152,6 +152,7 @@ export function useRecordsPage() {
   const startAiBatch = useAiBatchStore(state => state.startBatch);
   const loadClaudeBatchJobs = useAiBatchStore(state => state.loadClaudeBatchJobs);
   const startClaudeBatch = useAiBatchStore(state => state.startClaudeBatch);
+  const startClaudeSpellcheckBatch = useAiBatchStore(state => state.startClaudeSpellcheckBatch);
   const checkClaudeBatchResults = useAiBatchStore(state => state.checkClaudeBatchResults);
   const isAiCellLocked = useAiBatchStore(state => state.isCellLocked);
   const hasLockedAiCells = useAiBatchStore(state => state.hasLockedCells);
@@ -659,9 +660,29 @@ export function useRecordsPage() {
     const pendingUpdates = aiBatchUpdates.slice(appliedUpdateCountRef.current);
     if (!pendingUpdates.length) return;
 
+    const spellcheckUpdates = pendingUpdates.filter(update => update.contentType === 'spellcheck');
+    if (spellcheckUpdates.length) {
+      setSpellcheckResults(prev => {
+        const next = { ...prev };
+        for (const update of spellcheckUpdates) {
+          if (!update.content) continue;
+          try {
+            const parsed = JSON.parse(update.content) as SpellcheckResult;
+            if (parsed.taggedText && parsed.correctedText) next[update.studentId] = parsed;
+          } catch {
+            // 형식이 잘못된 배치 결과는 기존 교정 결과를 유지합니다.
+          }
+        }
+        return next;
+      });
+      const errorCount = spellcheckUpdates.filter(update => update.error).length;
+      if (errorCount) window.setTimeout(() => alert(`교정 배치 결과 ${errorCount}건을 반영하지 못했습니다.`), 0);
+    }
+
     setContents(prev => {
       let next = prev;
       for (const update of pendingUpdates) {
+        if (update.contentType === 'spellcheck') continue;
         if (!students.some(student => student.id === update.studentId)) continue;
         const key = `${update.studentId}_${update.contentType}_${update.domain}`;
         const nextContent = update.content
@@ -741,6 +762,32 @@ export function useRecordsPage() {
       setSpellcheckStopping(false);
       spellcheckAbortRef.current = null;
     }
+  };
+
+  const handleStartClaudeSpellcheckBatch = async () => {
+    if (!selectedClass) return;
+    if (llmProvider !== 'anthropic') {
+      alert('Claude 배치는 LLM 공급자가 Anthropic (Claude)일 때만 사용할 수 있습니다.');
+      return;
+    }
+    const targetStudents = selectedStudents.length > 0 ? selectedStudents : students;
+    const items = targetStudents
+      .map(student => ({
+        studentId: student.id,
+        text: String(contents[`${student.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`]?.text || '').trim(),
+      }))
+      .filter(item => item.text);
+    if (!items.length) {
+      alert('교정할 세특 내용이 없습니다.');
+      return;
+    }
+    if (!confirm(`${items.length}명 대상 교정 Claude 배치 요청을 실행하시겠습니까?`)) return;
+    const submitted = await startClaudeSpellcheckBatch({
+      classId: selectedClass.id,
+      classLabel: `${selectedClass.year}학년도 ${selectedClass.semester}학기 ${selectedClass.grade}학년 ${selectedClass.subject} ${selectedClass.room}`,
+      items,
+    });
+    if (!submitted) alert('교정 Claude 배치 요청을 제출하지 못했습니다.');
   };
 
   const applySpellcheckResult = async (studentId: number) => {
@@ -999,8 +1046,12 @@ export function useRecordsPage() {
       contentType: type,
       studentIds: targetStudents.map(student => student.id),
     };
-    if (useBatch) await startClaudeBatch(args);
-    else await startAiBatch(args);
+    if (useBatch) {
+      const submitted = await startClaudeBatch(args);
+      if (!submitted) alert('배치 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    } else {
+      await startAiBatch(args);
+    }
   };
 
   const handleGenerateSelected = async () => {
@@ -1047,11 +1098,16 @@ export function useRecordsPage() {
 
   const handleCheckClaudeBatchResults = async (jobId: string) => {
     setShowClaudeBatchDialog(false);
-    const done = await checkClaudeBatchResults(jobId);
-    if (!done) alert('Claude 배치가 아직 서버에서 진행 중입니다.');
+    try {
+      const done = await checkClaudeBatchResults(jobId);
+      if (!done) alert('Claude 배치가 아직 서버에서 진행 중입니다.');
+    } catch {
+      alert('배치 결과 확인에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    }
   };
 
-  const batchKindLabel = (type: 'scoring' | 'comments' | 'combined', domains: string[]) => {
+  const batchKindLabel = (type: 'scoring' | 'comments' | 'combined' | 'spellcheck', domains: string[]) => {
+    if (type === 'spellcheck') return '교정';
     if (domains.includes(SUBJECT_COMPREHENSIVE_DOMAIN)) return '세특';
     if (type === 'combined') return '채점/기록';
     return type === 'scoring' ? '채점' : '기록';
@@ -1350,6 +1406,7 @@ export function useRecordsPage() {
     handleOpenClaudeBatchResults,
     batchGenerating,
     handleBatchSpellcheck,
+    handleStartClaudeSpellcheckBatch,
     spellcheckProgress,
     spellcheckingCount: spellcheckingIds.size,
     selectedStudentCount: selectedStudentIds.size,
@@ -1363,6 +1420,7 @@ export function useRecordsPage() {
     handleImportFullRecords,
     handleExportFullRecords,
     aiEnabled,
+    claudeBatchAvailable: llmProvider === 'anthropic',
   });
 
   return {

@@ -26,6 +26,7 @@ interface UseRecordsHeaderOptions {
   handleOpenClaudeBatchResults: () => void;
   batchGenerating: boolean;
   handleBatchSpellcheck: () => void;
+  handleStartClaudeSpellcheckBatch: () => void;
   spellcheckProgress: { completed: number; total: number } | null;
   spellcheckingCount: number;
   selectedStudentCount: number;
@@ -39,6 +40,7 @@ interface UseRecordsHeaderOptions {
   handleImportFullRecords: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleExportFullRecords: () => void;
   aiEnabled: boolean;
+  claudeBatchAvailable: boolean;
 }
 
 export function useRecordsHeader({
@@ -64,6 +66,7 @@ export function useRecordsHeader({
   handleOpenClaudeBatchResults,
   batchGenerating,
   handleBatchSpellcheck,
+  handleStartClaudeSpellcheckBatch,
   spellcheckProgress,
   spellcheckingCount,
   selectedStudentCount,
@@ -77,11 +80,13 @@ export function useRecordsHeader({
   handleImportFullRecords,
   handleExportFullRecords,
   aiEnabled,
+  claudeBatchAvailable,
 }: UseRecordsHeaderOptions) {
   const showDomainControls = showScoring || showComments;
   const invalidComprehensiveMix = showComprehensive && (showScoring || showComments);
   const showGenerationActions = (showScoring || showComments || showComprehensive) && !invalidComprehensiveMix;
   const showSpellcheckAction = showComprehensive && !showScoring && !showComments;
+  const generationLabel = showScoring ? '채점' : '작성';
   const toggleButtonClassName = (active: boolean, enabled = true) =>
     `px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!enabled ? 'opacity-40 cursor-not-allowed text-gray-400' :
       active ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
@@ -156,6 +161,61 @@ export function useRecordsHeader({
     ariaLabel: '작업 내용 업로드',
   };
 
+  const renderExecutionMenu = ({
+    label,
+    onImmediate,
+    onBatch,
+    disabled,
+    immediateTitle,
+    batchTitle,
+  }: {
+    label: string;
+    onImmediate: () => void;
+    onBatch: () => void;
+    disabled: boolean;
+    immediateTitle: string;
+    batchTitle: string;
+  }) => (
+    <div className="group relative h-9">
+      <button
+        type="button"
+        className="btn-rainbow h-9 px-4 text-sm"
+        disabled={disabled}
+        aria-haspopup="menu"
+        title={`${label} 방식 선택`}
+      >
+        {label}
+      </button>
+      <div
+        className="invisible absolute right-0 top-[calc(100%-1px)] z-50 min-w-full pt-1 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+        role="menu"
+      >
+        <div className="flex flex-col overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg">
+          <button
+            type="button"
+            className="whitespace-nowrap px-4 py-2 text-left text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
+            onClick={onImmediate}
+            disabled={disabled}
+            title={immediateTitle}
+            role="menuitem"
+          >
+            즉시
+          </button>
+          <button
+            type="button"
+            className="whitespace-nowrap px-4 py-2 text-left text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
+            onClick={onBatch}
+            disabled={disabled || !claudeBatchAvailable}
+            title={claudeBatchAvailable ? batchTitle : 'Claude 공급자에서만 사용할 수 있습니다.'}
+            role="menuitem"
+          >
+            배치
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   const actions: PageHeaderAction[] = [
     ...(!selectedClass ? [restoreAction] : [
     ...(showDomainControls && domainFilter !== 'all' ? [{
@@ -171,46 +231,34 @@ export function useRecordsHeader({
       disabled: uploadingZip,
     }] : []),
     ...(showGenerationActions ? [{
-      key: 'generate-selected',
-      variant: 'rainbow' as const,
-      label: '생성',
-      onClick: handleGenerateSelected,
-      disabled: batchGenerating || !aiEnabled,
-      title: '선택된 채점/기록/세특 실시간 생성',
-    }, {
-      key: 'claude-batch-actions',
+      key: 'generation-actions',
       type: 'custom' as const,
-      render: () => (
-        <div className="inline-flex h-9 items-stretch">
-          <button
-            type="button"
-            className={`btn-rainbow px-4 text-sm ${claudeBatchJobCount > 0 ? 'rounded-r-none' : ''}`}
-            onClick={handleStartClaudeBatch}
-            disabled={batchGenerating || !aiEnabled}
-            title="선택된 채점/기록/세특 Claude 배치 요청"
-          >
-            배치
-          </button>
-          {claudeBatchJobCount > 0 && (
-            <button
-              type="button"
-              className="btn-secondary -ml-px rounded-l-none px-3 text-sm"
-              onClick={handleOpenClaudeBatchResults}
-              title="Claude 배치 결과 확인"
-            >
-              결과 {claudeBatchJobCount}
-            </button>
-          )}
-        </div>
-      ),
+      render: () => renderExecutionMenu({
+        label: generationLabel,
+        onImmediate: handleGenerateSelected,
+        onBatch: handleStartClaudeBatch,
+        disabled: batchGenerating || !aiEnabled,
+        immediateTitle: `선택된 항목 ${generationLabel} 즉시 처리`,
+        batchTitle: `선택된 항목 ${generationLabel} Claude 배치 처리`,
+      }),
     }] : []),
     ...(showSpellcheckAction ? [{
-      key: 'spellcheck',
-      variant: 'rainbow' as const,
-      label: '교정',
-      onClick: handleBatchSpellcheck,
-      disabled: !!spellcheckProgress || spellcheckingCount > 0 || !aiEnabled,
-      title: selectedStudentCount > 0 ? '선택한 행 맞춤법 검사' : '전체 행 맞춤법 검사',
+      key: 'spellcheck-actions',
+      type: 'custom' as const,
+      render: () => renderExecutionMenu({
+        label: '교정',
+        onImmediate: handleBatchSpellcheck,
+        onBatch: handleStartClaudeSpellcheckBatch,
+        disabled: !!spellcheckProgress || spellcheckingCount > 0 || !aiEnabled,
+        immediateTitle: selectedStudentCount > 0 ? '선택한 행 즉시 교정' : '전체 행 즉시 교정',
+        batchTitle: selectedStudentCount > 0 ? '선택한 행 Claude 배치 교정' : '전체 행 Claude 배치 교정',
+      }),
+    }] : []),
+    ...(claudeBatchJobCount > 0 ? [{
+      key: 'claude-batch-results',
+      label: `결과 ${claudeBatchJobCount}`,
+      onClick: handleOpenClaudeBatchResults,
+      title: 'Claude 배치 결과 확인',
     }] : []),
     ...((showScoring && !showComments && !showComprehensive) || (!showScoring && !showComments && showComprehensive) ? [{
       key: 'export-current',

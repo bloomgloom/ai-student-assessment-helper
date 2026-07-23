@@ -245,7 +245,7 @@ export async function initDb(): Promise<void> {
       provider_batch_id   TEXT    NOT NULL UNIQUE,
       class_id            INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
       domain              TEXT    NOT NULL,
-      content_type        TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'combined')),
+      content_type        TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'combined', 'spellcheck')),
       status              TEXT    NOT NULL DEFAULT 'in_progress',
       request_count       INTEGER NOT NULL DEFAULT 0,
       metadata            TEXT    NOT NULL DEFAULT '{}',
@@ -261,7 +261,7 @@ export async function initDb(): Promise<void> {
   await ensureColumn('subject_domains', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('achievement_standards', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('class_students', 'personal_num', "TEXT NOT NULL DEFAULT ''");
-  await migrateAiBatchJobsCombinedContentType();
+  await migrateAiBatchJobsContentTypes();
 
   // domain_eval.excel_col → score 마이그레이션
   await ensureRenameColumn('domain_eval', 'excel_col', 'score');
@@ -358,11 +358,11 @@ async function ensureRenameColumn(table: string, oldName: string, newName: strin
   }
 }
 
-async function migrateAiBatchJobsCombinedContentType(): Promise<void> {
+async function migrateAiBatchJobsContentTypes(): Promise<void> {
   const row = await queryOne<{ sql: string }>(
     "SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_batch_jobs'"
   );
-  if (!row?.sql || row.sql.includes("'combined'")) return;
+  if (!row?.sql || (row.sql.includes("'combined'") && row.sql.includes("'spellcheck'"))) return;
   const db = getClient();
   await db.execute('ALTER TABLE ai_batch_jobs RENAME TO ai_batch_jobs_old');
   await db.execute(`
@@ -371,7 +371,7 @@ async function migrateAiBatchJobsCombinedContentType(): Promise<void> {
       provider_batch_id   TEXT    NOT NULL UNIQUE,
       class_id            INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
       domain              TEXT    NOT NULL,
-      content_type        TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'combined')),
+      content_type        TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'combined', 'spellcheck')),
       status              TEXT    NOT NULL DEFAULT 'in_progress',
       request_count       INTEGER NOT NULL DEFAULT 0,
       metadata            TEXT    NOT NULL DEFAULT '{}',
