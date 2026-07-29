@@ -210,7 +210,7 @@ export async function initDb(): Promise<void> {
     CREATE TABLE IF NOT EXISTS generated_content (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id   INTEGER NOT NULL REFERENCES class_students(id) ON DELETE CASCADE,
-      content_type TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments')),
+      content_type TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'spellcheck')),
       domain       TEXT    NOT NULL DEFAULT '',
       content      TEXT    NOT NULL DEFAULT '',
       updated_at   TEXT    DEFAULT (datetime('now')),
@@ -261,6 +261,7 @@ export async function initDb(): Promise<void> {
   await ensureColumn('subject_domains', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('achievement_standards', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('class_students', 'personal_num', "TEXT NOT NULL DEFAULT ''");
+  await migrateGeneratedContentTypes();
   await migrateAiBatchJobsContentTypes();
 
   // domain_eval.excel_col → score 마이그레이션
@@ -385,6 +386,32 @@ async function migrateAiBatchJobsContentTypes(): Promise<void> {
     FROM ai_batch_jobs_old
   `);
   await db.execute('DROP TABLE ai_batch_jobs_old');
+}
+
+async function migrateGeneratedContentTypes(): Promise<void> {
+  const row = await queryOne<{ sql: string }>(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='generated_content'"
+  );
+  if (!row?.sql || row.sql.includes("'spellcheck'")) return;
+  const db = getClient();
+  await db.execute('ALTER TABLE generated_content RENAME TO generated_content_old');
+  await db.execute(`
+    CREATE TABLE generated_content (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id   INTEGER NOT NULL REFERENCES class_students(id) ON DELETE CASCADE,
+      content_type TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'spellcheck')),
+      domain       TEXT    NOT NULL DEFAULT '',
+      content      TEXT    NOT NULL DEFAULT '',
+      updated_at   TEXT    DEFAULT (datetime('now')),
+      UNIQUE(student_id, content_type, domain)
+    )
+  `);
+  await db.execute(`
+    INSERT INTO generated_content(id, student_id, content_type, domain, content, updated_at)
+    SELECT id, student_id, content_type, domain, content, updated_at
+    FROM generated_content_old
+  `);
+  await db.execute('DROP TABLE generated_content_old');
 }
 
 // 편의 함수: SELECT one

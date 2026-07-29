@@ -1,4 +1,4 @@
-import { RefObject } from 'react';
+import { RefObject, useState } from 'react';
 import { Download, Save, Trash2, Upload } from 'lucide-react';
 import { PageHeaderAction } from '../../components/common/PageHeaderActions';
 import { ClassItem } from './types';
@@ -82,6 +82,7 @@ export function useRecordsHeader({
   aiEnabled,
   claudeBatchAvailable,
 }: UseRecordsHeaderOptions) {
+  const [closedExecutionMenu, setClosedExecutionMenu] = useState<string | null>(null);
   const showDomainControls = showScoring || showComments;
   const invalidComprehensiveMix = showComprehensive && (showScoring || showComments);
   const showGenerationActions = (showScoring || showComments || showComprehensive) && !invalidComprehensiveMix;
@@ -162,6 +163,7 @@ export function useRecordsHeader({
   };
 
   const renderExecutionMenu = ({
+    menuKey,
     label,
     onImmediate,
     onBatch,
@@ -169,32 +171,49 @@ export function useRecordsHeader({
     immediateTitle,
     batchTitle,
   }: {
+    menuKey: string;
     label: string;
     onImmediate: () => void;
     onBatch: () => void;
     disabled: boolean;
     immediateTitle: string;
     batchTitle: string;
-  }) => (
-    <div className="group relative h-9">
+  }) => {
+    const menuClosed = closedExecutionMenu === menuKey;
+    const runAction = (event: React.MouseEvent<HTMLButtonElement>, action: () => void) => {
+      event.currentTarget.blur();
+      setClosedExecutionMenu(menuKey);
+      window.setTimeout(action, 0);
+    };
+
+    return (
+    <div
+      className="group relative h-9"
+      onMouseLeave={() => setClosedExecutionMenu(current => current === menuKey ? null : current)}
+    >
       <button
         type="button"
         className="btn-rainbow h-9 px-4 text-sm"
         disabled={disabled}
         aria-haspopup="menu"
         title={`${label} 방식 선택`}
+        onFocus={() => setClosedExecutionMenu(current => current === menuKey ? null : current)}
       >
         {label}
       </button>
       <div
-        className="invisible absolute right-0 top-[calc(100%-1px)] z-50 min-w-full pt-1 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+        className={`absolute right-0 top-[calc(100%-1px)] z-50 min-w-full pt-1 transition-opacity ${
+          menuClosed
+            ? 'invisible opacity-0'
+            : 'invisible opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100'
+        }`}
         role="menu"
       >
         <div className="flex flex-col overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg">
           <button
             type="button"
-            className="whitespace-nowrap px-4 py-2 text-left text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
-            onClick={onImmediate}
+            className="whitespace-nowrap px-4 py-2 text-center text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
+            onClick={event => runAction(event, onImmediate)}
             disabled={disabled}
             title={immediateTitle}
             role="menuitem"
@@ -203,8 +222,8 @@ export function useRecordsHeader({
           </button>
           <button
             type="button"
-            className="whitespace-nowrap px-4 py-2 text-left text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
-            onClick={onBatch}
+            className="whitespace-nowrap px-4 py-2 text-center text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
+            onClick={event => runAction(event, onBatch)}
             disabled={disabled || !claudeBatchAvailable}
             title={claudeBatchAvailable ? batchTitle : 'Claude 공급자에서만 사용할 수 있습니다.'}
             role="menuitem"
@@ -214,7 +233,8 @@ export function useRecordsHeader({
         </div>
       </div>
     </div>
-  );
+    );
+  };
 
   const actions: PageHeaderAction[] = [
     ...(!selectedClass ? [restoreAction] : [
@@ -234,6 +254,7 @@ export function useRecordsHeader({
       key: 'generation-actions',
       type: 'custom' as const,
       render: () => renderExecutionMenu({
+        menuKey: 'generation',
         label: generationLabel,
         onImmediate: handleGenerateSelected,
         onBatch: handleStartClaudeBatch,
@@ -246,6 +267,7 @@ export function useRecordsHeader({
       key: 'spellcheck-actions',
       type: 'custom' as const,
       render: () => renderExecutionMenu({
+        menuKey: 'spellcheck',
         label: '교정',
         onImmediate: handleBatchSpellcheck,
         onBatch: handleStartClaudeSpellcheckBatch,

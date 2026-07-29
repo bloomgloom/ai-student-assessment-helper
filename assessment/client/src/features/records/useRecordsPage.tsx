@@ -11,6 +11,8 @@ import { useAiEnabled } from '../../hooks/useAiEnabled';
 import { useRecordsTree } from './useRecordsTree';
 import { useRecordsUpload } from './useRecordsUpload';
 import { saveBlob } from '../../lib/desktopFiles';
+import { diffChars, type Change } from 'diff';
+import { StableTextarea } from '../../components/common/StableTextarea';
 
 const ArtifactViewer = lazy(() => import('../../components/ArtifactViewer'));
 
@@ -71,6 +73,13 @@ function formatScore(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
 }
 
+function buildSpellcheckDiff(originalText: string, correctedText: string): Change[] {
+  return diffChars(
+    originalText.replace(/\r\n?/g, '\n').normalize('NFC'),
+    correctedText.replace(/\r\n?/g, '\n').normalize('NFC')
+  ).filter(part => !part.removed);
+}
+
 interface RecordsViewPrefs {
   showScoring?: boolean;
   showComments?: boolean;
@@ -125,7 +134,8 @@ export function useRecordsPage() {
   const [uploadingFullRecords, setUploadingFullRecords] = useState(false);
   const [artifactRefreshKey, setArtifactRefreshKey] = useState(0);
   const [spellcheckingIds, setSpellcheckingIds] = useState<Set<number>>(new Set());
-  const [spellcheckResults, setSpellcheckResults] = useState<Record<number, SpellcheckResult>>({});
+  const [spellcheckDiffs, setSpellcheckDiffs] = useState<Record<number, Change[]>>({});
+  const [focusedSpellcheckId, setFocusedSpellcheckId] = useState<number | null>(null);
   const [spellcheckProgress, setSpellcheckProgress] = useState<{ completed: number; total: number } | null>(null);
   const [spellcheckStopping, setSpellcheckStopping] = useState(false);
   const [showScoring, setShowScoring] = useState(true);
@@ -144,6 +154,7 @@ export function useRecordsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fullRecordsInputRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
+  const spellcheckHighlightRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
   const [rowTextareaHeights, setRowTextareaHeights] = useState<Record<number, number>>({});
   const aiBatchJob = useAiBatchStore(state => state.currentJob);
@@ -198,6 +209,7 @@ export function useRecordsPage() {
   useEffect(() => {
     if (!isDirty) return;
     const handler = (e: BeforeUnloadEvent) => {
+      if ((window as any).__allowNextUnload === true) return;
       e.preventDefault();
       e.returnValue = '';
     };
@@ -332,26 +344,15 @@ export function useRecordsPage() {
 
   const countTextBytes = (text: string) => new TextEncoder().encode(text).length;
 
-  const renderTaggedSpellcheck = (taggedText: string) => {
-    const nodes: React.ReactNode[] = [];
-    const regex = /\[CHANGE\]([\s\S]*?)\[\/CHANGE\]/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = regex.exec(taggedText)) !== null) {
-      if (match.index > lastIndex) {
-        nodes.push(taggedText.slice(lastIndex, match.index));
-      }
-      nodes.push(
-        <span key={`${match.index}-${nodes.length}`} className="text-red-600 font-medium">
-          {match[1]}
-        </span>
-      );
-      lastIndex = regex.lastIndex;
-    }
-
-    if (lastIndex < taggedText.length) nodes.push(taggedText.slice(lastIndex));
-    return nodes;
+  const refreshSpellcheckDiff = (studentId: number, originalText?: string, correctedText?: string) => {
+    const source = originalText
+      ?? String(contents[`${studentId}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`]?.text || '');
+    const result = correctedText
+      ?? String(contents[`${studentId}_spellcheck_${SUBJECT_COMPREHENSIVE_DOMAIN}`]?.text || '');
+    setSpellcheckDiffs(prev => ({
+      ...prev,
+      [studentId]: buildSpellcheckDiff(source, result),
+    }));
   };
 
   const loadDomainData = useCallback(async (c: ClassItem) => {
@@ -408,6 +409,8 @@ export function useRecordsPage() {
     setSavedWrittenScores(writtenScoreMap);
     setContents(map);
     setSavedContents(map);
+    setSpellcheckDiffs({});
+    setFocusedSpellcheckId(null);
     return { evalItemsMap: eMap, commentsItemsMap: siMap, writtenExams: writtenData.exams || [] };
   }, [subjects]);
 
@@ -554,7 +557,7 @@ export function useRecordsPage() {
     }
   }, [selectedClass, loadDomainData]);
 
-  const updateContent = (studentId: number, type: 'scoring' | 'comments', field: string, value: string, explicitDomain?: string) => {
+  const updateContent = (studentId: number, type: 'scoring' | 'comments' | 'spellcheck', field: string, value: string, explicitDomain?: string) => {
     setContents(prev => {
       const targetDomain = explicitDomain || selectedDomain;
       const key = `${studentId}_${type}_${targetDomain}`;
@@ -662,15 +665,17 @@ export function useRecordsPage() {
 
     const spellcheckUpdates = pendingUpdates.filter(update => update.contentType === 'spellcheck');
     if (spellcheckUpdates.length) {
-      setSpellcheckResults(prev => {
+      setSpellcheckDiffs(prev => {
         const next = { ...prev };
         for (const update of spellcheckUpdates) {
           if (!update.content) continue;
           try {
             const parsed = JSON.parse(update.content) as SpellcheckResult;
-            if (parsed.taggedText && parsed.correctedText) next[update.studentId] = parsed;
+            if (!parsed.correctedText) continue;
+            const originalText = String(contents[`${update.studentId}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`]?.text || '');
+            next[update.studentId] = buildSpellcheckDiff(originalText, parsed.correctedText);
           } catch {
-            // 형식이 잘못된 배치 결과는 기존 교정 결과를 유지합니다.
+            // 형식이 잘못된 배치 결과는 기존 diff를 유지합니다.
           }
         }
         return next;
@@ -682,8 +687,23 @@ export function useRecordsPage() {
     setContents(prev => {
       let next = prev;
       for (const update of pendingUpdates) {
-        if (update.contentType === 'spellcheck') continue;
         if (!students.some(student => student.id === update.studentId)) continue;
+        if (update.contentType === 'spellcheck') {
+          if (!update.content) continue;
+          try {
+            const parsed = JSON.parse(update.content) as SpellcheckResult;
+            if (!parsed.correctedText) continue;
+            next = {
+              ...next,
+              [`${update.studentId}_spellcheck_${SUBJECT_COMPREHENSIVE_DOMAIN}`]: {
+                text: parsed.correctedText,
+              },
+            };
+          } catch {
+            // 형식이 잘못된 배치 결과는 기존 교정 내용을 유지합니다.
+          }
+          continue;
+        }
         const key = `${update.studentId}_${update.contentType}_${update.domain}`;
         const nextContent = update.content
           ? parseContent(update.content)
@@ -719,13 +739,16 @@ export function useRecordsPage() {
 
     try {
       const res = await aiApi.spellcheck({ text }, signal);
-      setSpellcheckResults(prev => ({
+      const correctedText = String(res.data.correctedText || text);
+      setContents(prev => ({
         ...prev,
-        [studentId]: {
-          taggedText: res.data.taggedText || res.data.correctedText || text,
-          correctedText: res.data.correctedText || text,
-          correctionCount: Number(res.data.correctionCount || 0),
+        [`${studentId}_spellcheck_${SUBJECT_COMPREHENSIVE_DOMAIN}`]: {
+          text: correctedText,
         },
+      }));
+      setSpellcheckDiffs(prev => ({
+        ...prev,
+        [studentId]: buildSpellcheckDiff(text, correctedText),
       }));
     } catch (err: any) {
       if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return;
@@ -791,16 +814,26 @@ export function useRecordsPage() {
   };
 
   const applySpellcheckResult = async (studentId: number) => {
-    const result = spellcheckResults[studentId];
-    if (!result) return;
+    const correctedText = String(
+      contents[`${studentId}_spellcheck_${SUBJECT_COMPREHENSIVE_DOMAIN}`]?.text || ''
+    );
+    if (!correctedText) return;
 
     const key = `${studentId}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`;
-    const nextContent = { text: result.correctedText };
+    const nextContent = { text: correctedText };
     setContents(prev => ({ ...prev, [key]: nextContent }));
+    setSpellcheckDiffs(prev => ({
+      ...prev,
+      [studentId]: buildSpellcheckDiff(correctedText, correctedText),
+    }));
   };
 
   const handleSaveAll = async () => {
     if (!selectedClass) return;
+    if (!isDirty) {
+      alert('변경 내용이 없습니다.');
+      return;
+    }
     setSaving(true);
     try {
       const promises = [];
@@ -833,6 +866,17 @@ export function useRecordsPage() {
               content_type: 'comments',
               domain: SUBJECT_COMPREHENSIVE_DOMAIN,
               content: JSON.stringify(contents[compKey])
+            })
+          );
+        }
+        const spellcheckKey = `${s.id}_spellcheck_${SUBJECT_COMPREHENSIVE_DOMAIN}`;
+        if (showComprehensive && contents[spellcheckKey]) {
+          savedKeys.push(spellcheckKey);
+          promises.push(
+            recordsApi.saveStudentContent(s.id, {
+              content_type: 'spellcheck',
+              domain: SUBJECT_COMPREHENSIVE_DOMAIN,
+              content: JSON.stringify(contents[spellcheckKey])
             })
           );
         }
@@ -943,7 +987,7 @@ export function useRecordsPage() {
           classId: selectedClass.id,
           studentIds,
           domain: SUBJECT_COMPREHENSIVE_DOMAIN,
-          contentTypes: ['comments'],
+          contentTypes: ['comments', 'spellcheck'],
         }));
       }
       await Promise.all(requests);
@@ -1550,11 +1594,11 @@ export function useRecordsPage() {
                     <table className="w-full border-collapse text-sm">
                       <thead>
                         <tr className="border-b bg-gray-50 text-xs font-semibold text-gray-600">
-                          <th className="px-3 py-2 text-left">종류</th>
-                          <th className="px-3 py-2 text-left">영역</th>
-                          <th className="px-3 py-2 text-right">인원 수</th>
-                          <th className="px-3 py-2 text-left">요청 시각</th>
-                          <th className="px-3 py-2 text-right">결과</th>
+                          <th className="px-3 py-2 text-center">종류</th>
+                          <th className="px-3 py-2 text-center">영역</th>
+                          <th className="px-3 py-2 text-center">인원 수</th>
+                          <th className="px-3 py-2 text-center">요청 시각</th>
+                          <th className="px-3 py-2 text-center">결과</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1562,11 +1606,11 @@ export function useRecordsPage() {
                           const requestPending = !job.providerBatchIds?.length;
                           return (
                             <tr key={job.id} className="border-b last:border-b-0">
-                              <td className="px-3 py-2 text-gray-800">{batchKindLabel(job.contentType, job.domains)}</td>
-                              <td className="px-3 py-2 text-gray-600">{batchDomainLabel(job.domains)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-gray-600">{job.studentIds.length || job.total}</td>
-                              <td className="px-3 py-2 text-gray-600">{batchStartedAtLabel(job.startedAt)}</td>
-                              <td className="px-3 py-2 text-right">
+                              <td className="px-3 py-2 text-center text-gray-800">{batchKindLabel(job.contentType, job.domains)}</td>
+                              <td className="px-3 py-2 text-center text-gray-600">{batchDomainLabel(job.domains)}</td>
+                              <td className="px-3 py-2 text-center tabular-nums text-gray-600">{job.studentIds.length || job.total}</td>
+                              <td className="px-3 py-2 text-center text-gray-600">{batchStartedAtLabel(job.startedAt)}</td>
+                              <td className="px-3 py-2 text-center">
                                 <button
                                   type="button"
                                   className="btn-secondary h-8 px-3 text-xs"
@@ -1724,7 +1768,14 @@ export function useRecordsPage() {
                     const compCommentsBytes = countTextBytes(compCommentsText);
                     const isCompCommentsOver = compCommentsBytes > 1500;
                     const isSpellchecking = spellcheckingIds.has(s.id);
-                    const spellcheckResult = spellcheckResults[s.id];
+                    const spellcheckKey = `${s.id}_spellcheck_${SUBJECT_COMPREHENSIVE_DOMAIN}`;
+                    const spellcheckText = String(contents[spellcheckKey]?.text || '');
+                    const spellcheckLocked = isSpellchecking || (selectedClass
+                      ? isAiCellLocked(selectedClass.id, s.id, 'spellcheck', SUBJECT_COMPREHENSIVE_DOMAIN)
+                      : false);
+                    const spellcheckDiff = spellcheckDiffs[s.id]
+                      || buildSpellcheckDiff(compCommentsText, spellcheckText);
+                    const showSpellcheckHighlight = focusedSpellcheckId !== s.id && !!spellcheckText;
                     const classNum = Math.floor((s.student_num % 10000) / 100);
                     const stuNum = s.student_num % 100;
                     const rowTextareaHeight = rowTextareaHeights[s.id];
@@ -1860,7 +1911,7 @@ export function useRecordsPage() {
                                 <td key={`${d.name}_comments`} className="group relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
                                   {renderLlmErrorTooltip(domainLlmError)}
-                                  <textarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
+                                  <StableTextarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                     value={commentsData.text || ''}
                                     onChange={ev => updateContent(s.id, 'comments', 'text', ev.target.value, d.name)}
                                     disabled={locked}
@@ -1885,7 +1936,7 @@ export function useRecordsPage() {
                                 <td key={`${d.name}_${c.id}`} className="group relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
                                   {renderLlmErrorTooltip(domainLlmError)}
-                                  <textarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
+                                  <StableTextarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                     value={itemValue}
                                     onChange={ev => updateContent(s.id, 'comments', c.itemTitle!, ev.target.value, d.name)}
                                     disabled={locked}
@@ -1926,12 +1977,13 @@ export function useRecordsPage() {
                             <td className="group relative align-top p-1 border-r"
                               style={{ width: compWidth, minWidth: compWidth }}>
                               {renderLlmErrorTooltip(compLlmError)}
-                              <textarea className={`textarea w-full text-sm bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(isContentFieldDirty(`${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`, 'text'))}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
+                              <StableTextarea className={`textarea w-full text-sm bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(isContentFieldDirty(`${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`, 'text'))}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
                                 value={compCommentsText}
                                 onChange={ev => updateContent(s.id, 'comments', 'text', ev.target.value, SUBJECT_COMPREHENSIVE_DOMAIN)}
                                 disabled={selectedClass ? isAiCellLocked(selectedClass.id, s.id, 'comments', SUBJECT_COMPREHENSIVE_DOMAIN) : false}
                                 data-row={rowIdx} data-col={tableLayout.compCommentsColIdx}
                                 onKeyDown={e => handleKeyNav(e, rowIdx, tableLayout.compCommentsColIdx)}
+                                onBlur={() => refreshSpellcheckDiff(s.id, compCommentsText, spellcheckText)}
                                 title={selectedClass && isAiCellLocked(selectedClass.id, s.id, 'comments', SUBJECT_COMPREHENSIVE_DOMAIN) ? 'AI 세특 생성 진행 중이라 수정할 수 없습니다.' : undefined}
                               />
                               {renderCellResizeHandles(s.id, '_comp', 320)}
@@ -1939,41 +1991,75 @@ export function useRecordsPage() {
                             <td className="group relative align-top p-1 border-r text-center"
                               style={{ width: compCountWidth, minWidth: compCountWidth }}>
                               {renderLlmErrorTooltip(compLlmError)}
-                              <div className={`whitespace-pre-line text-xs font-semibold ${isCompCommentsOver ? 'text-red-600' : 'text-gray-600'}`}>
-                                {isCompCommentsOver ? '초과' : '적정'}
-                                {'\n'}({compCommentsBytes} byte)
+                              <div className={`text-xs font-semibold ${isCompCommentsOver ? 'text-red-600' : 'text-gray-600'}`}>
+                                <div>{isCompCommentsOver ? '초과' : '적정'}</div>
+                                <div>{compCommentsBytes}</div>
                               </div>
                               <button
                                 type="button"
                                 className="mt-2 inline-flex h-6 w-6 items-center justify-center rounded border border-blue-200 bg-white text-sm font-bold text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
                                 onClick={() => applySpellcheckResult(s.id)}
-                                disabled={!spellcheckResult || !aiEnabled}
+                                disabled={!spellcheckText.trim()}
                                 title="맞춤법 검사 결과를 종합세특에 반영"
                               >
                                 &lt;
                               </button>
                               {renderCellResizeHandles(s.id, '_comp_count', 74)}
                             </td>
-                            <td className="group relative align-top p-2"
+                            <td className="group relative align-top p-1"
                               style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
                               {renderLlmErrorTooltip(compLlmError)}
-                              {isSpellchecking ? (
-                                <div className="flex items-center gap-1.5 text-xs text-green-700">
-                                  <Loader2 size={12} className="animate-spin" />
-                                  검사 중...
-                                </div>
-                              ) : spellcheckResult ? (
-                                <div className="space-y-1">
-                                  <div className="text-[11px] font-medium text-gray-500">
-                                    수정 {spellcheckResult.correctionCount}건
+                              <div className={`relative rounded-md ${spellcheckLocked ? 'bg-blue-50' : 'bg-blue-50/20'}`}>
+                                {showSpellcheckHighlight && (
+                                  <div
+                                    ref={element => {
+                                      spellcheckHighlightRefs.current[s.id] = element;
+                                    }}
+                                    aria-hidden="true"
+                                    className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words rounded-md border border-transparent px-3 py-2 text-sm leading-normal"
+                                    style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
+                                  >
+                                    {spellcheckDiff.map((part, index) => (
+                                      <span
+                                        key={`${index}-${part.value.length}`}
+                                        className={part.added ? 'font-medium text-red-600' : 'text-gray-800'}
+                                      >
+                                        {part.value}
+                                      </span>
+                                    ))}
                                   </div>
-                                  <div className="whitespace-pre-wrap rounded border border-gray-200 bg-white p-2 text-sm leading-relaxed text-gray-800">
-                                    {renderTaggedSpellcheck(spellcheckResult.taggedText)}
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="text-xs text-gray-400">검사 전</div>
-                              )}
+                                )}
+                                <StableTextarea
+                                  className={`textarea relative z-[1] w-full border-blue-100 bg-transparent text-sm leading-normal disabled:cursor-not-allowed ${dirtyControlClass(isContentFieldDirty(spellcheckKey, 'text'))} ${
+                                    showSpellcheckHighlight ? 'text-transparent caret-gray-900' : 'text-gray-800'
+                                  }`}
+                                  style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
+                                  value={spellcheckText}
+                                  onChange={event => updateContent(
+                                    s.id,
+                                    'spellcheck',
+                                    'text',
+                                    event.target.value,
+                                    SUBJECT_COMPREHENSIVE_DOMAIN
+                                  )}
+                                  onFocus={() => setFocusedSpellcheckId(s.id)}
+                                  onBlur={() => {
+                                    refreshSpellcheckDiff(s.id, compCommentsText, spellcheckText);
+                                    setFocusedSpellcheckId(current => current === s.id ? null : current);
+                                  }}
+                                  onScroll={event => {
+                                    const highlight = spellcheckHighlightRefs.current[s.id];
+                                    if (!highlight) return;
+                                    highlight.scrollTop = event.currentTarget.scrollTop;
+                                    highlight.scrollLeft = event.currentTarget.scrollLeft;
+                                  }}
+                                  disabled={spellcheckLocked}
+                                  data-row={rowIdx}
+                                  data-col={tableLayout.compCommentsColIdx + 1}
+                                  onKeyDown={event => handleKeyNav(event, rowIdx, tableLayout.compCommentsColIdx + 1)}
+                                  title={spellcheckLocked ? 'AI 맞춤법 검사 진행 중이라 수정할 수 없습니다.' : undefined}
+                                />
+                              </div>
                               {renderCellResizeHandles(s.id, '_comp_spell', 320)}
                             </td>
                           </>

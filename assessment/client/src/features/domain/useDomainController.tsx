@@ -23,6 +23,7 @@ import {
 } from './constants';
 import { useDomainDomainsUpload } from './useDomainDomainsUpload';
 import { useDomainTree } from './useDomainTree';
+import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
 
 function domainSelectionPayload(sub: SubjectItem, domain: string | null) {
   return {
@@ -48,10 +49,6 @@ function createDefaultCommentsItem(sortOrder = 0): CommentsItem {
 
 function createDefaultCommentsCommonItem(): CommentsItem {
   return { type: '공통', title: '공통', prompt: '', extensions: '', sort_order: -1 };
-}
-
-function parseAiJson<T>(value: string): T {
-  return parseFirstJson<T>(value, 'array');
 }
 
 type DomainAiChatKind = 'standards' | 'scoring' | 'records';
@@ -141,12 +138,22 @@ export function useDomainController() {
   const [assignmentLoading, setAssignmentLoading] = useState(false);
   const [assignmentUploading, setAssignmentUploading] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  const setHasUnsavedChanges = useRecordsUnsavedStore(state => state.setHasUnsavedChanges);
   const runAiAction = useAiAction();
   const domainRestoredRef = useRef(false);
 
   useEffect(() => {
+    setHasUnsavedChanges(isDirty);
+    return () => setHasUnsavedChanges(false);
+  }, [isDirty, setHasUnsavedChanges]);
+
+  useEffect(() => {
     if (!isDirty) return;
-    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    const handler = (e: BeforeUnloadEvent) => {
+      if ((window as any).__allowNextUnload === true) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [isDirty]);
@@ -559,19 +566,27 @@ export function useDomainController() {
 
   const handleDownloadConfig = async () => {
     if (!selectedSubject) return;
-    const domainName = selectedDomain || SUBJECT_COMPREHENSIVE_DOMAIN;
     try {
-      const r = await criteriaApi.exportDomainConfig(
-        selectedSubject.year,
-        selectedSubject.semester,
-        selectedSubject.grade,
-        selectedSubject.subject,
-        domainName
-      );
+      const r = selectedDomain
+        ? await criteriaApi.exportDomainConfig(
+          selectedSubject.year,
+          selectedSubject.semester,
+          selectedSubject.grade,
+          selectedSubject.subject,
+          selectedDomain
+        )
+        : await criteriaApi.exportSubjectConfig(
+          selectedSubject.year,
+          selectedSubject.semester,
+          selectedSubject.grade,
+          selectedSubject.subject
+        );
       await saveBlob(
         getDownloadFilename(
           r.headers['content-disposition'] || '',
-          `${selectedSubject.year}_${selectedSubject.subject}_${selectedDomain || '세특'}_기준.xlsx`
+          selectedDomain
+            ? `${selectedSubject.year}_${selectedSubject.subject}_${selectedDomain}_기준.xlsx`
+            : `${selectedSubject.year}_${selectedSubject.subject}_평가영역.xlsx`
         ),
         r.data
       );
@@ -584,8 +599,10 @@ export function useDomainController() {
     if (!e.target.files?.length) return;
     const file = e.target.files[0];
     const domainName = selectedSubject ? selectedDomain || SUBJECT_COMPREHENSIVE_DOMAIN : SUBJECT_COMPREHENSIVE_DOMAIN;
-    const confirmMessage = selectedSubject
-      ? '현재 화면의 기준을 업로드한 엑셀 내용으로 덮어씁니다. 계속하시겠습니까?'
+    const confirmMessage = selectedSubject && !selectedDomain
+      ? '현재 과목의 평가 영역 목록을 업로드한 엑셀 내용으로 덮어씁니다. 계속하시겠습니까?'
+      : selectedSubject
+        ? '현재 영역의 기준과 세특 기준을 업로드한 엑셀 내용으로 덮어씁니다. 계속하시겠습니까?'
       : '엑셀 파일의 기본정보에 있는 과목/영역으로 작업 내용을 업로드합니다. 계속하시겠습니까?';
     if (!confirm(confirmMessage)) {
       e.target.value = '';
@@ -593,8 +610,16 @@ export function useDomainController() {
     }
     setUploadingConfig(true);
     try {
-      const r = selectedSubject
-        ? await criteriaApi.importDomainConfig(
+      const r = selectedSubject && !selectedDomain
+        ? await criteriaApi.importSubjectConfig(
+          selectedSubject.year,
+          selectedSubject.semester,
+          selectedSubject.grade,
+          selectedSubject.subject,
+          file
+        )
+        : selectedSubject
+          ? await criteriaApi.importDomainConfig(
           selectedSubject.year,
           selectedSubject.semester,
           selectedSubject.grade,
@@ -602,16 +627,19 @@ export function useDomainController() {
           domainName,
           file
         )
-        : await criteriaApi.importDomainConfigFile(file);
+          : await criteriaApi.importDomainConfigFile(file);
       const imported = r.data as {
+        kind?: 'subject' | 'domain';
         year: number;
         semester: number;
         grade: number;
         subject: string;
-        domainName: string;
-        standards: number;
-        eval: number;
-        comments: number;
+        domainName?: string;
+        domains?: number;
+        standards?: number;
+        eval?: number;
+        comments?: number;
+        comprehensive?: number;
         prompts?: number;
       };
       const refreshedSubjects = await loadSubjects();
@@ -622,17 +650,25 @@ export function useDomainController() {
         sub.subject === imported.subject
       );
       if (targetSubject) {
-        const importedDomain = imported.domainName || domainName;
-        if (importedDomain === SUBJECT_COMPREHENSIVE_DOMAIN) {
+        if (imported.kind === 'subject') {
           await handleSelectSubject(targetSubject);
         } else {
-          const custom = targetSubject.customDomains.some(d => d.name === importedDomain);
-          handleSelectDomain(targetSubject, importedDomain, custom);
+          const importedDomain = imported.domainName || domainName;
+          if (importedDomain === SUBJECT_COMPREHENSIVE_DOMAIN) {
+            await handleSelectSubject(targetSubject);
+          } else {
+            const custom = targetSubject.customDomains.some(d => d.name === importedDomain);
+            handleSelectDomain(targetSubject, importedDomain, custom);
+          }
         }
       } else if (selectedSubject) {
         await loadCriteria(selectedSubject, domainName, isCustomDomain || !selectedDomain);
       }
-      alert(`업로드 완료: 성취 기준 ${r.data.standards}개, 채점 기준 ${r.data.eval}개, 기록 기준 ${r.data.comments}개, AI 요청 ${r.data.prompts ?? 0}개`);
+      if (imported.kind === 'subject') {
+        alert(`업로드 완료: 평가 영역 ${imported.domains ?? 0}개, AI 요청 ${imported.prompts ?? 0}개`);
+      } else {
+        alert(`업로드 완료: 성취 기준 ${imported.standards ?? 0}개, 채점 기준 ${imported.eval ?? 0}개, 기록 기준 ${imported.comments ?? 0}개, 세특 기준 ${imported.comprehensive ?? 0}개, AI 요청 ${imported.prompts ?? 0}개`);
+      }
     } catch (err: any) {
       alert(`기준 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
     } finally {
@@ -750,6 +786,7 @@ export function useDomainController() {
     setLoading,
     prompt,
     systemPrompt,
+    outputSchema,
     onGenerated,
     emptyMessage,
   }: {
@@ -758,6 +795,7 @@ export function useDomainController() {
     setLoading: (loading: boolean) => void;
     prompt: string;
     systemPrompt: string;
+    outputSchema: Record<string, unknown>;
     onGenerated: (items: T[]) => void;
     emptyMessage?: string;
   }) => {
@@ -766,14 +804,15 @@ export function useDomainController() {
       errorMessage,
       setLoading,
     }, async ({ signal }) => {
-      const res = await aiApi.generatePrompt({ prompt, systemPrompt }, signal);
-      const parsed = parseAiJson<T[]>(res.data.result);
-      if (!Array.isArray(parsed)) throw new Error('AI 응답이 배열이 아닙니다.');
-      if (parsed.length === 0) {
+      const res = await aiApi.generatePrompt({ prompt, systemPrompt, outputSchema }, signal);
+      const parsed = parseFirstJson<{ items?: T[] }>(res.data.result, 'object');
+      const items = parsed.items;
+      if (!Array.isArray(items)) throw new Error('AI 응답의 items가 배열이 아닙니다.');
+      if (items.length === 0) {
         if (emptyMessage) alert(emptyMessage);
         return;
       }
-      onGenerated(parsed);
+      onGenerated(items);
       setIsDirty(true);
     });
   };
@@ -903,8 +942,8 @@ export function useDomainController() {
         .join('\n')
       : '';
     const systemPrompt = subjectHasUploadedFile
-      ? '당신은 평가 영역 구성 AI입니다. 업로드 원본 행은 수정할 수 없으므로 세특 전용 기록 영역만 JSON 배열로 생성하세요. 각 행은 {"eval_type":"기록","name":"영역명","reflected":"X","ratio":0,"max_score":0} 형식입니다. 반드시 JSON 배열만 반환하세요.'
-      : '당신은 평가 영역 구성 AI입니다. 과목 성취기준을 참고해 지필/수행/기록 영역을 JSON 배열로 생성하세요. 각 행은 {"eval_type":"지필|수행|기록","name":"영역명","reflected":"O|X","ratio":숫자,"max_score":숫자} 형식입니다. 지필/수행 행의 ratio 합계는 반드시 100이 되게 하고 reflected는 O로 하세요. 기록 행은 reflected를 X로 하세요. 반드시 JSON 배열만 반환하세요.';
+      ? '당신은 평가 영역 구성 AI입니다. 업로드 원본 행은 수정할 수 없으므로 세특 전용 기록 영역만 생성하세요.'
+      : '당신은 평가 영역 구성 AI입니다. 과목 성취기준을 참고해 지필/수행/기록 영역을 생성하세요. 지필/수행 행의 ratio 합계는 반드시 100이 되게 하고 reflected는 O로 하세요. 기록 행은 reflected를 X로 하세요.';
     const prompt = [
       `과목: ${selectedSubject.subject}`,
       subjectHasUploadedFile ? '조건: 파일 업로드 과목이므로 새 행은 기록 영역만 가능' : '조건: 지필/수행 반영비율 합계는 100',
@@ -918,6 +957,28 @@ export function useDomainController() {
       setLoading: setGeneratingSubjectDomains,
       prompt,
       systemPrompt,
+      outputSchema: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                eval_type: { type: 'string', enum: subjectHasUploadedFile ? ['기록'] : ['지필', '수행', '기록'] },
+                name: { type: 'string' },
+                reflected: { type: 'string', enum: subjectHasUploadedFile ? ['X'] : ['O', 'X'] },
+                ratio: { type: 'number' },
+                max_score: { type: 'number' },
+              },
+              required: ['eval_type', 'name', 'reflected', 'ratio', 'max_score'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['items'],
+        additionalProperties: false,
+      },
       emptyMessage: '생성된 행이 없습니다.',
       onGenerated: (parsed) => {
       const generated = parsed
@@ -1005,7 +1066,18 @@ export function useDomainController() {
       title: '성취 기준 선택 중',
       errorMessage: '생성 실패: 다시 시도해주세요.',
       setLoading: setGeneratingStandards,
-      systemPrompt: `당신은 교육과정 성취기준 선택 AI입니다. 주어진 성취기준 목록에서 적합한 성취기준들을 선택하여 code 배열을 JSON으로 반환하세요. 반드시 아래 형식만 반환하세요: ["코드1","코드2",...]`,
+      systemPrompt: '당신은 교육과정 성취기준 선택 AI입니다. 주어진 성취기준 목록에서 적합한 성취기준의 code를 선택하세요.',
+      outputSchema: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+        },
+        required: ['items'],
+        additionalProperties: false,
+      },
       prompt: (() => {
       // 코드 기준으로 중복 제거
       const uniqueStandards: any[] = Array.from(
@@ -1126,7 +1198,28 @@ export function useDomainController() {
       title: '채점 항목 생성 중',
       errorMessage: '생성 실패',
       setLoading: setGeneratingEval,
-      systemPrompt: `당신은 채점 기준 생성 AI입니다. 과목·영역·성취기준을 참고하여 공통 채점 기준 1개와 항목별 채점 기준을 JSON 배열로 생성하세요. 반환값은 JSON 배열만 작성하세요. 첫 원소는 {"type":"common","title":"공통","score":"기본점수","rubric":"공통 채점 기준 내용"} 형식입니다. 이후 원소는 {"type":"item","title":"항목명","score":"배점","rubric":"항목별 채점 기준 내용"} 형식입니다. item 배점 합계는 만점에서 기본점수를 뺀 값이어야 합니다.`,
+      systemPrompt: '당신은 채점 기준 생성 AI입니다. 과목·영역·성취기준을 참고하여 공통 채점 기준 1개와 항목별 채점 기준을 생성하세요. item 배점 합계는 만점에서 기본점수를 뺀 값이어야 합니다.',
+      outputSchema: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', enum: ['common', 'item'] },
+                title: { type: 'string' },
+                score: { type: 'string' },
+                rubric: { type: 'string' },
+              },
+              required: ['type', 'title', 'score', 'rubric'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['items'],
+        additionalProperties: false,
+      },
       prompt: `${base}\n만점: ${maxScore}, 기본점수: ${baseScore}${stdPart}${extra}`,
       onGenerated: (newItems) => {
       setEvalItems(prev => {
@@ -1195,7 +1288,27 @@ export function useDomainController() {
       title: '기록 기준 항목 생성 중',
       errorMessage: '생성 실패',
       setLoading: setGeneratingComments,
-      systemPrompt: `당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준을 참고하여 공통 기록 기준 1개와 항목별 기록 기준을 JSON 배열로 생성하세요. 반환값은 JSON 배열만 작성하세요. 첫 원소는 {"type":"common","title":"공통","prompt":"공통 기록 기준 내용"} 형식입니다. 이후 원소는 {"type":"item","title":"기준항목 제목","prompt":"항목별 기록 기준 내용"} 형식입니다.`,
+      systemPrompt: '당신은 기록 기준 생성 AI입니다. 과목·영역·성취기준·채점기준을 참고하여 공통 기록 기준 1개와 항목별 기록 기준을 생성하세요.',
+      outputSchema: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', enum: ['common', 'item'] },
+                title: { type: 'string' },
+                prompt: { type: 'string' },
+              },
+              required: ['type', 'title', 'prompt'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['items'],
+        additionalProperties: false,
+      },
       prompt: `${base}${stdPart}${actPart}${extra}`,
       onGenerated: (newItems) => {
       const generatedCommon = newItems.find((item: any) => item?.type === 'common');

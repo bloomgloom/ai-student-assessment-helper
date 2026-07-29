@@ -1,6 +1,8 @@
 import axios from 'axios';
 
 const api = axios.create({ baseURL: '/api' });
+// Leave one minute for the app server to return its 10-minute provider timeout.
+const CLAUDE_BATCH_SUBMIT_TIMEOUT_MS = 11 * 60 * 1000;
 
 export default api;
 
@@ -34,6 +36,20 @@ export const criteriaApi = {
     const form = new FormData();
     form.append('file', file);
     return api.post(`/criteria/domains/upload${overwrite ? '?overwrite=true' : ''}`, form);
+  },
+  exportSubjectConfig: (year: number, semester: number, grade: number, subject: string) =>
+    api.get('/criteria/subject-config/export', {
+      params: { year, semester, grade, subject },
+      responseType: 'blob',
+    }),
+  importSubjectConfig: (year: number, semester: number, grade: number, subject: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('year', String(year));
+    form.append('semester', String(semester));
+    form.append('grade', String(grade));
+    form.append('subject', subject);
+    return api.post('/criteria/subject-config/upload', form);
   },
   exportDomainConfig: (year: number, semester: number, grade: number, subject: string, domainName: string) =>
     api.get('/criteria/domain-config/export', {
@@ -282,18 +298,22 @@ export const aiApi = {
     criteriaSetId: number;
   }) => api.post('/ai/generate', data),
   spellcheck: (data: { text: string }, signal?: AbortSignal) => api.post('/ai/spellcheck', data, { signal }),
-  generatePrompt: (data: { prompt: string; systemPrompt?: string }, signal?: AbortSignal) =>
+  generatePrompt: (data: {
+    prompt: string;
+    systemPrompt?: string;
+    outputSchema?: Record<string, unknown>;
+  }, signal?: AbortSignal) =>
     api.post('/ai/generate-prompt', data, { signal }),
   generateClaudeBatch: (data: {
     classId: number;
     domain: string;
     contentType: 'scoring' | 'comments' | 'combined';
     studentIds: number[];
-  }) => api.post('/ai/generate-claude-batch', data),
+  }) => api.post('/ai/generate-claude-batch', data, { timeout: CLAUDE_BATCH_SUBMIT_TIMEOUT_MS }),
   spellcheckClaudeBatch: (data: {
     classId: number;
     items: Array<{ studentId: number; text: string }>;
-  }) => api.post('/ai/spellcheck-claude-batch', data),
+  }) => api.post('/ai/spellcheck-claude-batch', data, { timeout: CLAUDE_BATCH_SUBMIT_TIMEOUT_MS }),
   listClaudeBatchJobs: (classId: number) => api.get('/ai/claude-batch-jobs', { params: { classId } }),
   checkClaudeBatchResults: (batchIds: string[]) => api.post('/ai/claude-batch-results', { batchIds }),
 };

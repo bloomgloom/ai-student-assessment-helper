@@ -3,6 +3,7 @@ import MarkdownIt from 'markdown-it';
 import { AlertCircle, ClipboardCheck, Download, Edit3, Eye, FileText, Loader2, Plus, Save, Trash2, Upload, X } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
+import { StableTextarea } from '../../components/common/StableTextarea';
 import { assignmentConfigsApi } from '../../lib/api';
 import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
 import { DomainCriteriaPanel, DomainCriteriaPromptView, DomainCriteriaSplit } from './DomainCriteriaPanel';
@@ -597,7 +598,7 @@ export function DomainContent({
                       />
                     </div>
                   </div>
-                  <textarea
+                  <StableTextarea
                     className="textarea min-h-[86px] w-full resize-y bg-white text-sm leading-relaxed"
                     placeholder="공통 채점 기준 내용"
                     value={formulaItem.rubric}
@@ -689,7 +690,7 @@ export function DomainContent({
                   <div className="flex h-9 items-center gap-3">
                     <div className="w-24 text-sm font-semibold text-purple-800">공통</div>
                   </div>
-                  <textarea
+                  <StableTextarea
                     className="textarea min-h-[96px] w-full resize-y bg-white text-sm leading-relaxed"
                     placeholder="모든 기록 기준에 공통으로 적용할 내용"
                     value={commonItem.prompt}
@@ -793,7 +794,7 @@ export function DomainContent({
                 <div className="mb-3 flex h-9 shrink-0 items-center gap-3">
                   <div className="w-24 text-sm font-semibold text-purple-800">공통</div>
                 </div>
-                <textarea
+                <StableTextarea
                   className="textarea min-h-0 flex-1 resize-none bg-white text-sm leading-relaxed"
                   placeholder="생성된 세특 기준이 여기에 표시됩니다. 직접 수정할 수도 있습니다."
                   value={subjectCommentsPrompt}
@@ -1076,7 +1077,7 @@ export function DomainContent({
                 </div>
                 <div className="grid min-h-0 flex-1 grid-cols-2 gap-0">
                   <div className="min-h-0 border-r border-gray-200 p-4">
-                    <textarea
+                    <StableTextarea
                       className="textarea h-full w-full font-mono text-xs leading-relaxed"
                       value={assignmentConfig?.guide_md || ''}
                       onChange={(e) => updateAssignmentConfig({ guide_md: e.target.value })}

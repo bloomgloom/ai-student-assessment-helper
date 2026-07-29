@@ -58,9 +58,7 @@ export interface ContentItem {
 }
 
 export interface SpellcheckResult {
-  taggedText: string;
   correctedText: string;
-  correctionCount: number;
 }
 
 export interface RecordsTreeNode {

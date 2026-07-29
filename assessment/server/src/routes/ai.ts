@@ -27,6 +27,10 @@ import { parseFirstJson } from '../services/json';
 const router = Router();
 const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
 
+function batchCreateErrorStatus(error: unknown): number {
+  return error instanceof Error && error.name === 'ClaudeBatchCreateTimeoutError' ? 504 : 500;
+}
+
 interface ArtifactRow {
   id: number;
   filename: string;
@@ -159,13 +163,20 @@ interface CommentsCriterion {
   extensions: string;
 }
 
-function parseSpellcheckResult(textWithTags: string): { correctedText: string; correctionCount: number } {
-  const correctionCount = (textWithTags.match(/\[CHANGE\]/g) || []).length;
-  const correctedText = textWithTags
-    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```[a-zA-Z]*\n?/g, '').replace(/```/g, ''))
-    .replace(/\[CHANGE\]([\s\S]*?)\[\/CHANGE\]/g, '$1')
-    .trim();
-  return { correctedText, correctionCount };
+const SPELLCHECK_OUTPUT_SCHEMA: AnthropicJsonSchema = {
+  type: 'object',
+  properties: {
+    correctedText: { type: 'string' },
+  },
+  required: ['correctedText'],
+  additionalProperties: false,
+};
+
+function parseSpellcheckResult(output: string): { correctedText: string } {
+  const parsed = parseFirstJson<{ correctedText?: unknown }>(output, 'object');
+  const correctedText = String(parsed.correctedText ?? '').trim();
+  if (!correctedText) throw new Error('맞춤법 검사 결과가 비어 있습니다.');
+  return { correctedText };
 }
 
 function spellcheckPrompt(text: string) {
@@ -174,13 +185,8 @@ function spellcheckPrompt(text: string) {
 원래 문장의 의미나 말투를 최대한 유지하면서, 어색한 부분만 자연스럽게 다듬어줘.
 
 [중요]
-교정하면서 수정되거나 추가된 부분은 반드시 [CHANGE]와 [/CHANGE] 태그로 감싸줘.
-변경되지 않은 부분은 태그 없이 그대로 둬.
-설명, 제목, 마크다운 코드블록 없이 교정된 본문만 반환해.
-
-예시:
-원본: 안냐세요 반갑습니당
-교정: [CHANGE]안녕하세요[/CHANGE] [CHANGE]반갑습니다[/CHANGE]
+수정 건수나 변경 위치를 판단하거나 반환하지 마.
+교정된 전체 본문은 출력 형식의 correctedText 필드에 담아줘.
 
 [원본 텍스트]
 ${text}
@@ -203,9 +209,19 @@ router.post('/spellcheck', async (req: Request, res: Response) => {
   const signal = requestAbortSignal(req, res);
 
   try {
-    const taggedText = (await callLLM(spellcheckPrompt(text), undefined, signal, undefined, [], 0)).trim();
-    const parsed = parseSpellcheckResult(taggedText);
-    res.json({ taggedText, ...parsed });
+    const settings = await getLLMSettings();
+    const output = (await callLLM(
+      spellcheckPrompt(text),
+      settings,
+      signal,
+      undefined,
+      [],
+      0,
+      undefined,
+      SPELLCHECK_OUTPUT_SCHEMA,
+      'subjectComprehensive'
+    )).trim();
+    res.json(parseSpellcheckResult(output));
   } catch (e) {
     if (signal.aborted) return;
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
@@ -213,14 +229,28 @@ router.post('/spellcheck', async (req: Request, res: Response) => {
 });
 
 router.post('/generate-prompt', async (req: Request, res: Response) => {
-  const { prompt, systemPrompt } = req.body;
+  const { prompt, systemPrompt, outputSchema } = req.body as {
+    prompt?: string;
+    systemPrompt?: string;
+    outputSchema?: AnthropicJsonSchema;
+  };
   if (!prompt) return res.status(400).json({ error: '프롬프트가 없습니다.' });
   const signal = requestAbortSignal(req, res);
 
   try {
     const settings = await getLLMSettings();
     const fullPrompt = systemPrompt ? `[System]\n${systemPrompt}\n\n[User]\n${prompt}` : prompt;
-    const result = await callLLM(fullPrompt, settings, signal, undefined, [], settings.temperatures.domainManagement, undefined, undefined, 'domainManagement');
+    const result = await callLLM(
+      fullPrompt,
+      settings,
+      signal,
+      undefined,
+      [],
+      settings.temperatures.domainManagement,
+      undefined,
+      outputSchema,
+      'domainManagement'
+    );
     res.json({ result });
   } catch (e) {
     if (signal.aborted) return;
@@ -292,12 +322,16 @@ function generationRolePrompt(
   const subject = classContext?.subject || '미지정';
 
   if (type === 'scoring') {
-    return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 ${evaluationType}평가 "${domain}"영역을 채점하는 교사이다. 제시된 채점 기준(성취기준·루브릭·배점)에 따라 학생의 산출물을 일관성 있고 객관적으로 채점한다. 너의 결과물은 확정 점수가 아니라, 교사가 검토·조정하여 최종 점수를 확정하기 위한 제안 점수와 근거이다.`;
+    return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 ${evaluationType}평가 "${domain}"영역을 채점하는 교사이다. 제시된 채점 기준(성취기준·루브릭·배점)에 따라 학생의 산출물을 일관성 있고 객관적으로 채점한다. 결과물은 수행평가 점수로 그대로 입력할 수 있는 상태여야 한다.`;
   }
   if (type === 'comments') {
-    return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 ${evaluationType}평가 "${domain}"영역을 추후 학교생활기록부의 과목별 세부능력 및 특기사항(이하 세특)에 반영하기 위해, 사실에 근거하여 일관성 있고 객관적으로 정리하여 기록하는 교사이다. 너의 결과물은 세특의 완성본이 아니라, 추후 세특을 작성하기 위한 관찰 기록(근거 자료)이다.`;
+    return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 ${evaluationType}평가 '${domain}' 영역을 추후 학교생활기록부의 과목별 세부능력 및 특기사항(이하 세특)에 반영하기 위해, 사실에 근거하여 일관성 있고 객관적으로 정리하여 기록하는 교사이다.
+
+너의 결과물은 세특의 완성본이 아니라, 추후 세특을 작성하기 위한 관찰 기록(근거자료)이다. 따라서 이 단계의 임무는 학생을 평가하는 것이 아니라 평가의 재료를 남기는 것이다. 역량에 대한 판단과 그 서술은 세특 작성 단계에서 이루어지므로, 여기서는 학생이 무엇을 어떻게 했는지를 구체적 사실로 남기고 판단은 세특 단계에 넘긴다.
+
+학생의 산출물 원본을 직접 볼 수 있는 단계는 이 단계뿐이며, 세특 작성 단계는 이 기록만을 근거로 삼는다. 원본에 있던 구체적 사실이 이 기록에서 사라지면 이후에 복구할 수 없으므로, 사실을 요약해 없애지 말고 판단을 붙일 수 있는 재료가 남도록 기록한다.`;
   }
-  return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 과목별 세부능력 및 특기사항(이하 세특)을 작성하는 교사이다. 학생의 산출물에 기초하여 학생의 능력을 객관적으로 파악하고 잠재력을 발굴하되, 따뜻하고 통찰력 있는 시선으로 학생의 세부능력과 특기가 구체적으로 드러나도록 세특을 작성한다. 너의 결과물은 확정된 세특이 아니라, 교사가 검토·수정하여 최종본으로 확정하기 위한 초안이다.`;
+  return `너는 고등학교 ${year}학년도 ${semester}학기 ${grade}학년 ${subject} 교과의 과목별 세부능력 및 특기사항(이하 세특)을 작성하는 교사이다. 학생의 산출물에 기초하여 학생의 능력을 객관적으로 파악하고 잠재력을 발굴하되, 따뜻하고 통찰력 있는 시선으로 학생의 세부능력과 특기가 구체적으로 드러나도록 세특을 작성한다. 결과물은 학교생활기록부에 그대로 입력할 수 있는 상태여야 한다.`;
 }
 
 interface ScoringResultItem {
@@ -594,47 +628,11 @@ function anthropicTaskForGeneration(contentType: GenerationContentType, domain: 
   return 'recordsComments';
 }
 
-function envelopeOutputInstruction(contentType: GenerationContentType, domain: string, evalCriteria: EvalCriterion[], commentsCriteria: CommentsCriterion[]) {
-  const targets = targetsForContentType(contentType, domain);
-  const parts: string[] = ['반환값은 JSON 객체 텍스트만 작성하세요. 마크다운 코드블록이나 설명은 붙이지 마세요.'];
-  if (targets.scoring) {
-    const keys = scoringSchemaKeys(evalCriteria);
-    const shape = keys.length
-      ? `{${keys.map(({ criterion, key }) => `"${key}":{"score":0 또는 ${criterionFullScore(criterion)},"reason":"짧은 이유"}`).join(',')}}`
-      : '{"항목명":{"score":0 또는 실제 배점,"reason":"짧은 이유"}}';
-    parts.push(`채점 결과는 "scoring" 필드에 ${shape} 형식의 객체로 작성하세요. score는 반드시 0 또는 해당 항목의 실제 배점인 정수만 사용하세요.`);
-  }
-  if (targets.comments) {
-    parts.push(hasStructuredCommentsCriteria(commentsCriteria)
-      ? `기록 결과는 "comments" 필드에 {${commentsSchemaKeys(commentsCriteria).map(({ key }) => `"${key}":"해당 항목 기록문"`).join(',')}} 형식의 객체로 작성하세요. 쓸 내용이 없으면 빈 문자열을 넣으세요.`
-      : '기록 결과는 "comments" 필드에 문자열로 작성하세요.');
-  }
-  if (targets.comprehensive) parts.push('세특 결과는 "comprehensive" 필드에 {"text":"세특 문장"} 객체로 작성하세요.');
-  return parts.join('\n');
-}
-
-function outputInstructionForProvider(
-  provider: string | undefined,
-  contentType: GenerationContentType,
-  domain: string,
-  evalCriteria: EvalCriterion[],
-  commentsCriteria: CommentsCriterion[],
-) {
-  if (provider === 'anthropic') return '';
-  return envelopeOutputInstruction(contentType, domain, evalCriteria, commentsCriteria);
-}
-
 function appendTaskInstruction(
   parts: string[],
   taskInstruction: string,
-  provider: string | undefined,
-  contentType: GenerationContentType,
-  domain: string,
-  evalCriteria: EvalCriterion[],
-  commentsCriteria: CommentsCriterion[],
 ) {
-  const outputInstruction = outputInstructionForProvider(provider, contentType, domain, evalCriteria, commentsCriteria);
-  parts.push([taskInstruction, outputInstruction].filter(Boolean).join('\n'));
+  parts.push(taskInstruction);
 }
 
 function buildDefaultScoringContent(criteria: EvalCriterion[]): string {
@@ -983,7 +981,7 @@ async function prepareGenerationForStudent(params: {
   contentType: 'scoring' | 'comments';
   criteriaSetId?: number;
   classContext: ClassContext | null;
-  settings: Pick<LLMSettings, 'provider' | 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>;
+  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>;
 }): Promise<PreparedGeneration> {
   const { student, domain, contentType, criteriaSetId, classContext, settings } = params;
   let evalCriteria: EvalCriterion[] = [];
@@ -1051,7 +1049,7 @@ async function prepareGenerationForStudent(params: {
       ? '위 내용을 종합하여 학생의 역량이 잘 드러나도록 과목별 세부능력 및 특기사항을 작성해주세요.'
       : '위 기준과 학생 산출물을 분석하여 각 항목에 대응하는 활동 기록을 작성해주세요.'
     : '채점 기준에 따라 학생 산출물을 채점해주세요.';
-  appendTaskInstruction(parts, taskInstruction, settings.provider, contentType, domain, evalCriteria, commentsCriteria);
+  appendTaskInstruction(parts, taskInstruction);
 
   return { studentId: student.id, prompt: parts.join('\n\n'), cachePrefix, attachments, evalCriteria, commentsCriteria };
 }
@@ -1060,7 +1058,7 @@ async function prepareCombinedGenerationForStudent(params: {
   student: { id: number; name: string };
   domain: string;
   classContext: ClassContext | null;
-  settings: Pick<LLMSettings, 'provider' | 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>;
+  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>;
 }): Promise<PreparedGeneration> {
   const { student, domain, classContext, settings } = params;
   const evalCriteria = await getDomainEvalCriteria(classContext, domain);
@@ -1079,11 +1077,6 @@ async function prepareCombinedGenerationForStudent(params: {
   appendScoringCriteriaBlocks(parts, evalCriteria);
   appendRecordCriteriaBlocks(parts, commentsCriteria);
 
-  const outputInstruction = outputInstructionForProvider(settings.provider, 'combined', domain, evalCriteria, commentsCriteria);
-  if (outputInstruction) {
-    parts.push(outputInstruction);
-    parts.push('---');
-  }
   const cachePrefix = parts.join('\n\n');
 
   const artifacts = await assignmentArtifactsForStudent(student.id, domain) as ArtifactRow[];
@@ -1096,11 +1089,6 @@ async function prepareCombinedGenerationForStudent(params: {
   appendTaskInstruction(
     parts,
     '위 기준과 학생 산출물을 분석하여 먼저 채점 결과를 작성하고, 그 결과를 근거로 각 항목의 활동 기록을 작성해주세요.',
-    settings.provider,
-    'combined',
-    domain,
-    evalCriteria,
-    commentsCriteria,
   );
   return { studentId: student.id, prompt: parts.join('\n\n'), cachePrefix, attachments, evalCriteria, commentsCriteria };
 }
@@ -1224,7 +1212,7 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
       immediateUpdates,
     });
   } catch (e: unknown) {
-    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    res.status(batchCreateErrorStatus(e)).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -1268,7 +1256,7 @@ router.post('/spellcheck-claude-batch', async (req: Request, res: Response) => {
           [],
           settings.temperatures.recordsComments,
           undefined,
-          undefined,
+          SPELLCHECK_OUTPUT_SCHEMA,
           'subjectComprehensive'
         ),
       });
@@ -1293,7 +1281,7 @@ router.post('/spellcheck-claude-batch', async (req: Request, res: Response) => {
 
     res.json({ ok: true, batchId, status: batch.processing_status || 'in_progress', requestCount: requests.length });
   } catch (e: unknown) {
-    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    res.status(batchCreateErrorStatus(e)).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -1400,7 +1388,7 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
                 studentId: meta.studentId,
                 contentType: 'spellcheck',
                 domain: SUBJECT_COMPREHENSIVE_DOMAIN,
-                content: JSON.stringify({ taggedText: resultText, ...parsed }),
+                content: JSON.stringify(parsed),
               });
               continue;
             }

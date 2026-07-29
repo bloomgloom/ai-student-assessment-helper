@@ -49,6 +49,21 @@ function headerMap(row: ExcelJS.Row): Record<string, number> {
   return map;
 }
 
+function formatConfigWorkbook(wb: ExcelJS.Workbook): void {
+  for (const sheet of wb.worksheets) {
+    sheet.getRow(1).font = { bold: true };
+    sheet.columns.forEach(col => {
+      const vals = (col.values as (unknown)[]).filter(v => v !== undefined && v !== null);
+      const maxLen = vals.length > 0
+        ? Math.max(...vals.map(v => String(v).length + 4))
+        : 14;
+      col.width = Math.max(14, Math.min(60, maxLen));
+      col.alignment = { vertical: 'top', wrapText: true };
+    });
+    sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+}
+
 function findUploadedSourceFile(originalName: string, preferredDir: string): string | null {
   const normalized = originalName.normalize('NFC');
   const basename = path.basename(normalized);
@@ -989,6 +1004,213 @@ router.put('/ai-prompts/bulk', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+router.get('/subject-config/export', async (req: Request, res: Response) => {
+  const year = Number(req.query.year);
+  const semester = Number(req.query.semester);
+  const grade = Number(req.query.grade);
+  const subject = String(req.query.subject || '').trim();
+  if (!year || !semester || !grade || !subject) {
+    return res.status(400).json({ error: '학년도, 학기, 학년, 과목이 필요합니다.' });
+  }
+
+  const rows = await queryAll<{
+    eval_type: string; name: string; reflected: string;
+    ratio: number; max_score: number; sort_order: number;
+  }>(
+    `SELECT eval_type, name, reflected, ratio, max_score, sort_order
+     FROM subject_domains
+     WHERE year=? AND semester=? AND grade=? AND subject=? AND sort_order >= 0
+     ORDER BY sort_order, id`,
+    [year, semester, grade, subject]
+  );
+  const aiPrompts = await queryAll<{ prompt_key: string; prompt: string }>(
+    `SELECT prompt_key, prompt FROM domain_ai_prompts
+     WHERE year=? AND semester=? AND grade=? AND subject=?
+       AND domain_name='__SUBJECT_COMPREHENSIVE__' AND prompt_key='subject_domains'
+     ORDER BY prompt_key`,
+    [year, semester, grade, subject]
+  );
+
+  const wb = new ExcelJS.Workbook();
+  const meta = wb.addWorksheet('기본정보');
+  meta.addRows([
+    ['학년도', year],
+    ['학기', semester],
+    ['학년', grade],
+    ['과목', subject],
+  ]);
+
+  const domainsSheet = wb.addWorksheet('평가영역');
+  domainsSheet.addRow(['sort_order', '평가종류', '영역명', '학기말반영', '반영비율', '만점']);
+  rows.forEach((row, index) => {
+    domainsSheet.addRow([
+      row.sort_order ?? index,
+      row.eval_type,
+      row.name,
+      row.reflected,
+      row.ratio,
+      row.max_score,
+    ]);
+  });
+
+  const promptSheet = wb.addWorksheet('AI요청');
+  promptSheet.addRow(['prompt_key', 'prompt']);
+  aiPrompts.forEach(item => promptSheet.addRow([item.prompt_key, item.prompt]));
+
+  formatConfigWorkbook(wb);
+  const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(`${year}_${semester}_${grade}_${subject}_평가영역.xlsx`)}`);
+  res.send(buffer);
+});
+
+router.post('/subject-config/upload', tempUpload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
+
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(req.file.path);
+
+    const meta: Record<string, string> = {};
+    wb.getWorksheet('기본정보')?.eachRow((row) => {
+      const key = cellText(row.getCell(1).value);
+      if (key) meta[key] = cellText(row.getCell(2).value);
+    });
+
+    const year = Number(req.body.year || meta['학년도']);
+    const semester = Number(req.body.semester || meta['학기']);
+    const grade = Number(req.body.grade || meta['학년']);
+    const subject = String(req.body.subject || meta['과목'] || '').trim();
+    if (!year || !semester || !grade || !subject) {
+      return res.status(400).json({ error: '기본정보 시트에서 학년도, 학기, 학년, 과목을 찾을 수 없습니다.' });
+    }
+
+    const domainsSheet = wb.getWorksheet('평가영역');
+    if (!domainsSheet) {
+      return res.status(400).json({ error: '평가영역 시트를 찾을 수 없습니다.' });
+    }
+
+    const domainRows: {
+      eval_type: string; name: string; reflected: string;
+      ratio: number; max_score: number; sort_order: number;
+    }[] = [];
+    const h = headerMap(domainsSheet.getRow(1));
+    domainsSheet.eachRow((row, rowNum) => {
+      if (rowNum === 1) return;
+      const evalType = cellText(row.getCell(h['평가종류']).value);
+      const name = cellText(row.getCell(h['영역명']).value);
+      if (!evalType && !name) return;
+      if (!['지필', '수행', '기록'].includes(evalType)) {
+        throw new Error(`평가영역 시트 ${rowNum}행의 평가종류는 지필, 수행, 기록 중 하나여야 합니다.`);
+      }
+      domainRows.push({
+        eval_type: evalType,
+        name,
+        reflected: evalType === '기록'
+          ? 'X'
+          : (cellText(row.getCell(h['학기말반영']).value).toUpperCase() === 'X' ? 'X' : 'O'),
+        ratio: evalType === '기록' ? 0 : (Number(cellText(row.getCell(h['반영비율']).value)) || 0),
+        max_score: evalType === '기록' ? 0 : (Number(cellText(row.getCell(h['만점']).value)) || 0),
+        sort_order: Number(cellText(row.getCell(h.sort_order).value)) || domainRows.length,
+      });
+    });
+
+    const aiPromptRows: { prompt_key: string; prompt: string }[] = [];
+    const aiPromptSheet = wb.getWorksheet('AI요청');
+    if (aiPromptSheet) {
+      const promptHeaders = headerMap(aiPromptSheet.getRow(1));
+      aiPromptSheet.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+        const promptKey = cellText(row.getCell(promptHeaders.prompt_key).value);
+        const prompt = cellText(row.getCell(promptHeaders.prompt).value);
+        if (promptKey === 'subject_domains') aiPromptRows.push({ prompt_key: promptKey, prompt });
+      });
+    }
+
+    await transaction(async () => {
+      const current = await queryOne<{ credit: number }>(
+        `SELECT MAX(credit) as credit FROM subject_domains
+         WHERE year=? AND semester=? AND grade=? AND subject=?`,
+        [year, semester, grade, subject]
+      );
+      const credit = Number(current?.credit) || 0;
+      const existingSourceRows = await queryAll<{
+        eval_type: string; name: string; source_filename: string;
+      }>(
+        `SELECT eval_type, name, source_filename FROM subject_domains
+         WHERE year=? AND semester=? AND grade=? AND subject=? AND source_filename != ''`,
+        [year, semester, grade, subject]
+      );
+
+      await execute(
+        'DELETE FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=?',
+        [year, semester, grade, subject]
+      );
+      if (domainRows.length === 0) {
+        await execute(
+          `INSERT INTO subject_domains(year, semester, grade, subject, credit, eval_type, name, reflected, ratio, max_score, sort_order, source_filename)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [year, semester, grade, subject, credit, '', '', 'X', 0, 0, -1, '']
+        );
+      } else {
+        for (const [index, row] of domainRows.entries()) {
+          const matchingSourceRow = existingSourceRows.find(existing => (
+            existing.eval_type === row.eval_type && existing.name === row.name
+          ));
+          await execute(
+            `INSERT INTO subject_domains(year, semester, grade, subject, credit, eval_type, name, reflected, ratio, max_score, sort_order, source_filename)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [
+              year,
+              semester,
+              grade,
+              subject,
+              credit,
+              row.eval_type,
+              row.name,
+              row.reflected,
+              row.ratio,
+              row.max_score,
+              row.sort_order ?? index,
+              matchingSourceRow?.source_filename || '',
+            ]
+          );
+        }
+      }
+
+      await execute(
+        `DELETE FROM domain_ai_prompts
+         WHERE year=? AND semester=? AND grade=? AND subject=?
+           AND domain_name='__SUBJECT_COMPREHENSIVE__' AND prompt_key='subject_domains'`,
+        [year, semester, grade, subject]
+      );
+      for (const row of aiPromptRows) {
+        await execute(
+          `INSERT OR REPLACE INTO domain_ai_prompts(
+             year, semester, grade, subject, domain_name, prompt_key, prompt, updated_at
+           ) VALUES(?,?,?,?,?,'subject_domains',?,datetime('now'))`,
+          [year, semester, grade, subject, '__SUBJECT_COMPREHENSIVE__', row.prompt]
+        );
+      }
+    });
+
+    res.json({
+      ok: true,
+      kind: 'subject',
+      year,
+      semester,
+      grade,
+      subject,
+      domains: domainRows.length,
+      prompts: aiPromptRows.length,
+    });
+  } catch (e: unknown) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+  }
+});
+
 router.get('/domain-config/export', async (req: Request, res: Response) => {
   const year = Number(req.query.year);
   const semester = Number(req.query.semester);
@@ -1020,6 +1242,13 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
     'SELECT prompt_key, prompt FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=? ORDER BY prompt_key',
     [year, semester, grade, subject, domainName]
   );
+  const comprehensiveItems = await queryAll<{ type: string; title: string; prompt: string; extensions: string; sort_order: number }>(
+    `SELECT type, title, prompt, extensions, sort_order FROM domain_comments
+     WHERE year=? AND semester=? AND grade=? AND subject=?
+       AND domain_name='__SUBJECT_COMPREHENSIVE__' AND type IN ('세특', '종합')
+     ORDER BY sort_order, id`,
+    [year, semester, grade, subject]
+  );
 
   const standards = wb.addWorksheet('성취평가기준');
   standards.addRow(['sort_order', 'domain_name_ref', 'code', 'content']);
@@ -1033,10 +1262,19 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
   evalSheet.addRow(['sort_order', 'item_type', 'name', 'score', 'rubric']);
   evalItems.forEach((item, index) => evalSheet.addRow([item.sort_order ?? index, item.item_type, item.name, item.score, item.rubric]));
 
-  const commentsSheet = wb.addWorksheet('세특기준');
+  const commentsSheet = wb.addWorksheet('기록기준');
   commentsSheet.addRow(['sort_order', 'type', 'title', 'prompt', 'extensions']);
-  commentsItems.filter(item => item.type !== '성취기준').forEach((item, index) => {
+  const recordItems = domainName === '__SUBJECT_COMPREHENSIVE__'
+    ? []
+    : commentsItems.filter(item => item.type !== '성취기준');
+  recordItems.forEach((item, index) => {
     commentsSheet.addRow([item.sort_order ?? index, item.type, item.title, item.prompt, item.extensions]);
+  });
+
+  const comprehensiveSheet = wb.addWorksheet('세특기준');
+  comprehensiveSheet.addRow(['sort_order', 'type', 'title', 'prompt', 'extensions']);
+  comprehensiveItems.slice(0, 1).forEach((item, index) => {
+    comprehensiveSheet.addRow([item.sort_order ?? index, '세특', '세특', item.prompt, item.extensions]);
   });
 
   const promptSheet = wb.addWorksheet('AI요청');
@@ -1045,18 +1283,7 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
     promptSheet.addRow([item.prompt_key, item.prompt]);
   });
 
-  for (const sheet of wb.worksheets) {
-    sheet.getRow(1).font = { bold: true };
-    sheet.columns.forEach(col => {
-      const vals = (col.values as (unknown)[]).filter(v => v !== undefined && v !== null);
-      const maxLen = vals.length > 0
-        ? Math.max(...vals.map(v => String(v).length + 4))
-        : 14;
-      col.width = Math.max(14, Math.min(60, maxLen));
-      col.alignment = { vertical: 'top', wrapText: true };
-    });
-    sheet.views = [{ state: 'frozen', ySplit: 1 }];
-  }
+  formatConfigWorkbook(wb);
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
   const safeDomain = domainName === '__SUBJECT_COMPREHENSIVE__' ? '세특' : domainName;
@@ -1128,25 +1355,50 @@ router.post('/domain-config/upload', tempUpload.single('file'), async (req: Requ
       });
     }
 
-    const commentsRows: { type: string; title: string; prompt: string; extensions: string; sort_order: number }[] = [];
-    const commentsSheet = wb.getWorksheet('세특기준');
-    if (commentsSheet) {
-      const h = headerMap(commentsSheet.getRow(1));
-      commentsSheet.eachRow((row, rowNum) => {
-        if (rowNum === 1) return;
-        const type = cellText(row.getCell(h.type).value) || '항목';
-        const title = cellText(row.getCell(h.title).value);
-        const prompt = cellText(row.getCell(h.prompt).value);
-        if (!title && !prompt) return;
-        commentsRows.push({
-          sort_order: Number(cellText(row.getCell(h.sort_order).value)) || commentsRows.length,
-          type,
-          title,
-          prompt,
-          extensions: cellText(row.getCell(h.extensions).value),
+    type ImportedCommentRow = {
+      type: string; title: string; prompt: string; extensions: string; sort_order: number;
+    };
+    const parseCommentRows = (sheet?: ExcelJS.Worksheet): ImportedCommentRow[] => {
+      const parsed: ImportedCommentRow[] = [];
+      if (sheet) {
+        const h = headerMap(sheet.getRow(1));
+        sheet.eachRow((row, rowNum) => {
+          if (rowNum === 1) return;
+          const type = cellText(row.getCell(h.type).value) || '항목';
+          const title = cellText(row.getCell(h.title).value);
+          const prompt = cellText(row.getCell(h.prompt).value);
+          if (!title && !prompt) return;
+          parsed.push({
+            sort_order: Number(cellText(row.getCell(h.sort_order).value)) || parsed.length,
+            type,
+            title,
+            prompt,
+            extensions: cellText(row.getCell(h.extensions).value),
+          });
         });
-      });
-    }
+      }
+      return parsed;
+    };
+
+    const recordSheet = wb.getWorksheet('기록기준');
+    const legacyOrComprehensiveSheet = wb.getWorksheet('세특기준');
+    // 이전 파일은 영역의 기록 기준을 '세특기준'이라는 이름으로 저장했다.
+    const commentsRows = parseCommentRows(
+      recordSheet || (domainName !== '__SUBJECT_COMPREHENSIVE__' ? legacyOrComprehensiveSheet : undefined)
+    );
+    const hasComprehensiveSheet = Boolean(
+      recordSheet ? legacyOrComprehensiveSheet : domainName === '__SUBJECT_COMPREHENSIVE__' ? legacyOrComprehensiveSheet : undefined
+    );
+    const comprehensiveRows = parseCommentRows(
+      recordSheet
+        ? legacyOrComprehensiveSheet
+        : domainName === '__SUBJECT_COMPREHENSIVE__'
+          ? legacyOrComprehensiveSheet
+          : undefined
+    );
+    const importedComprehensiveItem = comprehensiveRows.find(row => row.type === '세특')
+      ?? comprehensiveRows.find(row => row.type === '종합')
+      ?? comprehensiveRows[0];
 
     const aiPromptRows: { prompt_key: string; prompt: string }[] = [];
     const aiPromptSheet = wb.getWorksheet('AI요청');
@@ -1165,6 +1417,13 @@ router.post('/domain-config/upload', tempUpload.single('file'), async (req: Requ
       await execute('DELETE FROM domain_comments WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
       await execute('DELETE FROM domain_eval WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
       await execute('DELETE FROM domain_ai_prompts WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name=?', [year, semester, grade, subject, domainName]);
+      if (domainName !== '__SUBJECT_COMPREHENSIVE__' && hasComprehensiveSheet) {
+        await execute(
+          `DELETE FROM domain_comments
+           WHERE year=? AND semester=? AND grade=? AND subject=? AND domain_name='__SUBJECT_COMPREHENSIVE__'`,
+          [year, semester, grade, subject]
+        );
+      }
 
       const existingSubject = await queryOne(
         `SELECT 1 as found FROM (
@@ -1212,9 +1471,6 @@ router.post('/domain-config/upload', tempUpload.single('file'), async (req: Requ
           [year, semester, grade, subject, domainName, '성취기준', row.code, '', extensions, row.sort_order ?? index]
         );
       }
-      const importedComprehensiveItem = domainName === '__SUBJECT_COMPREHENSIVE__'
-        ? commentsRows.find(row => row.type === '세특') ?? commentsRows.find(row => row.type === '종합')
-        : undefined;
       const normalizedCommentsRows = domainName === '__SUBJECT_COMPREHENSIVE__'
         ? importedComprehensiveItem
           ? [{ ...importedComprehensiveItem, type: '세특', title: '세특', sort_order: 0 }]
@@ -1224,6 +1480,12 @@ router.post('/domain-config/upload', tempUpload.single('file'), async (req: Requ
         await execute(
           'INSERT INTO domain_comments(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
           [year, semester, grade, subject, domainName, row.type, row.title, row.prompt, row.extensions, row.sort_order ?? standardRows.length + index]
+        );
+      }
+      if (domainName !== '__SUBJECT_COMPREHENSIVE__' && hasComprehensiveSheet && importedComprehensiveItem) {
+        await execute(
+          'INSERT INTO domain_comments(year, semester, grade, subject, domain_name, type, title, prompt, extensions, sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)',
+          [year, semester, grade, subject, '__SUBJECT_COMPREHENSIVE__', '세특', '세특', importedComprehensiveItem.prompt, importedComprehensiveItem.extensions, 0]
         );
       }
       for (const [index, row] of evalRows.entries()) {
@@ -1240,7 +1502,20 @@ router.post('/domain-config/upload', tempUpload.single('file'), async (req: Requ
       }
     });
 
-    res.json({ ok: true, year, semester, grade, subject, domainName, standards: standardRows.length, comments: commentsRows.length, eval: evalRows.length, prompts: aiPromptRows.length });
+    res.json({
+      ok: true,
+      kind: 'domain',
+      year,
+      semester,
+      grade,
+      subject,
+      domainName,
+      standards: standardRows.length,
+      comments: commentsRows.length,
+      comprehensive: importedComprehensiveItem ? 1 : 0,
+      eval: evalRows.length,
+      prompts: aiPromptRows.length,
+    });
   } catch (e: unknown) {
     res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
   } finally {

@@ -98,6 +98,7 @@ function Sidebar() {
           title={collapsed ? '종료' : undefined}
           onClick={() => {
             if (hasUnsavedRecords && !confirm('저장되지 않은 변경 사항이 있습니다. 종료하시겠습니까?')) return;
+            (window as any).__allowNextUnload = true;
             window.location.href = 'app://launcher';
           }}
           className={`flex w-full items-center ${collapsed ? 'justify-center px-2' : 'gap-2.5 px-4'} py-2.5 text-sm text-red-300 transition-colors hover:bg-red-950 hover:text-red-100`}

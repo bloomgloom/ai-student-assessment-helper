@@ -201,6 +201,7 @@ interface LLMCallResult {
   text: string;
   requestJson: unknown;
   responseJson: unknown;
+  thinkingSummary?: string;
 }
 
 export interface AnthropicBatchRequest {
@@ -227,9 +228,16 @@ export interface AnthropicBatchResultLine {
   custom_id: string;
   result: {
     type: string;
-    message?: { content?: { type?: string; text?: string }[] };
+    message?: { content?: AnthropicContentBlock[] };
     error?: unknown;
   };
+}
+
+interface AnthropicContentBlock {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  signature?: string;
 }
 
 export async function getLLMSettings(): Promise<LLMSettings> {
@@ -425,6 +433,7 @@ async function writeLLMLog(params: {
   requestJson?: unknown;
   responseJson?: unknown;
   output?: string;
+  thinkingSummary?: string;
   error?: unknown;
   log?: LLMLogOptions;
 }): Promise<void> {
@@ -466,6 +475,11 @@ async function writeLLMLog(params: {
       '',
       '===== LLM RESPONSE JSON =====',
       formatLogJson(params.responseJson),
+      ...(params.thinkingSummary ? [
+        '',
+        '===== CLAUDE THINKING SUMMARY =====',
+        params.thinkingSummary,
+      ] : []),
       '',
       params.error === undefined ? '===== LLM OUTPUT =====' : '===== LLM ERROR =====',
       params.error === undefined ? (params.output || '') : errorText,
@@ -493,6 +507,7 @@ async function writeLLMJsonLog(params: {
   finishedAt: Date;
   requestJson?: unknown;
   responseJson?: unknown;
+  thinkingSummary?: string;
   error?: unknown;
 }): Promise<void> {
   if (!params.settings.loggingEnabled) return;
@@ -516,6 +531,11 @@ async function writeLLMJsonLog(params: {
       '',
       '===== LLM RESPONSE JSON =====',
       formatLogJson(params.responseJson),
+      ...(params.thinkingSummary ? [
+        '',
+        '===== CLAUDE THINKING SUMMARY =====',
+        params.thinkingSummary,
+      ] : []),
       '',
       params.error === undefined ? '' : '===== LLM ERROR =====',
       params.error === undefined ? '' : errorText,
@@ -538,6 +558,17 @@ function mergeSignals(...signals: Array<AbortSignal | undefined>): AbortSignal |
   const abort = () => controller.abort();
   activeSignals.forEach((signal) => signal.addEventListener('abort', abort, { once: true }));
   return controller.signal;
+}
+
+function promptWithJsonSchema(prompt: string, schema: AnthropicJsonSchema) {
+  return [
+    prompt,
+    '',
+    '[출력 형식]',
+    '아래 JSON Schema를 만족하는 JSON 객체만 반환하세요.',
+    '설명, 제목, 마크다운 코드블록 등 JSON 외의 내용은 붙이지 마세요.',
+    JSON.stringify(schema),
+  ].join('\n');
 }
 
 export async function callLLM(
@@ -563,22 +594,25 @@ export async function callLLM(
   const anthropicEffort = taskOptions.effort;
   const anthropicThinkingEnabled = taskOptions.thinkingEnabled;
   const anthropicPromptCachingEnabled = cfg.provider === 'anthropic' ? true : undefined;
+  const requestPrompt = outputSchema && cfg.provider !== 'anthropic'
+    ? promptWithJsonSchema(prompt, outputSchema)
+    : prompt;
 
   try {
     let result: LLMCallResult;
-    if (cfg.provider === 'openai-compatible') result = await callOpenAICompatible(prompt, cfg, signal, attachments, requestTemperature);
-    else if (cfg.provider === 'ollama') result = await callOllama(prompt, cfg, signal, attachments, requestTemperature);
-    else if (cfg.provider === 'anthropic') result = await callAnthropic(prompt, cfg, signal, attachments, requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, cachePrefix, outputSchema, anthropicTask);
-    else if (cfg.provider === 'gemini') result = await callGemini(prompt, cfg, signal, attachments, requestTemperature, taskOptions);
-    else result = await callOpenAI(prompt, cfg, signal, attachments, requestTemperature, taskOptions);
+    if (cfg.provider === 'openai-compatible') result = await callOpenAICompatible(requestPrompt, cfg, signal, attachments, requestTemperature);
+    else if (cfg.provider === 'ollama') result = await callOllama(requestPrompt, cfg, signal, attachments, requestTemperature);
+    else if (cfg.provider === 'anthropic') result = await callAnthropic(requestPrompt, cfg, signal, attachments, requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, cachePrefix, outputSchema, anthropicTask);
+    else if (cfg.provider === 'gemini') result = await callGemini(requestPrompt, cfg, signal, attachments, requestTemperature, taskOptions);
+    else result = await callOpenAI(requestPrompt, cfg, signal, attachments, requestTemperature, taskOptions);
 
     if (cfg.loggingEnabled) {
-      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, attachments, requestJson: result.requestJson, responseJson: result.responseJson, output: result.text, log, temperature: requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
+      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt: requestPrompt, attachments, requestJson: result.requestJson, responseJson: result.responseJson, output: result.text, thinkingSummary: result.thinkingSummary, log, temperature: requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
     }
     return result.text;
   } catch (error) {
     if (cfg.loggingEnabled) {
-      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt, attachments, error, log, temperature: requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
+      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt: requestPrompt, attachments, error, log, temperature: requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
     }
     throw error;
   }
@@ -699,7 +733,13 @@ export function buildAnthropicMessageParams(
     max_tokens: sanitizeAnthropicMaxTokens(maxTokens),
     ...(requestTemperature !== undefined ? { temperature: requestTemperature } : {}),
     ...(Object.keys(outputConfig).length ? { output_config: outputConfig } : {}),
-    ...(thinkingEnabled !== undefined ? { thinking: { type: thinkingEnabled === true ? 'adaptive' : 'disabled' } } : {}),
+    ...(thinkingEnabled !== undefined
+      ? {
+          thinking: thinkingEnabled
+            ? { type: 'adaptive', display: 'summarized' }
+            : { type: 'disabled' },
+        }
+      : {}),
     ...(system ? { system } : {}),
     messages: [{ role: 'user', content }],
   };
@@ -737,35 +777,68 @@ async function callAnthropic(
     signal,
   });
   if (!res.ok) throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { content: { type?: string; text?: string }[] };
+  const data = (await res.json()) as { content: AnthropicContentBlock[] };
   const text = (data.content || [])
-    .filter((block) => block.type === 'text' || block.text !== undefined)
+    .filter((block) => block.type === 'text')
     .map((block) => block.text || '')
     .join('\n')
     .trim();
-  return { text, requestJson: params, responseJson: data };
+  const thinkingSummary = extractAnthropicThinking(data);
+  return { text, requestJson: params, responseJson: data, thinkingSummary };
 }
 
-export function extractAnthropicText(message: { content?: { type?: string; text?: string }[] } | undefined): string {
+export function extractAnthropicText(message: { content?: AnthropicContentBlock[] } | undefined): string {
   return (message?.content || [])
-    .filter((block) => block.type === 'text' || block.text !== undefined)
+    .filter((block) => block.type === 'text')
     .map((block) => block.text || '')
     .join('\n')
     .trim();
 }
+
+function extractAnthropicThinking(message: { content?: AnthropicContentBlock[] } | undefined): string {
+  return (message?.content || [])
+    .filter((block) => block.type === 'thinking' && block.thinking)
+    .map((block) => block.thinking || '')
+    .join('\n\n')
+    .trim();
+}
+
+// Match the official Anthropic TypeScript SDK's default per-request timeout.
+const ANTHROPIC_BATCH_CREATE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export async function createAnthropicMessageBatch(cfg: LLMSettings, requests: AnthropicBatchRequest[]): Promise<AnthropicBatchInfo> {
   const startedAt = new Date();
   const requestJson = { requests };
-  const res = await fetch('https://api.anthropic.com/v1/messages/batches', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': cfg.apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(requestJson),
-  });
+  let res: Response;
+  try {
+    res = await fetch('https://api.anthropic.com/v1/messages/batches', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': cfg.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(requestJson),
+      signal: AbortSignal.timeout(ANTHROPIC_BATCH_CREATE_TIMEOUT_MS),
+    });
+  } catch (cause: unknown) {
+    const timedOut = cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError');
+    const error = new Error(
+      timedOut
+        ? 'Claude 배치 생성 요청이 10분 안에 응답하지 않아 중단되었습니다. 잠시 후 다시 시도해 주세요.'
+        : `Anthropic Batch API 연결 오류: ${cause instanceof Error ? cause.message : String(cause)}`
+    );
+    error.name = timedOut ? 'ClaudeBatchCreateTimeoutError' : 'ClaudeBatchCreateNetworkError';
+    await writeLLMJsonLog({
+      label: 'ANTHROPIC BATCH CREATE',
+      settings: cfg,
+      startedAt,
+      finishedAt: new Date(),
+      requestJson,
+      error,
+    });
+    throw error;
+  }
   const responseJson = await res.json().catch(async () => ({ raw: await res.text().catch(() => '') }));
   if (!res.ok) {
     const error = new Error(`Anthropic Batch API error ${res.status}: ${formatLogJson(responseJson)}`);
@@ -816,7 +889,22 @@ export async function retrieveAnthropicMessageBatchResults(cfg: LLMSettings, bat
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line) as AnthropicBatchResultLine);
-  await writeLLMJsonLog({ label: 'ANTHROPIC BATCH RESULTS', settings: cfg, startedAt, finishedAt: new Date(), requestJson, responseJson: lines });
+  const thinkingSummary = lines
+    .map((line) => {
+      const summary = extractAnthropicThinking(line.result.message);
+      return summary ? `[${line.custom_id}]\n${summary}` : '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+  await writeLLMJsonLog({
+    label: 'ANTHROPIC BATCH RESULTS',
+    settings: cfg,
+    startedAt,
+    finishedAt: new Date(),
+    requestJson,
+    responseJson: lines,
+    thinkingSummary,
+  });
   return lines;
 }
 

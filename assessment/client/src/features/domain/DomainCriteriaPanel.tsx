@@ -1,6 +1,7 @@
 import { KeyboardEvent, PointerEvent, ReactNode, useRef, useState } from 'react';
 import { Loader2, Send, Trash2 } from 'lucide-react';
 import { CriteriaItemSection } from '../../components/common/CriteriaItemSection';
+import { StableTextarea } from '../../components/common/StableTextarea';
 import { AiChatMessage } from './types';
 
 interface DomainCriteriaPromptConfig {
@@ -180,7 +181,7 @@ export function DomainCriteriaPromptView({ prompt }: { prompt: ReactNode | Domai
       </div>
       <div className="border-t border-gray-100 p-3">
         <div className="flex gap-2">
-          <textarea
+          <StableTextarea
             className="textarea min-h-[72px] flex-1 resize-y text-sm leading-relaxed"
             placeholder={prompt.placeholder}
             value={prompt.draft}

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, screen } = require('electron');
 const { fork } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -23,9 +23,79 @@ let assignmentTeacherPort = null;
 let assignmentStudentPort = null;
 let activeMode = null;
 let isForceQuit = false;
+let isForceWindowClose = false;
+let closeConfirmationInProgress = false;
 let displaySleepBlockerId = null;
 let lastFileDialogDir = null;
 let fileDialogPrefsLoaded = false;
+let windowStateSaveTimer = null;
+
+const DEFAULT_WINDOW_BOUNDS = {
+  width: 1440,
+  height: 960,
+};
+
+function getWindowStatePath() {
+  return path.join(app.getPath('userData'), 'window-state.json');
+}
+
+function normalizeWindowBounds(bounds) {
+  if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
+    return DEFAULT_WINDOW_BOUNDS;
+  }
+
+  const candidate = {
+    x: Number.isFinite(bounds.x) ? Math.round(bounds.x) : 0,
+    y: Number.isFinite(bounds.y) ? Math.round(bounds.y) : 0,
+    width: Math.max(1100, Math.round(bounds.width)),
+    height: Math.max(720, Math.round(bounds.height)),
+  };
+  const workArea = screen.getDisplayMatching(candidate).workArea;
+  const width = Math.min(candidate.width, workArea.width);
+  const height = Math.min(candidate.height, workArea.height);
+  return {
+    x: Math.min(Math.max(candidate.x, workArea.x), workArea.x + workArea.width - width),
+    y: Math.min(Math.max(candidate.y, workArea.y), workArea.y + workArea.height - height),
+    width,
+    height,
+  };
+}
+
+function loadWindowState() {
+  try {
+    const state = JSON.parse(fs.readFileSync(getWindowStatePath(), 'utf8'));
+    return {
+      bounds: normalizeWindowBounds(state.bounds),
+      isMaximized: state.isMaximized === true,
+    };
+  } catch {
+    return {
+      bounds: DEFAULT_WINDOW_BOUNDS,
+      isMaximized: false,
+    };
+  }
+}
+
+function saveWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(getWindowStatePath(), JSON.stringify({
+      bounds: mainWindow.getNormalBounds(),
+      isMaximized: mainWindow.isMaximized(),
+    }, null, 2));
+  } catch {
+    // 창 상태 저장 실패는 앱 동작을 막지 않습니다.
+  }
+}
+
+function scheduleWindowStateSave() {
+  if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
+  windowStateSaveTimer = setTimeout(() => {
+    windowStateSaveTimer = null;
+    saveWindowState();
+  }, 250);
+}
 
 function getFileDialogPrefsPath() {
   return path.join(app.getPath('userData'), 'file-dialog-prefs.json');
@@ -468,9 +538,9 @@ async function createWindow() {
     };
   });
 
+  const windowState = loadWindowState();
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 960,
+    ...windowState.bounds,
     minWidth: 1100,
     minHeight: 720,
     title: 'AI Assessment Assistant',
@@ -479,6 +549,30 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     }
+  });
+
+  if (windowState.isMaximized) mainWindow.maximize();
+  mainWindow.on('resize', scheduleWindowStateSave);
+  mainWindow.on('move', scheduleWindowStateSave);
+
+  mainWindow.on('close', (event) => {
+    saveWindowState();
+    if (isForceQuit || isForceWindowClose) return;
+    event.preventDefault();
+    void requestApplicationClose(process.platform !== 'darwin');
+  });
+
+  mainWindow.on('closed', () => {
+    if (windowStateSaveTimer) {
+      clearTimeout(windowStateSaveTimer);
+      windowStateSaveTimer = null;
+    }
+    mainWindow = null;
+    isForceWindowClose = false;
+  });
+
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    if (isForceQuit || isForceWindowClose) event.preventDefault();
   });
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
@@ -528,12 +622,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', async (event) => {
-  if (isForceQuit) return;
-  event.preventDefault();
-
-  let shouldQuit = true;
-
+async function confirmApplicationClose() {
   // 평가 실시 중: 열린 수행이 있으면 경고
   if (activeMode === 'assignment' && assignmentAdminPort) {
     try {
@@ -549,7 +638,7 @@ app.on('before-quit', async (event) => {
           defaultId: 0,
           cancelId: 0,
         });
-        if (response === 0) shouldQuit = false;
+        if (response === 0) return false;
       }
     } catch {
       // 서버 응답 없으면 그냥 종료
@@ -557,31 +646,58 @@ app.on('before-quit', async (event) => {
   }
 
   // 채점 중: 저장 안 된 변경사항 있으면 경고
-  if (shouldQuit && activeMode === 'assessment' && mainWindow) {
+  if (activeMode === 'assessment' && mainWindow && !mainWindow.isDestroyed()) {
     try {
       const hasUnsaved = await mainWindow.webContents.executeJavaScript('window.__hasUnsavedChanges === true');
       if (hasUnsaved) {
         const { response } = await dialog.showMessageBox(mainWindow, {
           type: 'warning',
           title: '저장되지 않은 변경사항',
-          message: '저장되지 않은 채점 데이터가 있습니다.',
-          detail: '종료하면 변경사항이 손실됩니다.',
+          message: '저장되지 않은 변경 사항이 있습니다.',
+          detail: '종료하면 변경 사항이 손실됩니다. 종료하시겠습니까?',
           buttons: ['취소', '저장 없이 종료'],
           defaultId: 0,
           cancelId: 0,
         });
-        if (response === 0) shouldQuit = false;
+        if (response === 0) return false;
       }
     } catch {
       // 확인 실패 시 그냥 종료
     }
   }
 
-  if (shouldQuit) {
+  return true;
+}
+
+async function requestApplicationClose(quitApp) {
+  if (closeConfirmationInProgress) return;
+  closeConfirmationInProgress = true;
+  try {
+    if (!await confirmApplicationClose()) return;
+
     setDisplaySleepPrevention(false);
     stopServer();
+    if (quitApp) {
+      isForceQuit = true;
+      app.quit();
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+      isForceWindowClose = true;
+      mainWindow.close();
+    }
+  } finally {
+    closeConfirmationInProgress = false;
+  }
+}
+
+app.on('before-quit', (event) => {
+  if (isForceQuit) return;
+  event.preventDefault();
+  void requestApplicationClose(true);
+});
+
+app.on('quit', () => {
+  if (!isForceQuit) {
     isForceQuit = true;
-    app.quit();
   }
 });
 

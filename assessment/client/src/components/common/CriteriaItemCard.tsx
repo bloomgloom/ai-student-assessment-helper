@@ -1,5 +1,6 @@
 import { DragEvent, ReactNode } from 'react';
 import { GripVertical, Trash2 } from 'lucide-react';
+import { StableTextarea } from './StableTextarea';
 
 interface CriteriaItemCardProps {
   checked: boolean;
@@ -124,7 +125,7 @@ export function CriteriaItemCard({
         {showInstruction && (
           <div className="flex-1 flex flex-col gap-1">
             <span className="text-xs text-gray-500 font-medium">지시 사항</span>
-            <textarea
+            <StableTextarea
               className="textarea w-full text-sm leading-relaxed resize-y"
               style={{ minHeight: '90px' }}
               placeholder={instructionPlaceholder}
@@ -136,7 +137,7 @@ export function CriteriaItemCard({
         )}
         <div className="flex-1 flex flex-col gap-1">
           <span className="text-xs text-gray-500 font-medium">{resultLabel}</span>
-          <textarea
+          <StableTextarea
             className="textarea w-full text-sm leading-relaxed resize-y"
             style={{ minHeight: '90px' }}
             placeholder={resultPlaceholder}

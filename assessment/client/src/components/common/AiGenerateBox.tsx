@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
+import { StableTextarea } from './StableTextarea';
 
 interface AiGenerateBoxProps {
   label: string;
@@ -32,7 +33,7 @@ export function AiGenerateBox({
         <span className="text-sm font-medium text-gray-600">{label}</span>
       </div>
       <div className="flex gap-3">
-        <textarea
+        <StableTextarea
           className={`textarea flex-1 text-sm leading-relaxed resize-y ${textareaClassName}`}
           style={{ minHeight: '72px' }}
           placeholder={placeholder}
