@@ -7,7 +7,7 @@ import * as cheerio from 'cheerio';
 import { queryOne, queryAll } from '../services/db';
 import { assignmentExecute, assignmentQueryAll, assignmentQueryOne } from '../services/assignmentDb';
 import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
-import { UPLOADS_DIR, ensureDir, resolveStoredPath, toStoredPath } from '../services/storage';
+import { UPLOADS_DIR, ensureDir, moveFileToTrash, resolveStoredPath, restoreTrashedFile, toStoredPath } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 
 const router = Router();
@@ -492,12 +492,13 @@ router.delete('/:id', async (req: Request, res: Response) => {
     'SELECT filepath FROM assignment_artifacts WHERE id=?', [req.params.id]
   );
   if (!artifact) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+  let trashPath = '';
   try {
-    const filepath = resolveStoredPath(artifact.filepath);
-    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+    trashPath = moveFileToTrash(artifact.filepath, 'teacher-deleted-artifacts');
     await assignmentExecute('DELETE FROM assignment_artifacts WHERE id=?', [req.params.id]);
     res.json({ ok: true });
   } catch (e: unknown) {
+    try { restoreTrashedFile(trashPath, artifact.filepath); } catch {}
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });

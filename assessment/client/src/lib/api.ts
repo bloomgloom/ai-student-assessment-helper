@@ -255,8 +255,13 @@ export const assignmentConfigsApi = {
   },
   deleteResource: (id: number) => api.delete(`/assignment-configs/resources/${id}`),
   resourceFileUrl: (id: number) => `/api/assignment-configs/resources/${id}/file`,
+  getHistory: (params: { year: number; semester: number; grade: number; subject: string; domainName: string }) =>
+    api.get('/assignment-configs/history', { params: { ...params, t: Date.now() } }),
+  getHistoryDetail: (runId: number, params: { year: number; semester: number; grade: number; subject: string; domainName: string }) =>
+    api.get(`/assignment-configs/history/${runId}`, { params: { ...params, t: Date.now() } }),
   getSubmissions: (params: { year: number; semester: number; grade: number; subject: string; domainName: string; room?: string }) =>
     api.get('/assignment-configs/submissions', { params: { ...params, t: Date.now() } }),
+  deleteSubmission: (id: number) => api.delete(`/assignment-configs/submissions/${id}`),
   submissionFileUrl: (id: number) => `/api/assignment-configs/submissions/${id}/file`,
 };
 

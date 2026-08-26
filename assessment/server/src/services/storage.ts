@@ -12,6 +12,7 @@ export const STORAGE_ROOT = resolveStorageRoot();
 export const DATA_DIR = path.join(STORAGE_ROOT, 'data');
 export const UPLOADS_DIR = path.join(STORAGE_ROOT, 'uploads');
 export const LOG_DIR = path.join(STORAGE_ROOT, 'logs');
+export const TRASH_DIR = path.join(STORAGE_ROOT, 'trash');
 export const LEGACY_UPLOADS_DIR = path.join(PROJECT_ROOT, 'server', 'uploads');
 export const STORAGE_CONFIG_SOURCE = process.env.APP_STORAGE_DIR ? 'env' : 'default';
 
@@ -47,6 +48,28 @@ export function resolveStoredPath(filepath: string): string {
     return path.join(UPLOADS_DIR, path.resolve(filepath).slice(markerIndex + marker.length));
   }
   return filepath;
+}
+
+export function moveFileToTrash(filepath: string, category: string): string {
+  const source = resolveStoredPath(filepath);
+  if (!source || !fs.existsSync(source)) return '';
+  const day = new Date().toLocaleDateString('sv-SE');
+  const safeCategory = category.replace(/[^a-z0-9_-]/gi, '_') || 'files';
+  const targetDir = path.join(TRASH_DIR, day, safeCategory);
+  ensureDir(targetDir);
+  const originalName = path.basename(source);
+  let target = path.join(targetDir, `${Date.now()}_${originalName}`);
+  let suffix = 1;
+  while (fs.existsSync(target)) target = path.join(targetDir, `${Date.now()}_${suffix++}_${originalName}`);
+  fs.renameSync(source, target);
+  return target;
+}
+
+export function restoreTrashedFile(trashPath: string, originalFilepath: string): void {
+  if (!trashPath || !fs.existsSync(trashPath)) return;
+  const target = resolveStoredPath(originalFilepath);
+  ensureDir(path.dirname(target));
+  fs.renameSync(trashPath, target);
 }
 
 export function getStorageSettings() {

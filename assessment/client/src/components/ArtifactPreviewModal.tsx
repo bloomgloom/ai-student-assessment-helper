@@ -74,7 +74,7 @@ export default function ArtifactPreviewModal({ artifact, onClose }: ArtifactPrev
   const fileUrl = artifactFileUrl(artifact);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="flex h-[85vh] w-[85vw] flex-col rounded-lg bg-white shadow-xl">
+      <div className="flex h-[85vh] w-[85vw] min-w-0 flex-col overflow-hidden rounded-lg bg-white shadow-xl">
         <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
           <div className="min-w-0 max-w-[60%]">
             <div className="truncate text-sm font-medium text-gray-800">{artifact.filename}</div>
@@ -138,11 +138,11 @@ export function ArtifactPreviewStandalonePage() {
   return (
     <div className="flex h-screen flex-col bg-white">
       <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
-        <span className="truncate text-sm font-medium text-gray-800">{artifact.filename}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800">{artifact.filename}</span>
         <button
           type="button"
           onClick={() => downloadUrl(fileUrl, artifact.filename).catch(error => alert(error.message))}
-          className="btn-secondary inline-flex items-center gap-1 py-1 text-xs"
+          className="btn-secondary ml-2 inline-flex shrink-0 items-center gap-1 py-1 text-xs"
         >
           <Download size={13} /> 다운로드
         </button>

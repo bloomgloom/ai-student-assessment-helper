@@ -657,6 +657,8 @@ router.post('/upload/comments', commentsUpload.single('file'), async (req: Reque
     classId = r;
   }
 
+  await syncAssignmentSnapshotsForAssessmentClass(classId);
+
   res.json({
     classId,
     year, semester, grade, subject, room,

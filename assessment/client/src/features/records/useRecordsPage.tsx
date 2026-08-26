@@ -192,7 +192,11 @@ export function useRecordsPage() {
   }, []);
 
   const classClaudeBatchJobs = useMemo(
-    () => selectedClass ? claudeBatchJobs.filter((job) => job.classId === selectedClass.id) : [],
+    () => selectedClass
+      ? claudeBatchJobs
+        .filter((job) => job.classId === selectedClass.id)
+        .sort((a, b) => a.startedAt - b.startedAt)
+      : [],
     [claudeBatchJobs, selectedClass]
   );
 
@@ -271,7 +275,7 @@ export function useRecordsPage() {
 
   const renderRowResizeHandle = (studentId: number) => (
     <div
-      className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-row-resize bg-transparent hover:bg-blue-400"
+      className="records-table-row-resize-handle absolute inset-x-0 bottom-0 z-10 cursor-row-resize bg-transparent"
       onMouseDown={e => handleRowResizeStart(e, studentId)}
       onDoubleClick={e => handleRowAutoFit(e, studentId)}
       title="드래그하여 행 높이 조절 · 더블클릭하여 이 셀 내용에 맞춤"
@@ -280,8 +284,9 @@ export function useRecordsPage() {
 
   const renderColumnResizeHandle = (key: string, defW: number) => (
     <div
-      className="absolute bottom-0 right-0 top-0 z-10 w-1 cursor-col-resize bg-transparent hover:bg-blue-400"
+      className="records-table-column-resize-handle absolute bottom-0 right-0 top-0 z-10 cursor-col-resize bg-transparent"
       onMouseDown={e => handleResizeStart(e, key, defW)}
+      title="드래그하여 열 너비 조절"
     />
   );
 
@@ -342,7 +347,7 @@ export function useRecordsPage() {
     }
   };
 
-  const countTextBytes = (text: string) => new TextEncoder().encode(text).length;
+  const countTextBytes = (text: string) => new TextEncoder().encode(text).length + text.split('\n').length - 1;
 
   const refreshSpellcheckDiff = (studentId: number, originalText?: string, correctedText?: string) => {
     const source = originalText
@@ -1635,9 +1640,10 @@ export function useRecordsPage() {
             {students.length === 0 ? (
               <div className="py-20 text-center text-gray-400">학생 명단이 없습니다.</div>
             ) : (
+              <div className="w-max pr-32">
               <table
                 ref={tableRef}
-                className="text-sm text-left border-collapse"
+                className="records-table text-sm text-left border-collapse"
                 style={{ tableLayout: 'fixed', width: tableTotalWidth, minWidth: tableTotalWidth }}
               >
                 <colgroup>
@@ -1655,28 +1661,28 @@ export function useRecordsPage() {
                         <input type="checkbox" className="h-4 w-4 rounded border-gray-300"
                           checked={allStudentsSelected} onChange={toggleAllStudents} title="전체 선택/해제" />
                       </div>
-                      <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                      <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                         onMouseDown={e => handleResizeStart(e, '_chk', FROZEN_DEFAULT_WIDTHS.chk)} />
                     </th>
                     {/* Frozen: 반 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
                       style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
                       반
-                      <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                      <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                         onMouseDown={e => handleResizeStart(e, '_cls', FROZEN_DEFAULT_WIDTHS.cls)} />
                     </th>
                     {/* Frozen: 번호 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
                       style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
                       번호
-                      <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                      <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                         onMouseDown={e => handleResizeStart(e, '_num', FROZEN_DEFAULT_WIDTHS.num)} />
                     </th>
                     {/* Frozen: 이름 */}
                     <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
                       style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
                       이름
-                      <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                      <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                         onMouseDown={e => handleResizeStart(e, '_name', FROZEN_DEFAULT_WIDTHS.name)} />
                     </th>
 
@@ -1709,7 +1715,7 @@ export function useRecordsPage() {
                       <th rowSpan={2} className="relative px-2 py-3 font-semibold text-gray-700 border-b border-r bg-green-50/60 text-center select-none"
                         style={{ width: grandTotalWidth, minWidth: grandTotalWidth }}>
                         합계
-                        <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                        <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                           onMouseDown={e => handleResizeStart(e, '_grand_total', 70)} />
                       </th>
                     )}
@@ -1720,19 +1726,19 @@ export function useRecordsPage() {
                         <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 text-center select-none"
                           style={{ width: compWidth, minWidth: compWidth }}>
                           과목별세부능력및특기사항
-                          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                          <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                             onMouseDown={e => handleResizeStart(e, '_comp', 320)} />
                         </th>
                         <th rowSpan={2} className="relative px-2 py-3 font-semibold text-gray-700 border-b border-r bg-blue-50/50 text-center select-none"
                           style={{ width: compCountWidth, minWidth: compCountWidth }}>
                           글자수
-                          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                          <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                             onMouseDown={e => handleResizeStart(e, '_comp_count', 74)} />
                         </th>
                         <th rowSpan={2} className="relative px-3 py-3 font-semibold text-gray-700 border-b bg-blue-50/50 text-center select-none"
                           style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
                           맞춤법 검사 결과
-                          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                          <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                             onMouseDown={e => handleResizeStart(e, '_comp_spell', 320)} />
                         </th>
                       </>
@@ -1750,7 +1756,7 @@ export function useRecordsPage() {
                             className="relative px-2 py-1.5 font-medium text-gray-600 border-b border-r text-center select-none"
                             style={{ width: w, minWidth: w }}>
                             {c.label}
-                            <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 bg-transparent z-10"
+                            <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
                               onMouseDown={e => handleResizeStart(e, wk, defW)} />
                           </th>
                         );
@@ -2069,6 +2075,7 @@ export function useRecordsPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
           </>

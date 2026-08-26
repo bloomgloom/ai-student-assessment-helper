@@ -82,6 +82,42 @@
   .records-table-row:hover > td {
     @apply bg-blue-50;
   }
+  .records-table-column-resize-handle {
+    width: 8px;
+  }
+  .records-table-column-resize-handle::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    right: 0;
+    width: 1px;
+    background-color: transparent;
+    pointer-events: none;
+  }
+  .records-table-column-resize-handle:hover::after {
+    @apply bg-blue-400;
+  }
+  .records-table-row-resize-handle {
+    height: 8px;
+  }
+  .records-table-row-resize-handle::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 1px;
+    background-color: transparent;
+    pointer-events: none;
+  }
+  .records-table-row-resize-handle:hover::after {
+    @apply bg-blue-400;
+  }
+  .records-table tbody tr > td:last-child > .records-table-column-resize-handle {
+    width: 12px;
+  }
+  .records-table tbody tr:last-child > td > .records-table-row-resize-handle {
+    height: 12px;
+  }
   .prose-preview h1 {
     @apply mb-3 text-xl font-bold text-gray-900;
   }

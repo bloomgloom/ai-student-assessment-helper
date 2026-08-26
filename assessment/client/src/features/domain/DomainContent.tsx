@@ -7,7 +7,7 @@ import { StableTextarea } from '../../components/common/StableTextarea';
 import { assignmentConfigsApi } from '../../lib/api';
 import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
 import { DomainCriteriaPanel, DomainCriteriaPromptView, DomainCriteriaSplit } from './DomainCriteriaPanel';
-import { AiChatMessage, AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
+import { AiChatMessage, AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, AssignmentRunDetail, AssignmentRunStudent, AssignmentRunSubmission, AssignmentRunSummary, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
 
 const ArtifactPreviewModal = lazy(() => import('../../components/ArtifactPreviewModal'));
 
@@ -128,6 +128,27 @@ function formatBytes(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatRunTime(value: string, compact = false) {
+  if (!value) return '-';
+  const normalized = value.replace('T', ' ').slice(0, 19);
+  return compact ? normalized.slice(5, 16) : normalized;
+}
+
+function runSubmissionLabel(submission?: AssignmentRunSubmission) {
+  if (!submission) return '미제출';
+  if (submission.status === 'accepted') return '파일 제출';
+  if (submission.status === 'no_file') return '파일 없이 실시';
+  if (submission.status === 'rejected') return '제출 실패';
+  return submission.status || '미제출';
+}
+
+function submissionsForStudent(detail: AssignmentRunDetail, student: AssignmentRunStudent) {
+  return detail.submissions.filter(submission =>
+    (submission.assignment_student_id != null && Number(submission.assignment_student_id) === Number(student.assignment_student_id))
+    || (Number(submission.student_num) === Number(student.student_num) && submission.name === student.name)
+  );
 }
 
 function parseExtensionList(value: string) {
@@ -297,8 +318,58 @@ export function DomainContent({
   const [guideOriginal, setGuideOriginal] = useState('');
   const [extensionDraft, setExtensionDraft] = useState('');
   const [viewingResource, setViewingResource] = useState<AssignmentResource | null>(null);
+  const [assignmentHistory, setAssignmentHistory] = useState<AssignmentRunSummary[]>([]);
+  const [assignmentHistoryLoading, setAssignmentHistoryLoading] = useState(false);
+  const [selectedRunSummary, setSelectedRunSummary] = useState<AssignmentRunSummary | null>(null);
+  const [selectedRunDetail, setSelectedRunDetail] = useState<AssignmentRunDetail | null>(null);
+  const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [draggedItem, setDraggedItem] = useState<{ kind: 'scoring' | 'records'; index: number } | null>(null);
   const [dragOverItem, setDragOverItem] = useState<{ kind: 'scoring' | 'records'; index: number } | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== 'assignment' || !selectedSubject || !selectedDomain) {
+      setAssignmentHistory([]);
+      return;
+    }
+    let cancelled = false;
+    setAssignmentHistoryLoading(true);
+    assignmentConfigsApi.getHistory({
+      year: selectedSubject.year,
+      semester: selectedSubject.semester,
+      grade: selectedSubject.grade,
+      subject: selectedSubject.subject,
+      domainName: selectedDomain,
+    }).then(response => {
+      if (!cancelled) setAssignmentHistory(response.data || []);
+    }).catch(() => {
+      if (!cancelled) setAssignmentHistory([]);
+    }).finally(() => {
+      if (!cancelled) setAssignmentHistoryLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [activeTab, selectedSubject, selectedDomain, assignmentConfig?.id]);
+
+  const openRunDetail = async (summary: AssignmentRunSummary) => {
+    if (!selectedSubject || !selectedDomain) return;
+    setSelectedRunSummary(summary);
+    setSelectedRunDetail(null);
+    setRunDetailLoading(true);
+    try {
+      const response = await assignmentConfigsApi.getHistoryDetail(summary.id, {
+        year: selectedSubject.year,
+        semester: selectedSubject.semester,
+        grade: selectedSubject.grade,
+        subject: selectedSubject.subject,
+        domainName: selectedDomain,
+      });
+      setSelectedRunDetail(response.data);
+    } catch (error: any) {
+      setSelectedRunSummary(null);
+      alert(`실시 기록을 불러오지 못했습니다: ${error?.response?.data?.error || error.message || String(error)}`);
+    } finally {
+      setRunDetailLoading(false);
+    }
+  };
 
   const startItemDrag = (kind: 'scoring' | 'records', index: number, event: DragEvent<HTMLDivElement>) => {
     event.dataTransfer.effectAllowed = 'move';
@@ -1045,8 +1116,149 @@ export function DomainContent({
                 </div>
               </div>
 
+              <div className="rounded-lg border border-gray-200 bg-white p-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-gray-800">실시 기록</h3>
+                  <span className="text-[11px] text-gray-400">{assignmentHistory.length}회</span>
+                </div>
+                {assignmentHistoryLoading ? (
+                  <div className="flex justify-center py-8 text-gray-400"><Loader2 size={18} className="animate-spin" /></div>
+                ) : assignmentHistory.length > 0 ? (
+                  <div className="max-h-72 space-y-1.5 overflow-auto pr-1">
+                    {assignmentHistory.map(run => (
+                      <button
+                        key={run.id}
+                        type="button"
+                        className="block w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-left hover:border-blue-300 hover:bg-blue-50"
+                        onClick={() => openRunDetail(run)}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-xs font-semibold text-gray-800">{run.room}</span>
+                          <span className={`shrink-0 text-[10px] font-semibold ${Number(run.is_open) ? 'text-emerald-600' : 'text-gray-400'}`}>
+                            {Number(run.is_open) ? '진행 중' : '종료'}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-500">
+                          <span>{formatRunTime(run.started_at, true)}</span>
+                          <span className="shrink-0">대상 {run.target_count} · 제출 {run.submitted_student_count} · 파일 {run.accepted_file_count}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-gray-200 py-7 text-center text-xs text-gray-400">
+                    아직 실시 기록이 없습니다.
+                  </div>
+                )}
+              </div>
+
             </div>
           </div>
+
+          {selectedRunSummary && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
+              onClick={() => { setSelectedRunSummary(null); setSelectedRunDetail(null); }}
+            >
+              <div
+                className="flex h-[84vh] w-[min(1120px,calc(100vw-3rem))] flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+                onClick={event => event.stopPropagation()}
+              >
+                <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-5 py-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">실시 상세 기록</h3>
+                    <p className="mt-0.5 text-xs text-gray-500">{selectedRunSummary.room} · {formatRunTime(selectedRunSummary.started_at)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100"
+                    onClick={() => { setSelectedRunSummary(null); setSelectedRunDetail(null); }}
+                    title="닫기"
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+
+                {runDetailLoading || !selectedRunDetail ? (
+                  <div className="flex flex-1 items-center justify-center text-gray-400"><Loader2 size={22} className="animate-spin" /></div>
+                ) : (
+                  <div className="min-h-0 flex-1 overflow-auto p-5">
+                    <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+                      {[
+                        ['상태', Number(selectedRunSummary.is_open) ? '진행 중' : '종료'],
+                        ['대상', `${selectedRunSummary.target_count}명`],
+                        ['결시', `${selectedRunSummary.absent_count}명`],
+                        ['제출 학생', `${selectedRunSummary.submitted_student_count}명`],
+                        ['파일', `${selectedRunSummary.accepted_file_count}개`],
+                        ['제출 시도', `${selectedRunSummary.submission_event_count}회`],
+                        ['교사 확인', `${selectedRunSummary.checked_student_count}명`],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                          <div className="text-[10px] text-gray-400">{label}</div>
+                          <div className="mt-0.5 text-xs font-semibold text-gray-800">{value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mb-5">
+                      <h4 className="mb-2 text-xs font-semibold text-gray-700">대상 학생</h4>
+                      <div className="overflow-hidden rounded-md border border-gray-200">
+                        <table className="w-full text-xs">
+                          <thead className="bg-gray-50 text-gray-500">
+                            <tr><th className="px-3 py-2 text-left">학생</th><th className="px-3 py-2 text-left">상태</th><th className="px-3 py-2 text-left">최근 제출</th><th className="px-3 py-2 text-left">파일</th><th className="px-3 py-2 text-center">제출 횟수</th><th className="px-3 py-2 text-center">확인</th></tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {selectedRunDetail.students.map(student => {
+                              const submissions = submissionsForStudent(selectedRunDetail, student);
+                              const latest = submissions[0];
+                              const acceptedFiles = submissions.filter(item => item.status === 'accepted').length;
+                              return (
+                                <tr key={student.id} className={Number(student.is_absent) ? 'bg-red-50/50' : ''}>
+                                  <td className="px-3 py-2 whitespace-nowrap">{student.class_num}반 {student.seat_num}번 {student.name}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">{Number(student.is_absent) ? <span className="text-red-500">결시</span> : runSubmissionLabel(latest)}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-gray-500">{latest ? formatRunTime(latest.submitted_at) : '-'}</td>
+                                  <td className="max-w-56 truncate px-3 py-2 text-gray-600" title={latest?.original_filename || ''}>{latest?.status === 'accepted' ? latest.original_filename : '-'}</td>
+                                  <td className="px-3 py-2 text-center">{submissions.length}{acceptedFiles > 1 ? ` (파일 ${acceptedFiles})` : ''}</td>
+                                  <td className="px-3 py-2 text-center">{latest && Number(latest.teacher_checked) ? '확인' : '-'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 className="mb-2 text-xs font-semibold text-gray-700">전체 제출 이력</h4>
+                      {selectedRunDetail.submissions.length > 0 ? (
+                        <div className="overflow-hidden rounded-md border border-gray-200">
+                          <table className="w-full text-xs">
+                            <thead className="bg-gray-50 text-gray-500">
+                              <tr><th className="px-3 py-2 text-left">시간</th><th className="px-3 py-2 text-left">학생</th><th className="px-3 py-2 text-left">결과</th><th className="px-3 py-2 text-left">파일</th><th className="px-3 py-2 text-left">IP</th><th className="px-3 py-2 text-left">비고</th></tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {selectedRunDetail.submissions.map(submission => (
+                                <tr key={submission.id}>
+                                  <td className="px-3 py-2 whitespace-nowrap text-gray-500">{formatRunTime(submission.submitted_at)}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">{submission.class_num}반 {submission.seat_num}번 {submission.name}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">{runSubmissionLabel(submission)}</td>
+                                  <td className="max-w-56 truncate px-3 py-2" title={submission.original_filename}>{submission.status === 'accepted' ? submission.original_filename : '-'}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-gray-500">{submission.ip_address || '-'}</td>
+                                  <td className="max-w-64 truncate px-3 py-2 text-gray-500" title={submission.reject_reason || ''}>{submission.reject_reason || (Number(submission.teacher_checked) ? '교사 확인' : '-')}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="rounded-md border border-dashed border-gray-200 py-6 text-center text-xs text-gray-400">제출 이력이 없습니다.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {guideEditorOpen && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">

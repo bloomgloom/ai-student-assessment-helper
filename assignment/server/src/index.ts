@@ -5,10 +5,11 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import os from 'os';
+import { execFileSync } from 'child_process';
 import MarkdownIt from 'markdown-it';
-import { execute, initDb, queryAll, queryOne } from './db';
-import { decodeUploadFilename } from './filename';
-import { LOGS_DIR, resolveStoredPath, SUBMISSIONS_DIR, TEMP_DIR, toStoredPath } from './storage';
+import { execute, initDb, queryAll, queryOne, transaction } from './db';
+import { decodeUploadFilename, studentDownloadFilename } from './filename';
+import { LOGS_DIR, moveFileToTrash, resolveStoredPath, restoreTrashedFile, SUBMISSIONS_DIR, TEMP_DIR, toStoredPath } from './storage';
 
 const app = express();
 const teacherApp = express();
@@ -18,6 +19,7 @@ const TEACHER_PORT = Number(process.env.TEACHER_PORT || ADMIN_PORT + 1);
 const STUDENT_PORT = Number(process.env.STUDENT_PORT || TEACHER_PORT + 1);
 const ADMIN_HOST = '127.0.0.1';
 const PUBLIC_HOST = process.env.HOST || '0.0.0.0';
+const ASSESSMENT_CLIENT_DIST = path.resolve(__dirname, '../../../assessment/client/dist');
 const mdRenderer = new MarkdownIt({
   html: true,
   linkify: true,
@@ -37,14 +39,97 @@ studentApp.use(cors());
 studentApp.use(express.json());
 studentApp.use(express.urlencoded({ extended: true }));
 
+// 평가 관리에서 사용하는 산출물 뷰어 번들을 평가 실시 화면에서도 그대로
+// 띄운다. 루트 정적 서빙은 각 앱의 현황판과 충돌하므로 Vite 자산만 공유한다.
+app.use('/assets', express.static(path.join(ASSESSMENT_CLIENT_DIST, 'assets')));
+teacherApp.use('/assets', express.static(path.join(ASSESSMENT_CLIENT_DIST, 'assets')));
+
+const virtualInterface = /^(?:bridge\d*|utun\d*|awdl\d*|llw\d*|vnic\d*|vmnet\d*|vboxnet\d*|docker\d*|br-|virbr\d*|tun\d*|tap\d*|ppp\d*)|tailscale|parallels|hyper-v|vethernet|vmware|virtualbox|wsl/i;
+const physicalInterface = /^(?:en\d+|eth\d+|wlan\d+|wl\w+)$|wi-?fi|ethernet/i;
+
+function macNetworkInterfaceOrder(): string[] {
+  if (process.platform !== 'darwin') return [];
+  const ordered: string[] = [];
+
+  try {
+    const route = execFileSync('/sbin/route', ['-n', 'get', 'default'], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const defaultInterface = route.match(/^\s*interface:\s*(\S+)/m)?.[1];
+    if (defaultInterface && !virtualInterface.test(defaultInterface)) ordered.push(defaultInterface);
+  } catch {
+    // 기본 경로가 없는 오프라인 LAN에서는 서비스 순서만 사용합니다.
+  }
+
+  try {
+    const services = execFileSync('/usr/sbin/networksetup', ['-listnetworkserviceorder'], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let disabled = false;
+    for (const line of services.split(/\r?\n/)) {
+      if (/^\((?:\d+|\*)\)\s/.test(line)) disabled = line.startsWith('(*)');
+      const interfaceName = line.match(/\bDevice:\s*([^)]+)\)/)?.[1]?.trim();
+      if (interfaceName && !disabled && !virtualInterface.test(interfaceName)) ordered.push(interfaceName);
+    }
+  } catch {
+    // networksetup을 사용할 수 없으면 일반 물리 인터페이스 순서로 대체합니다.
+  }
+
+  return [...new Set(ordered)];
+}
+
+function windowsNetworkAddressOrder(): string[] {
+  if (process.platform !== 'win32') return [];
+  try {
+    const routes = execFileSync('route.exe', ['print', '-4', '0.0.0.0'], {
+      encoding: 'utf8',
+      timeout: 1000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const defaults: Array<{ address: string; metric: number }> = [];
+    for (const line of routes.split(/\r?\n/)) {
+      const match = line.match(/^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+\S+\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d+)\s*$/);
+      if (match) defaults.push({ address: match[1], metric: Number(match[2]) });
+    }
+    return [...new Set(defaults.sort((a, b) => a.metric - b.metric).map(route => route.address))];
+  } catch {
+    return [];
+  }
+}
+
 function localIps() {
-  const results: string[] = [];
-  for (const infos of Object.values(os.networkInterfaces())) {
+  const results: Array<{ address: string; interfaceName: string }> = [];
+  for (const [interfaceName, infos] of Object.entries(os.networkInterfaces())) {
     for (const info of infos || []) {
-      if (info.family === 'IPv4' && !info.internal) results.push(info.address);
+      if (info.family === 'IPv4' && !info.internal) results.push({ address: info.address, interfaceName });
     }
   }
-  return results;
+
+  // Parallels, Docker, VPNs, etc. expose non-internal IPv4 addresses too. They
+  // often precede the actual LAN adapter in os.networkInterfaces(), so using
+  // the first result can show an address that students cannot reach.
+  const preferred = results.filter(({ interfaceName }) => !virtualInterface.test(interfaceName));
+  const macOrder = macNetworkInterfaceOrder();
+  const macPriority = new Map(macOrder.map((interfaceName, index) => [interfaceName, index]));
+  const windowsOrder = windowsNetworkAddressOrder();
+  const windowsPriority = new Map(windowsOrder.map((address, index) => [address, index]));
+
+  return preferred
+    .sort((a, b) => {
+      const aWindowsPriority = windowsPriority.get(a.address) ?? Number.MAX_SAFE_INTEGER;
+      const bWindowsPriority = windowsPriority.get(b.address) ?? Number.MAX_SAFE_INTEGER;
+      if (aWindowsPriority !== bWindowsPriority) return aWindowsPriority - bWindowsPriority;
+      const aMacPriority = macPriority.get(a.interfaceName) ?? Number.MAX_SAFE_INTEGER;
+      const bMacPriority = macPriority.get(b.interfaceName) ?? Number.MAX_SAFE_INTEGER;
+      if (aMacPriority !== bMacPriority) return aMacPriority - bMacPriority;
+      return Number(!physicalInterface.test(a.interfaceName)) - Number(!physicalInterface.test(b.interfaceName));
+    })
+    .map(({ address }) => address);
 }
 
 function clientIp(req: any) {
@@ -193,12 +278,12 @@ button,.button{height:44px;border:1px solid #2563eb;border-radius:6px;background
 button.secondary,.button.secondary{border-color:#d1d5db;background:#fff;color:#374151}
 button:disabled,.button.disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
 .resource-list{display:grid;gap:10px}.resource-card{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #dbe2ea;background:#f8fafc;border-radius:8px;padding:12px 14px;text-decoration:none;color:#111827}.resource-card:hover{border-color:#2563eb;background:#eff6ff}.resource-name{font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.resource-action{flex:0 0 auto;color:#2563eb;font-size:14px;font-weight:700}
-.file-list{display:grid;gap:10px;margin:10px 0}.upload-rule{display:grid;gap:8px;border:1px solid #dbe2ea;background:#f8fafc;border-radius:8px;padding:12px}.file-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid #e5e7eb;background:#fff;border-radius:6px;padding:10px 12px;font-size:16px}.file-row button{height:30px;border-color:#fecaca;background:#fff;color:#dc2626;padding:0 10px}.student-form{display:grid;gap:16px}.student-fields{display:grid;grid-template-columns:1fr;gap:12px}.full{grid-column:1/-1}.no-file-option{display:flex;align-items:center;gap:9px;margin:2px 0 0;padding:12px;border:1px solid #dbe2ea;border-radius:8px;background:#f8fafc;cursor:pointer}.no-file-option input{width:18px;height:18px;margin:0;flex:0 0 auto}.no-file-option span{font-size:16px;font-weight:700}.uploads-disabled{opacity:.45;pointer-events:none}
+.file-list{display:grid;gap:10px;margin:10px 0}.upload-rule{display:grid;gap:8px;border:1px solid #dbe2ea;background:#f8fafc;border-radius:8px;padding:12px}.file-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid #e5e7eb;background:#fff;border-radius:6px;padding:10px 12px;font-size:16px}.file-row button{height:30px;border-color:#fecaca;background:#fff;color:#dc2626;padding:0 10px}.student-form{display:grid;gap:16px}.student-info{grid-column:1/-1}.student-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.full{grid-column:1/-1}.no-file-option{display:flex;align-items:center;gap:9px;margin:2px 0 0;padding:12px;border:1px solid #dbe2ea;border-radius:8px;background:#f8fafc;cursor:pointer}.no-file-option input{width:18px;height:18px;margin:0;flex:0 0 auto}.no-file-option span{font-size:16px;font-weight:700}.uploads-disabled{opacity:.45;pointer-events:none}
 table{width:100%;border-collapse:collapse;background:#fff}
 th,td{border:1px solid #e5e7eb;padding:8px;text-align:left;font-size:13px}
 th{background:#f9fafb;color:#4b5563}
 .muted{color:#6b7280;font-size:15px}.danger{color:#dc2626}.ok{color:#15803d}.guide{line-height:1.75;font-size:16px}.guide p{font-size:16px}.guide h1{font-size:24px}.guide h2{font-size:20px}.guide h3{font-size:18px}.guide ul{padding-left:22px}.guide table{margin:14px 0}.guide th{font-weight:700}
-@media(max-width:900px){.grid,.student-layout,.admin-controls{grid-template-columns:1fr}main{padding:14px}header{padding:0 14px}}
+@media(max-width:900px){.grid,.student-layout,.admin-controls,.student-fields{grid-template-columns:1fr}main{padding:14px}header{padding:0 14px}}
 </style>
 </head>
 <body>${body}</body>
@@ -240,10 +325,11 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
   res.send(page(run.title || '수행평가 제출', `
 <header><strong>${escapeHtml(run.title || '수행평가 제출')}</strong><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '제출 가능' : '제출 마감'}</span></header>
 <main class="grid student-layout">
+ <section class="card student-info"><h2>학생 정보</h2><div class="student-fields"><div><label>학년</label><input value="${Number(run.grade)}" readonly></div><div><label>반</label><input form="f" name="classNum" type="number" min="1" step="1" required inputmode="numeric"></div><div><label>번호</label><input form="f" name="seatNum" type="number" min="1" step="1" required inputmode="numeric"></div><div><label>이름</label><input form="f" name="name" required autocomplete="name" placeholder="띄어쓰기 없이 입력"></div></div></section>
  <section class="card"><h2>안내</h2><div class="guide">${markdown(run.guide_md)}</div></section>
  <div class="stack">
-  <section class="card"><h2>다운로드 자료</h2><div class="resource-list">${resources.map(r=>`<a class="resource-card" href="/api/public/resources/${r.id}/file"><span class="resource-name">${escapeHtml(r.filename)}</span><span class="resource-action">다운로드</span></a>`).join('') || '<p class="muted">자료 없음</p>'}</div></section>
-  <section class="card"><h2>제출</h2><form id="f" class="student-form"><div class="student-fields"><div><label>반</label><input name="classNum" type="number" min="1" step="1" required inputmode="numeric"></div><div><label>번호</label><input name="seatNum" type="number" min="1" step="1" required inputmode="numeric"></div><div class="full"><label>이름</label><input name="name" required autocomplete="name" placeholder="띄어쓰기 없이 입력"></div></div><div id="fileSection"><label>파일</label><div id="uploadGroups" class="file-list"></div></div><label class="no-file-option"><input id="noFile" name="noFile" type="checkbox" value="1"><span>파일 미제출</span></label><button>제출</button></form><p id="msg"></p></section>
+  <section class="card"><h2>다운로드 자료</h2><div class="resource-list">${resources.map(r=>`<a class="resource-card" href="/api/public/resources/${r.id}/file" onclick="downloadResource(event,${r.id})"><span class="resource-name">${escapeHtml(r.filename)}</span><span class="resource-action">다운로드</span></a>`).join('') || '<p class="muted">자료 없음</p>'}</div></section>
+  <section class="card"><h2>제출</h2><form id="f" class="student-form"><div id="fileSection"><label>파일</label><div id="uploadGroups" class="file-list"></div></div><label class="no-file-option"><input id="noFile" name="noFile" type="checkbox" value="1"><span>파일 미제출</span></label><button>제출</button></form><p id="msg"></p></section>
  </div>
 </main>
 <script>
@@ -259,6 +345,7 @@ function renderFiles(){uploadGroups.innerHTML=rules.map((rule,groupIndex)=>{
 }).join('');}
 function addFiles(groupIndex,input){const rule=rules[groupIndex];for(const file of input.files||[]){if(selectedFiles[groupIndex].length<rule.max_files)selectedFiles[groupIndex].push(file);}input.value='';renderFiles();}
 function removeFile(groupIndex,fileIndex){selectedFiles[groupIndex].splice(fileIndex,1);renderFiles();}
+function downloadResource(event,id){event.preventDefault();if(!f.reportValidity())return;const query=new URLSearchParams({classNum:f.elements.classNum.value,seatNum:f.elements.seatNum.value,name:f.elements.name.value});location.href='/api/public/resources/'+id+'/file?'+query;}
 noFile.onchange=()=>{fileSection.classList.toggle('uploads-disabled',noFile.checked);};
 f.onsubmit=async(e)=>{e.preventDefault();const allFiles=selectedFiles.flat();if(!noFile.checked&&allFiles.length===0){msg.textContent='파일을 추가하거나 파일 미제출을 체크하세요.';msg.className='danger';return;}msg.textContent='제출 중...';const fd=new FormData(f);fd.delete('files');if(!noFile.checked)allFiles.forEach(file=>fd.append('files',file));const r=await fetch('${submitPath}',{method:'POST',body:fd});const data=await r.json().catch(()=>({error:'제출 실패'}));msg.textContent=r.ok?data.message:data.error;msg.className=r.ok?'ok':'danger';if(r.ok){f.reset();selectedFiles=rules.map(()=>[]);fileSection.classList.remove('uploads-disabled');renderFiles();}};
 renderFiles();
@@ -420,7 +507,7 @@ function rowHtml(s){
  const submitted=!!s.submission_id;
  const checked=Number(s.teacher_checked||0)===1;
  const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');
- const file=s.status==='accepted'?'<a target="_blank" href="/api/teacher/submissions/'+s.submission_id+'/file">'+s.original_filename+'</a>':(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');
+ const file=s.status==='accepted'?'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+s.original_filename+'</a>':(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');
  const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';
  const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleRunAbsent('+s.run_student_id+',this.checked)">';
  return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';
@@ -430,8 +517,20 @@ async function loadSubs(){ if(!currentRun){await loadClassRoster();return;} cons
 async function toggleCheck(id,checked){ await j('/api/teacher/submissions/'+id+'/check',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({checked})}); await loadSubs(); }
 async function toggleAbsent(id,absent){ await j('/api/admin/students/'+id+'/absent',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({absent})}); await loadSubs(); }
 async function toggleRunAbsent(id,absent){ await j('/api/admin/run-students/'+id+'/absent',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({absent})}); await loadSubs(); }
+async function startRun(body){
+ let response=await fetch('/api/admin/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ let data=await response.json().catch(()=>({error:'평가를 시작하지 못했습니다.'}));
+ if(response.status===409&&data.conflict==='existing_artifacts'){
+  const message='선택한 학생 중 기존 산출물이 있는 학생 '+data.affectedStudentCount+'명(파일 '+data.affectedArtifactCount+'개)이 포함되어 있습니다.\\n\\n계속하면 기존 산출물을 휴지통으로 이동하고 해당 학생들도 처음부터 다시 실시합니다. 계속하시겠습니까?';
+  if(!confirm(message))return false;
+  response=await fetch('/api/admin/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,replaceExistingArtifacts:true})});
+  data=await response.json().catch(()=>({error:'평가를 시작하지 못했습니다.'}));
+ }
+ if(!response.ok)throw new Error(data.error||'평가를 시작하지 못했습니다.');
+ return true;
+}
 yearSel.onchange=()=>{suppressRoster=false;refreshSemester(false);loadClasses();}; semesterSel.onchange=()=>{suppressRoster=false;refreshGrade(false);loadClasses();}; gradeSel.onchange=()=>{suppressRoster=false;refreshSubject(false);loadClasses();}; subjectSel.onchange=()=>{suppressRoster=false;refreshDomain(false);loadClasses();}; domainSel.onchange=()=>{suppressRoster=false;loadClasses();}; classSel.onchange=()=>{suppressRoster=false;loadClassRoster();}; sort.onchange=loadSubs; absentOnly.onchange=loadSubs;
-runToggle.onclick=async()=>{ if(currentRun){await j('/api/admin/runs/'+currentRun.id+'/end',{method:'POST'}); currentRun=null; suppressRoster=false; updateLinks(null); await loadClassRoster(); return;} const cfg=selectedConfig(); if(!cfg||!classSel.value)return; const studentIds=visibleRows(rosterRows).map(s=>Number(s.id)); if(!studentIds.length)return; suppressRoster=false; await j('/api/admin/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({configId:Number(cfg.id),assignmentClassId:Number(classSel.value),studentIds})}); await loadRuns(); };
+runToggle.onclick=async()=>{ try{if(currentRun){await j('/api/admin/runs/'+currentRun.id+'/end',{method:'POST'});currentRun=null;suppressRoster=false;updateLinks(null);await loadClassRoster();return;}const cfg=selectedConfig();if(!cfg||!classSel.value)return;const studentIds=visibleRows(rosterRows).map(s=>Number(s.id));if(!studentIds.length)return;suppressRoster=false;if(await startRun({configId:Number(cfg.id),assignmentClassId:Number(classSel.value),studentIds}))await loadRuns();}catch(error){alert(error.message||String(error));} };
 setInterval(loadSubs,3000); load();
 </script>`));
 });
@@ -480,7 +579,7 @@ teacherApp.get('/', async (req, res) => {
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json();}
 function renderSummary(rows){const total=rows.length;const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;const present=total-absent;const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&(s.status==='accepted'||s.status==='no_file')&&Number(s.teacher_checked||0)===1).length;const done=present>0&&checked>=present;summary.className='summary '+(done?'summary-done':'');summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');}
 function statusHtml(s){if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';if(s.status==='no_file')return '<span class="muted">파일 미제출</span>';return '<span class="ok">'+(Number(s.accepted_count||0)>1?'새로 제출됨':'제출됨')+'</span>';}
-function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');const file=s.status==='accepted'?'<a target="_blank" href="/api/submissions/'+s.submission_id+'/file">'+s.original_filename+'</a>':(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
+function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');const file=s.status==='accepted'?'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+s.original_filename+'</a>':(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
 async function load(){const rows=await j('/api/submissions?sort='+sort.value);renderSummary(rows);submissions.innerHTML='<table><thead><tr><th>결시 여부</th><th>제출 확인</th><th>제출 상태</th><th>제출 시간</th><th>반</th><th>번호</th><th>이름</th><th>IP</th><th>파일</th></tr></thead><tbody>'+rows.map(rowHtml).join('')+'</tbody></table>'}
 async function toggleCheck(id,checked){await j('/api/submissions/'+id+'/check',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({checked})});await load();}
 async function toggleAbsent(id,absent){await j('/api/students/'+id+'/absent',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({absent})});await load();}
@@ -529,7 +628,7 @@ app.get('/api/admin/classes/:id/students', requireLocal, async (req, res) => {
        ) + (
          SELECT COUNT(*) FROM assignment_submissions sub
          JOIN assignment_runs run ON run.id=sub.run_id
-         WHERE run.config_id=ac.config_id AND run.assignment_class_id=ac.id AND sub.status='accepted'
+         WHERE run.config_id=ac.config_id AND run.assignment_class_id=ac.id AND sub.status IN ('accepted', 'no_file')
            AND (sub.assignment_student_id=ast.id OR (sub.student_num=ast.student_num AND sub.name=ast.name))
        ) AS artifact_count
      FROM assignment_students ast
@@ -600,6 +699,64 @@ teacherApp.patch('/api/students/:id/absent', requireTeacherAuth, async (req, res
   await setRunStudentAbsent(req, res);
 });
 
+type ExistingArtifactFile = {
+  id: number;
+  filepath: string;
+  source: 'submission' | 'artifact';
+  assessmentStudentId: number;
+};
+
+async function existingArtifactFilesForStudents(configId: number, assignmentClassId: number, students: any[]) {
+  const config = await queryOne<{ domain_name: string }>('SELECT domain_name FROM assignment_configs WHERE id=?', [configId]);
+  if (!config) return { files: [] as ExistingArtifactFile[], affectedStudentIds: new Set<number>() };
+
+  const byAssignmentStudentId = new Map(students.map(student => [Number(student.id), student]));
+  const byIdentity = new Map(students.map(student => [`${Number(student.student_num)}\u0000${student.name}`, student]));
+  const submissions = await queryAll<any>(
+    `SELECT sub.id, sub.filepath, sub.assignment_student_id, sub.student_num, sub.name
+     FROM assignment_submissions sub
+     JOIN assignment_runs run ON run.id=sub.run_id
+     WHERE run.config_id=? AND run.assignment_class_id=? AND sub.status='accepted'`,
+    [configId, assignmentClassId]
+  );
+  const files: ExistingArtifactFile[] = [];
+  for (const submission of submissions) {
+    const student = byAssignmentStudentId.get(Number(submission.assignment_student_id))
+      || byIdentity.get(`${Number(submission.student_num)}\u0000${submission.name}`);
+    if (student) {
+      files.push({
+        id: Number(submission.id),
+        filepath: String(submission.filepath || ''),
+        source: 'submission',
+        assessmentStudentId: Number(student.assessment_student_id),
+      });
+    }
+  }
+
+  const assessmentStudentIds = [...new Set(students.map(student => Number(student.assessment_student_id)).filter(Boolean))];
+  if (assessmentStudentIds.length) {
+    const artifacts = await queryAll<any>(
+      `SELECT id, filepath, assessment_student_id
+       FROM assignment_artifacts
+       WHERE domain=? AND assessment_student_id IN (${assessmentStudentIds.map(() => '?').join(',')})`,
+      [config.domain_name, ...assessmentStudentIds]
+    );
+    for (const artifact of artifacts) {
+      files.push({
+        id: Number(artifact.id),
+        filepath: String(artifact.filepath || ''),
+        source: 'artifact',
+        assessmentStudentId: Number(artifact.assessment_student_id),
+      });
+    }
+  }
+
+  return {
+    files,
+    affectedStudentIds: new Set(files.map(file => file.assessmentStudentId)),
+  };
+}
+
 app.post('/api/admin/runs', requireLocal, async (req, res) => {
   const configId = Number(req.body.configId);
   const assignmentClassId = Number(req.body.assignmentClassId);
@@ -615,32 +772,79 @@ app.post('/api/admin/runs', requireLocal, async (req, res) => {
     [assignmentClassId, ...requestedStudentIds]
   );
   if (!students.length) return res.status(400).json({ error: '수행 대상 학생이 없습니다.' });
-  const share = runCode();
-  const viewer = runCode();
-  await execute('UPDATE assignment_runs SET is_open=0, ended_at=datetime(\'now\', \'localtime\') WHERE is_open=1');
-  await execute('UPDATE assignment_configs SET is_open=0');
-  const r = await execute('INSERT INTO assignment_runs(config_id, assignment_class_id, share_code, viewer_code, is_open) VALUES(?,?,?,?,1)', [configId, assignmentClassId, share, viewer]);
-  const runId = Number(r.lastInsertRowid);
-  for (const [index, student] of students.entries()) {
-    await execute(
-      `INSERT INTO assignment_run_students(
-         run_id, assignment_student_id, assessment_student_id, student_num, class_num, seat_num,
-         name, is_absent, absent_at, sort_order
-       ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-      [runId, student.id, student.assessment_student_id, student.student_num, student.class_num, student.seat_num, student.name, student.is_absent, student.absent_at || '', index]
-    );
+  const existing = await existingArtifactFilesForStudents(configId, assignmentClassId, students);
+  if (existing.files.length && req.body?.replaceExistingArtifacts !== true) {
+    return res.status(409).json({
+      conflict: 'existing_artifacts',
+      affectedStudentCount: existing.affectedStudentIds.size,
+      affectedArtifactCount: existing.files.length,
+    });
   }
-  await execute('UPDATE assignment_configs SET is_open=1, share_code=?, viewer_code=? WHERE id=?', [share, viewer, configId]);
-  const run = await queryOne<any>(
-    `SELECT run.id, run.started_at, cfg.year, cfg.semester, cfg.grade, cfg.subject, cfg.domain_name, ac.room
-     FROM assignment_runs run
-     JOIN assignment_configs cfg ON cfg.id=run.config_id
-     JOIN assignment_classes ac ON ac.id=run.assignment_class_id
-     WHERE run.id=?`,
-    [runId]
-  );
-  if (run) writeAssignmentLog('run_started', { ...run, target_student_count: students.length });
-  res.json({ id: runId, share_code: share, viewer_code: viewer, target_student_count: students.length });
+
+  const movedFiles: Array<{ trashPath: string; originalFilepath: string }> = [];
+  try {
+    for (const file of existing.files) {
+      const trashPath = moveFileToTrash(file.filepath, 'retest-replaced-artifacts');
+      if (trashPath) movedFiles.push({ trashPath, originalFilepath: file.filepath });
+    }
+
+    const share = runCode();
+    const viewer = runCode();
+    let runId = 0;
+    await transaction(async () => {
+      const submissionIds = existing.files.filter(file => file.source === 'submission').map(file => file.id);
+      const artifactIds = existing.files.filter(file => file.source === 'artifact').map(file => file.id);
+      if (submissionIds.length) {
+        await execute(
+          `DELETE FROM assignment_submissions WHERE id IN (${submissionIds.map(() => '?').join(',')})`,
+          submissionIds
+        );
+      }
+      if (artifactIds.length) {
+        await execute(
+          `DELETE FROM assignment_artifacts WHERE id IN (${artifactIds.map(() => '?').join(',')})`,
+          artifactIds
+        );
+      }
+      await execute('UPDATE assignment_runs SET is_open=0, ended_at=datetime(\'now\', \'localtime\') WHERE is_open=1');
+      await execute('UPDATE assignment_configs SET is_open=0');
+      const r = await execute('INSERT INTO assignment_runs(config_id, assignment_class_id, share_code, viewer_code, is_open) VALUES(?,?,?,?,1)', [configId, assignmentClassId, share, viewer]);
+      runId = Number(r.lastInsertRowid);
+      for (const [index, student] of students.entries()) {
+        await execute(
+          `INSERT INTO assignment_run_students(
+             run_id, assignment_student_id, assessment_student_id, student_num, class_num, seat_num,
+             name, is_absent, absent_at, sort_order
+           ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+          [runId, student.id, student.assessment_student_id, student.student_num, student.class_num, student.seat_num, student.name, student.is_absent, student.absent_at || '', index]
+        );
+      }
+      await execute('UPDATE assignment_configs SET is_open=1, share_code=?, viewer_code=? WHERE id=?', [share, viewer, configId]);
+    });
+
+    try {
+      const run = await queryOne<any>(
+        `SELECT run.id, run.started_at, cfg.year, cfg.semester, cfg.grade, cfg.subject, cfg.domain_name, ac.room
+         FROM assignment_runs run
+         JOIN assignment_configs cfg ON cfg.id=run.config_id
+         JOIN assignment_classes ac ON ac.id=run.assignment_class_id
+         WHERE run.id=?`,
+        [runId]
+      );
+      if (run) {
+        if (existing.files.length) writeAssignmentLog('artifacts_replaced_for_retest', { ...run, affected_student_count: existing.affectedStudentIds.size, artifact_count: existing.files.length });
+        writeAssignmentLog('run_started', { ...run, target_student_count: students.length });
+      }
+    } catch (logError) {
+      console.error('Failed to write assignment start log:', logError);
+    }
+    return res.json({ id: runId, share_code: share, viewer_code: viewer, target_student_count: students.length });
+  } catch (error) {
+    for (const moved of movedFiles.reverse()) {
+      try { restoreTrashedFile(moved.trashPath, moved.originalFilepath); } catch {}
+    }
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 app.post('/api/admin/runs/:id/end', requireLocal, async (req, res) => {
@@ -664,14 +868,28 @@ app.get('/api/admin/runs', requireLocal, async (_req, res) => {
   res.json(await queryAll(`SELECT run.*, cfg.title, ac.room FROM assignment_runs run JOIN assignment_configs cfg ON cfg.id=run.config_id JOIN assignment_classes ac ON ac.id=run.assignment_class_id ORDER BY run.started_at DESC`));
 });
 
-app.get('/api/public/resources/:id/file', async (req, res) => {
-  const resource = await queryOne<any>('SELECT filename, filepath, mime_type FROM assignment_resources WHERE id=?', [req.params.id]);
+async function sendStudentResource(req: any, res: any) {
+  const resource = await queryOne<any>(
+    `SELECT resource.filename, resource.filepath, resource.mime_type, config.grade
+     FROM assignment_resources resource
+     JOIN assignment_configs config ON config.id=resource.config_id
+     WHERE resource.id=?`,
+    [req.params.id]
+  );
   const filepath = resource ? resolveStoredPath(resource.filepath) : '';
   if (!resource || !fs.existsSync(filepath)) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+  const classNum = Number(req.query.classNum);
+  const seatNum = Number(req.query.seatNum);
+  const name = String(req.query.name || '').trim();
+  if (!Number.isInteger(classNum) || classNum < 1 || !Number.isInteger(seatNum) || seatNum < 1 || !name) {
+    return res.status(400).json({ error: '학년, 반, 번호, 이름을 먼저 입력하세요.' });
+  }
   res.setHeader('Content-Type', resource.mime_type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(resource.filename)}`);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(studentDownloadFilename(Number(resource.grade), classNum, seatNum, name, resource.filename))}`);
   res.sendFile(path.resolve(filepath));
-});
+}
+
+app.get('/api/public/resources/:id/file', sendStudentResource);
 
 function cleanupTempFiles(files: any[] = []) {
   for (const file of files) {
@@ -791,6 +1009,17 @@ async function handleSubmission(req: any, res: any, run: any) {
     cleanupTempFiles(files);
     return res.status(403).json({ error: '현재 수행 대상 학생이 아닙니다.' });
   }
+  const checkedSubmission = await queryOne(
+    `SELECT 1 FROM assignment_submissions
+     WHERE run_id=? AND teacher_checked=1
+       AND (assignment_student_id=? OR (student_num=? AND name=?))
+     LIMIT 1`,
+    [run.id, student.id, studentNum, name]
+  );
+  if (checkedSubmission) {
+    cleanupTempFiles(files);
+    return res.status(409).json({ error: '교사가 제출을 확인하여 추가로 제출할 수 없습니다.' });
+  }
   const noFile = ['1', 'true', 'on'].includes(String(req.body.noFile || '').toLowerCase());
   if (noFile) {
     cleanupTempFiles(files);
@@ -879,14 +1108,7 @@ studentApp.post('/api/public/submissions', upload.array('files', 20), async (req
   await handleSubmission(req, res, run);
 });
 
-studentApp.get('/api/public/resources/:id/file', async (req, res) => {
-  const resource = await queryOne<any>('SELECT filename, filepath, mime_type FROM assignment_resources WHERE id=?', [req.params.id]);
-  const filepath = resource ? resolveStoredPath(resource.filepath) : '';
-  if (!resource || !fs.existsSync(filepath)) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
-  res.setHeader('Content-Type', resource.mime_type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(resource.filename)}`);
-  res.sendFile(path.resolve(filepath));
-});
+studentApp.get('/api/public/resources/:id/file', sendStudentResource);
 
 app.post('/api/public/runs/:shareCode/submissions', upload.array('files', 20), async (req, res) => {
   const run = await runByShareCode(req.params.shareCode);
@@ -949,6 +1171,20 @@ async function sendSubmissionFile(req: any, res: any) {
 
 app.get('/api/teacher/submissions/:id/file', requireTeacherAuth, sendSubmissionFile);
 teacherApp.get('/api/submissions/:id/file', requireTeacherAuth, sendSubmissionFile);
+
+function sendArtifactViewer(_req: any, res: any) {
+  const indexPath = path.join(ASSESSMENT_CLIENT_DIST, 'index.html');
+  if (!fs.existsSync(indexPath)) {
+    return res.status(503).send('산출물 뷰어가 준비되지 않았습니다. 평가 관리 화면을 먼저 빌드하세요.');
+  }
+  res.sendFile(indexPath);
+}
+
+// 평가 관리 뷰어는 이 API 경로로 평가 실시 제출 파일을 읽는다.
+app.get('/api/assignment-configs/submissions/:id/file', requireLocal, sendSubmissionFile);
+teacherApp.get('/api/assignment-configs/submissions/:id/file', requireTeacherAuth, sendSubmissionFile);
+app.get('/file-preview/assignment/:id', requireLocal, sendArtifactViewer);
+teacherApp.get('/file-preview/assignment/:id', requireTeacherAuth, sendArtifactViewer);
 
 initDb().then(() => {
   app.listen(ADMIN_PORT, ADMIN_HOST, () => {

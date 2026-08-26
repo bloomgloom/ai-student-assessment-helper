@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { artifactsApi } from '../lib/api';
+import { artifactsApi, assignmentConfigsApi } from '../lib/api';
 import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../lib/desktopFiles';
 import { Upload, X, Loader2, Download } from 'lucide-react';
 
@@ -86,18 +86,26 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('파일을 삭제하시겠습니까?')) return;
-    await artifactsApi.delete(id);
-    if (viewing?.id === id) setViewing(null);
-    await loadArtifacts();
+  const handleDelete = async (artifact: Artifact) => {
+    const message = artifact.source === 'assignment'
+      ? '학생이 평가 실시에서 제출한 파일입니다. 제출 기록에서 제거하고 휴지통으로 이동하시겠습니까?'
+      : '파일을 삭제하고 휴지통으로 이동하시겠습니까?';
+    if (!confirm(message)) return;
+    try {
+      if (artifact.source === 'assignment') await assignmentConfigsApi.deleteSubmission(artifact.id);
+      else await artifactsApi.delete(artifact.id);
+      if (viewing?.id === artifact.id && viewing?.source === artifact.source) setViewing(null);
+      await loadArtifacts();
+    } catch (error: any) {
+      alert(`파일 삭제 실패: ${error?.response?.data?.error || error.message || String(error)}`);
+    }
   };
 
   return (
     <div className="flex flex-wrap gap-1.5 items-center justify-center">
       {/* 파일 배지 */}
       {artifacts.map((a) => (
-        <div key={a.id} className="relative group">
+        <div key={`${a.source || 'artifact'}:${a.id}`} className="relative group">
           <button
             className={`px-2 py-0.5 text-[11px] font-bold rounded border cursor-pointer whitespace-nowrap ${extBadgeClass(a.filename)}`}
             onClick={() => setViewing(a)}
@@ -105,14 +113,12 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
           >
             {getExtLabel(a.filename)}
           </button>
-          {a.source !== 'assignment' && (
-            <button
-              className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white"
-              onClick={() => handleDelete(a.id)}
-            >
-              <X size={8} />
-            </button>
-          )}
+          <button
+            className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white"
+            onClick={() => handleDelete(a)}
+          >
+            <X size={8} />
+          </button>
         </div>
       ))}
 
@@ -176,11 +182,11 @@ export function ArtifactStandalonePage() {
   return (
     <div className="h-screen flex flex-col bg-white">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
-        <span className="font-medium text-sm text-gray-800 truncate">{artifact.filename}</span>
+        <span className="min-w-0 flex-1 truncate font-medium text-sm text-gray-800">{artifact.filename}</span>
         <button
           type="button"
           onClick={() => downloadUrl(artifactsApi.fileUrl(artifact.id), artifact.filename).catch((error) => alert(error.message))}
-          className="btn-secondary text-xs py-1"
+          className="btn-secondary ml-2 shrink-0 text-xs py-1"
         >
           <Download size={13} /> 다운로드
         </button>

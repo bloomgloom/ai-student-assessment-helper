@@ -43,6 +43,63 @@ export interface AssignmentConfig {
   updated_at: string;
 }
 
+export interface AssignmentRunSummary {
+  id: number;
+  is_open: number;
+  started_at: string;
+  ended_at: string;
+  room: string;
+  target_count: number;
+  absent_count: number;
+  submitted_student_count: number;
+  accepted_file_count: number;
+  submission_event_count: number;
+  checked_student_count: number;
+}
+
+export interface AssignmentRunStudent {
+  id: number;
+  assignment_student_id: number | null;
+  assessment_student_id: number;
+  student_num: number;
+  class_num: number;
+  seat_num: number;
+  name: string;
+  is_absent: number;
+  absent_at: string;
+  sort_order: number;
+}
+
+export interface AssignmentRunSubmission {
+  id: number;
+  assignment_student_id: number | null;
+  student_num: number;
+  class_num: number;
+  seat_num: number;
+  name: string;
+  ip_address: string;
+  original_filename: string;
+  size: number;
+  status: 'accepted' | 'no_file' | 'rejected' | string;
+  reject_reason: string;
+  teacher_checked: number;
+  teacher_checked_at: string;
+  submitted_at: string;
+}
+
+export interface AssignmentRunDetail {
+  run: AssignmentRunSummary & {
+    title: string;
+    year: number;
+    semester: number;
+    grade: number;
+    subject: string;
+    domain_name: string;
+  };
+  students: AssignmentRunStudent[];
+  submissions: AssignmentRunSubmission[];
+}
+
 export interface SubjectDomainRow {
   id?: number | string;
   year?: number;

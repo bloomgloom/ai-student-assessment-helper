@@ -228,3 +228,16 @@ export async function execute(sql: string, args: Args = []) {
   const rs = await getClient().execute({ sql, args });
   return { lastInsertRowid: rs.lastInsertRowid ?? 0, rowsAffected: rs.rowsAffected };
 }
+
+export async function transaction<T>(fn: () => Promise<T>): Promise<T> {
+  const db = getClient();
+  await db.execute('BEGIN');
+  try {
+    const result = await fn();
+    await db.execute('COMMIT');
+    return result;
+  } catch (error) {
+    await db.execute('ROLLBACK');
+    throw error;
+  }
+}

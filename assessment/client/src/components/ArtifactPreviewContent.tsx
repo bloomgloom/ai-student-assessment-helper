@@ -60,7 +60,7 @@ export default function ArtifactPreviewContent({
 }: ArtifactPreviewContentProps) {
   const fileUrl = artifactFileUrl(artifact);
   return (
-    <div className="flex-1 overflow-hidden" style={{ textAlign: 'left' }}>
+    <div className="min-w-0 flex-1 overflow-hidden" style={{ textAlign: 'left' }}>
       {isPdfFile(artifact.filename) ? (
         <Suspense fallback={<PreviewFallback />}>
           <PdfArtifactPreview

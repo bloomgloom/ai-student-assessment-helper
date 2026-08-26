@@ -8,3 +8,10 @@ export function decodeUploadFilename(originalName: string): string {
   if (/[\u00c0-\u00ff]/.test(normalizedOriginal)) return normalizedDecoded;
   return normalizedOriginal;
 }
+
+export function studentDownloadFilename(grade: number, classNum: number, seatNum: number, name: string, filename: string): string {
+  const studentNumber = grade * 10000 + classNum * 100 + seatNum;
+  const safeName = name.normalize('NFC').replace(/[<>:"/\\|?*\x00-\x1F\s]/g, '');
+  const safeFilename = filename.normalize('NFC').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'file';
+  return `${studentNumber}${safeName}_${safeFilename}`;
+}

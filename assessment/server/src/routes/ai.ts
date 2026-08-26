@@ -1302,7 +1302,7 @@ router.get('/claude-batch-jobs', async (req: Request, res: Response) => {
        FROM ai_batch_jobs j
        JOIN classes c ON c.id = j.class_id
        WHERE j.class_id=? AND j.status != 'ended'
-       ORDER BY j.created_at DESC`,
+       ORDER BY j.created_at ASC, j.id ASC`,
       [classId]
     );
     const jobs = rows.map((row) => {
